@@ -1,5 +1,4 @@
-<style>
-    :root{
+ :root{
       --bg:#fff; --fg:#111; --muted:#666; --line:#e6e6e6; --focus:#111;
       --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
       --up:#0b7a4b;
@@ -276,4 +275,4 @@
       align-items:center;
     }
     .linkBtn:hover{border-color:var(--fg);color:var(--fg)}
-  </style>
+
