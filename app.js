@@ -8,6 +8,7 @@ import {
   deriveDepositPda,
   fetchProgramAccounts,
 } from "./lib/solana.js";
+import { PublicKey } from "https://esm.sh/@solana/web3.js@1.95.3?bundle";
 
 const $ = (id) => document.getElementById(id);
 
@@ -315,8 +316,139 @@ const $ = (id) => document.getElementById(id);
         r1: [{ ts:"—", wallet:"SYSTEM", text:"waiting for spawn." }],
         r2: [{ ts:"—", wallet:"SYSTEM", text:"keep it clean." }],
         r3: [{ ts:"—", wallet:"SYSTEM", text:"waiting for spawn." }]
-      }
+      },
+      onchain: {},
+      onchainMeta: {}
     };
+
+    const ONCHAIN_REFRESH_MS = 7000;
+
+
+    function readU32LE(bytes, offset){
+      const v = new DataView(bytes.buffer, bytes.byteOffset + offset, 4).getUint32(0, true);
+      return [v, offset + 4];
+    }
+
+    function readString(bytes, offset){
+      const [len, next] = readU32LE(bytes, offset);
+      const end = next + len;
+      const val = new TextDecoder().decode(bytes.slice(next, end));
+      return [val, end];
+    }
+
+    function readPubkey(bytes, offset){
+      const keyBytes = bytes.slice(offset, offset + 32);
+      return [new PublicKey(keyBytes), offset + 32];
+    }
+
+    function decodeThreadAccount(data){
+      const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+      let o = 8; // anchor discriminator
+      const [threadId, o1] = readString(bytes, o);
+      o = o1;
+      const [adminPubkey, o2] = readPubkey(bytes, o);
+      o = o2;
+      const spawnState = bytes[o];
+      o += 1;
+      const [count, o3] = readU32LE(bytes, o);
+      o = o3;
+      const participants = [];
+      for(let i=0;i<count;i++){
+        const [pk, next] = readPubkey(bytes, o);
+        o = next;
+        participants.push(pk.toBase58());
+      }
+      return { threadId, admin: adminPubkey.toBase58(), spawnState, participants };
+    }
+
+    function decodeDepositAccount(data){
+      const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+      let o = 8; // anchor discriminator
+      const [threadId, o1] = readString(bytes, o);
+      o = o1;
+      const [userPubkey, o2] = readPubkey(bytes, o);
+      o = o2;
+      const statusCode = bytes[o];
+      o += 1;
+      const rejectedOnce = !!bytes[o];
+      o += 1;
+      const amountRecordedLamports = new DataView(bytes.buffer, bytes.byteOffset + o, 8).getBigUint64(0, true);
+      const statusMap = ["pending", "approved", "denied", "withdrawn"];
+      return {
+        threadId,
+        user: userPubkey.toBase58(),
+        status: statusMap[statusCode] || "unknown",
+        rejectedOnce,
+        amount_recorded_lamports: Number(amountRecordedLamports || 0n)
+      };
+    }
+
+    async function fetchRoomOnchainSnapshot(roomId){
+      if(!roomId) return null;
+      const [threadPda] = await deriveThreadPda(roomId);
+      const threadInfo = await connection.getAccountInfo(threadPda, "confirmed");
+      if(!threadInfo){
+        state.onchain[roomId] = null;
+        return null;
+      }
+
+      const thread = decodeThreadAccount(threadInfo.data);
+      const byWallet = {};
+      const approvedWallets = [];
+      const pendingWallets = [];
+
+      for(const participant of thread.participants){
+        const [depositPda] = await deriveDepositPda(roomId, participant);
+        const depositInfo = await connection.getAccountInfo(depositPda, "confirmed");
+        if(!depositInfo) continue;
+        const deposit = decodeDepositAccount(depositInfo.data);
+        const lamports = await connection.getBalance(depositPda, "confirmed");
+        const escrowSol = Math.max(0, Number(lamports || 0) / 1_000_000_000);
+
+        byWallet[participant] = {
+          status: deposit.status,
+          escrow_sol: escrowSol,
+          deposit_pda: depositPda.toBase58()
+        };
+
+        if(deposit.status === "approved") approvedWallets.push(participant);
+        if(deposit.status === "pending") pendingWallets.push(participant);
+      }
+
+      const snapshot = {
+        roomId,
+        threadPda: threadPda.toBase58(),
+        admin: thread.admin,
+        participants: thread.participants,
+        approverWallets: thread.admin ? [thread.admin] : [],
+        byWallet,
+        approvedWallets,
+        pendingWallets,
+        fetchedAtMs: Date.now()
+      };
+
+      state.onchain[roomId] = snapshot;
+      state.onchainMeta[roomId] = { fetchedAtMs: snapshot.fetchedAtMs };
+      return snapshot;
+    }
+
+    function refreshRoomOnchainSnapshot(roomId, opts = {}){
+      if(!roomId) return Promise.resolve(null);
+      const force = !!opts.force;
+      const now = Date.now();
+      const meta = state.onchainMeta[roomId] || {};
+      if(!force && meta.inflight) return meta.inflight;
+      if(!force && meta.fetchedAtMs && (now - meta.fetchedAtMs) < ONCHAIN_REFRESH_MS){
+        return Promise.resolve(state.onchain[roomId] || null);
+      }
+      const inflight = fetchRoomOnchainSnapshot(roomId).catch(() => null).finally(() => {
+        const latest = state.onchainMeta[roomId] || {};
+        delete latest.inflight;
+        state.onchainMeta[roomId] = latest;
+      });
+      state.onchainMeta[roomId] = { ...meta, inflight };
+      return inflight;
+    }
 
     // Example already spawned + bonding
     state.rooms[1].state = "BONDING";
@@ -678,15 +810,29 @@ connectBtn.addEventListener("click", connectMock);
     }
 
     function isCreator(r, wallet){ return !!wallet && wallet === r.creator_wallet; }
-    function isApproved(r, wallet){ return !!(wallet && r.approval && r.approval[wallet] === "approved"); }
-    function isApprover(r, wallet){ return isCreator(r, wallet) || !!(wallet && r.approverWallets && r.approverWallets[wallet]); }
-    function isDenied(r, wallet){ return !!(wallet && r.approval && r.approval[wallet] === "denied"); }
-    function isPending(r, wallet){
-      return !!(wallet && r.approval && r.approval[wallet] === "pending");
+    function walletStatus(r, wallet){
+      if(!wallet) return "";
+      const snapshot = getRoomEscrowSnapshot(r);
+      const status = snapshot.byWallet?.[wallet]?.status;
+      if(status) return status;
+      return r.approval?.[wallet] || "";
     }
+    function isApproved(r, wallet){ return walletStatus(r, wallet) === "approved"; }
+    function isApprover(r, wallet){
+      if(!wallet) return false;
+      const snapshot = getRoomEscrowSnapshot(r);
+      const onchainApprovers = snapshot.approverWallets || [];
+      if(onchainApprovers.length > 0) return onchainApprovers.includes(wallet);
+      return isCreator(r, wallet) || !!(r.approverWallets && r.approverWallets[wallet]);
+    }
+    function isDenied(r, wallet){ return walletStatus(r, wallet) === "denied"; }
+    function isPending(r, wallet){ return walletStatus(r, wallet) === "pending"; }
 
     function getRoomEscrowSnapshot(room){
       const r = room || {};
+      const onchain = state.onchain?.[r.id];
+      if(onchain && onchain.byWallet) return onchain;
+
       const approval = r.approval || {};
       const positions = r.positions || {};
       const byWallet = {};
@@ -709,7 +855,14 @@ connectBtn.addEventListener("click", connectMock);
         if(status === "pending") pendingWallets.push(wallet);
       }
 
-      return { byWallet, approvedWallets, pendingWallets };
+      return {
+        roomId: r.id,
+        admin: r.creator_wallet,
+        approverWallets: r.creator_wallet ? [r.creator_wallet] : [],
+        byWallet,
+        approvedWallets,
+        pendingWallets
+      };
     }
 
     function approvedEscrowSol(r){
@@ -1215,6 +1368,9 @@ connectBtn.addEventListener("click", connectMock);
       activeRoomId = roomId;
       setView("room");
       renderRoom(roomId);
+      refreshRoomOnchainSnapshot(roomId, { force: true }).then(() => {
+        if(activeRoomId === roomId) renderRoom(roomId);
+      });
 
       const h = "#/room/" + encodeURIComponent(roomId);
       if(location.hash !== h) history.replaceState(null,"",h);
@@ -1312,7 +1468,7 @@ connectBtn.addEventListener("click", connectMock);
     }
 
 
-    function approveWallet(roomId, wallet){
+    async function approveWallet(roomId, wallet){
       const r = roomById(roomId);
       if(!r || !wallet) return;
       if(!isApprover(r, connectedWallet)) return;
@@ -1328,9 +1484,12 @@ connectBtn.addEventListener("click", connectMock);
       }
       renderRoom(roomId);
       renderHome();
+      await refreshRoomOnchainSnapshot(roomId, { force: true });
+      renderRoom(roomId);
+      renderHome();
     }
 
-    function denyWallet(roomId, wallet){
+    async function denyWallet(roomId, wallet){
       const r = roomById(roomId);
       if(!r || !wallet) return;
       if(!isApprover(r, connectedWallet)) return;
@@ -1341,6 +1500,9 @@ connectBtn.addEventListener("click", connectMock);
       r.approval[wallet] = "denied";
       r.blockedWallets[wallet] = true;
       addSystemEvent(roomId, `@${shortWallet(wallet)} denied — escrow refunded`);
+      renderRoom(roomId);
+      renderHome();
+      await refreshRoomOnchainSnapshot(roomId, { force: true });
       renderRoom(roomId);
       renderHome();
     }
@@ -1397,8 +1559,9 @@ connectBtn.addEventListener("click", connectMock);
 
       $("shareBtn").onclick = () => openShareModal(roomId);
 
-      const pingers = Object.keys(r.approval || {}).filter((w) => isApproved(r, w));
-      const approvers = Object.keys(r.approverWallets || {}).filter((w) => isApprover(r, w));
+      const snapshot = getRoomEscrowSnapshot(r);
+      const pingers = (snapshot.approvedWallets || []).slice();
+      const approvers = (snapshot.approverWallets || []).filter((w) => isApprover(r, w));
       const pingersList = $("pingersList");
       const approversList = $("approversList");
       if(pingersList){
@@ -1471,10 +1634,10 @@ connectBtn.addEventListener("click", connectMock);
         phaseLabel.textContent = "Funding first 10% of curve";
         statePill.textContent = "SPAWNING";
         phaseBar.style.width = Math.round(spawnProgress01(r)*100) + "%";
-        const snapshot = getRoomEscrowSnapshot(r);
+        const spawnSnapshot = getRoomEscrowSnapshot(r);
         const capSol = walletCapSol(r);
-        const counted = snapshot.approvedWallets.reduce((sum, w) => {
-          const escrow = Number(snapshot.byWallet[w]?.escrow_sol || 0);
+        const counted = spawnSnapshot.approvedWallets.reduce((sum, w) => {
+          const escrow = Number(spawnSnapshot.byWallet[w]?.escrow_sol || 0);
           return sum + Math.min(escrow, capSol);
         }, 0);
         const target = spawnTargetSol();
@@ -1576,6 +1739,9 @@ connectBtn.addEventListener("click", connectMock);
       }
 
       closeModal($("pingBack"));
+      refreshRoomOnchainSnapshot(rid, { force: true }).then(() => {
+        if(activeRoomId === rid) renderRoom(rid);
+      });
       renderRoom(rid);
       r._pulseUntil = Date.now() + 900;
       r._lastActivity = Date.now();
@@ -1605,6 +1771,9 @@ connectBtn.addEventListener("click", connectMock);
       }
 
       closeModal($("unpingBack"));
+      refreshRoomOnchainSnapshot(rid, { force: true }).then(() => {
+        if(activeRoomId === rid) renderRoom(rid);
+      });
       renderRoom(rid);
       r._pulseUntil = Date.now() + 900;
       r._lastActivity = Date.now();
@@ -1680,7 +1849,10 @@ connectBtn.addEventListener("click", connectMock);
     function tick(){
       renderHome();
       updateHeaderWalletUI();
-      if(activeRoomId) renderRoom(activeRoomId);
+      if(activeRoomId){
+        refreshRoomOnchainSnapshot(activeRoomId);
+        renderRoom(activeRoomId);
+      }
       if(profileView.classList.contains("on")) renderProfilePage();
     }
 
