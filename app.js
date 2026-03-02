@@ -246,6 +246,7 @@ const $ = (id) => document.getElementById(id);
     // State
     let connectedWallet = null;
     let activeRoomId = null;
+    let progressDetailsExpanded = false;
 
     const profile = {
       namesByWallet: {},
@@ -654,6 +655,14 @@ connectBtn.addEventListener("click", connectMock);
 
     // How it works modal
     $("howWorksBtn").addEventListener("click", () => openModal($("howBack")));
+
+    $("progressDetailsToggle").addEventListener("click", () => {
+      progressDetailsExpanded = !progressDetailsExpanded;
+      const body = $("progressDetailsBody");
+      const toggle = $("progressDetailsToggle");
+      if(body) body.style.display = progressDetailsExpanded ? "block" : "none";
+      if(toggle) toggle.textContent = progressDetailsExpanded ? "details ▾" : "details ▸";
+    });
 
     // Verify flow
     function openVerify(){
@@ -1246,6 +1255,7 @@ connectBtn.addEventListener("click", connectMock);
     // Room view
     function openRoom(roomId){
       activeRoomId = roomId;
+      progressDetailsExpanded = false;
       setView("room");
       renderRoom(roomId);
 
@@ -1346,7 +1356,6 @@ connectBtn.addEventListener("click", connectMock);
         badge.style.display = "none";
       }
 
-      $("poolLockLine").style.display = "none";
     }
 
     function renderRoom(roomId){
@@ -1431,6 +1440,11 @@ connectBtn.addEventListener("click", connectMock);
         statePill.textContent = "BONDED";
         phaseBar.style.width = "100%";
       }
+
+      const progressDetailsBody = $("progressDetailsBody");
+      const progressDetailsToggle = $("progressDetailsToggle");
+      if(progressDetailsBody) progressDetailsBody.style.display = progressDetailsExpanded ? "block" : "none";
+      if(progressDetailsToggle) progressDetailsToggle.textContent = progressDetailsExpanded ? "details ▾" : "details ▸";
 
       const spawnInfoLine = $("spawnInfoLine");
       const goodSolLine = $("goodSolLine");
