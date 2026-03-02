@@ -473,6 +473,23 @@ const $ = (id) => document.getElementById(id);
       return out;
     }
 
+    function getProvider(){
+      if(typeof window === "undefined") return null;
+      const p1 = window.phantom?.solana;
+      if(p1?.isPhantom) return p1;
+
+      const p2 = window.solana;
+      if(p2?.isPhantom) return p2;
+
+      const list = p2?.providers;
+      if(Array.isArray(list)){
+        const phantom = list.find((p) => p?.isPhantom);
+        if(phantom) return phantom;
+      }
+
+      return null;
+    }
+
     function parsePublicKeyStrict(value, label){
       try {
         return new PublicKey(value);
@@ -1084,23 +1101,6 @@ const $ = (id) => document.getElementById(id);
       toastText = $("toastText");
 
       loadProfileLocal();
-
-    function getProvider(){
-      if(typeof window === "undefined") return null;
-      const p1 = window.phantom?.solana;
-      if(p1?.isPhantom) return p1;
-
-      const p2 = window.solana;
-      if(p2?.isPhantom) return p2;
-
-      const list = p2?.providers;
-      if(Array.isArray(list)){
-        const phantom = list.find((p) => p?.isPhantom);
-        if(phantom) return phantom;
-      }
-
-      return null;
-    }
 
     async function providerConnect(provider, opts){
       if(!provider || typeof provider.connect !== "function"){
