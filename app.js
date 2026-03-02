@@ -521,7 +521,8 @@ const $ = (id) => document.getElementById(id);
 
       let feePayer;
       try {
-        feePayer = parsePublicKeyStrict(provider.publicKey?.toBase58?.(), "provider public key");
+        const providerPk = provider.publicKey?.toBase58?.() || connectedWallet;
+        feePayer = parsePublicKeyStrict(providerPk, "provider public key");
       } catch(e){ showToast("provider public key: " + (e?.message||e)); throw e; }
 
       let blockhash, lastValidBlockHeight;
@@ -540,16 +541,17 @@ const $ = (id) => document.getElementById(id);
         txInstructionProgramIds: tx.instructions.map((i) => i.programId?.toBase58?.()),
       });
 
-      const sim = await connection.simulateTransaction(tx, { sigVerify: false, commitment: "processed" });
-      console.log("[pingy] tx simulation err:", sim?.value?.err);
-      console.log("[pingy] tx simulation logs:", sim?.value?.logs || []);
-      if(sim?.value?.err){
-        const simLogs = sim?.value?.logs || [];
-        const simErr = new Error(`Transaction simulation failed: ${JSON.stringify(sim.value.err)} | logs: ${simLogs.join(" || ")}`);
-        simErr.logs = simLogs;
-        simErr.simLogs = simLogs;
-        showToast(`simulation failed: ${JSON.stringify(sim.value.err)} | ${(simLogs[simLogs.length - 1] || "no logs")}`);
-        throw simErr;
+      try {
+        const sim = await connection.simulateTransaction(tx, { sigVerify: false, commitment: "processed" });
+        console.log("[pingy] tx simulation err:", sim?.value?.err);
+        console.log("[pingy] tx simulation logs:", sim?.value?.logs || []);
+        if(sim?.value?.err){
+          const simLogs = sim?.value?.logs || [];
+          console.warn("[pingy] simulation failed; continuing to wallet signature", sim.value.err, simLogs);
+          showToast(`simulation warning: ${JSON.stringify(sim.value.err)} — requesting wallet signature...`);
+        }
+      } catch (simErr){
+        console.warn("[pingy] simulation RPC failed; continuing to wallet signature", simErr);
       }
 
       console.log("[pingy] about to sign tx", {
