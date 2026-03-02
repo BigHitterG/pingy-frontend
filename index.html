@@ -159,7 +159,7 @@
         <div class="row" id="roomSocialsOut" style="margin-top:8px; gap:8px; flex-wrap:wrap;"></div>
       </div>
 
-      <!-- Status + progress header (existing, with new score pill row) -->
+      <!-- Status + progress header -->
       <div class="panel" style="margin-bottom:8px;">
         <div class="row" style="justify-content:space-between; align-items:baseline;">
           <div class="muted" id="phaseLabel">SPAWNING</div>
@@ -169,19 +169,9 @@
         <button class="btn subtle small" id="progressDetailsToggle" style="margin-top:8px;">details ▸</button>
         <div id="progressDetailsBody" style="display:none;">
           <div class="tiny muted" id="spawnInfoLine" style="margin-top:6px;">Token not created yet. Funds refundable until spawn.</div>
-          <div class="tiny muted" id="goodSolLine" style="margin-top:4px;"></div>
-
-          <div class="row" style="justify-content:space-between; margin-top:8px;">
-            <div class="row" style="gap:6px;">
-              <span class="pill clickable" id="scorePill" title="click for details">wallet score: 50</span>
-              <span class="infoDot" id="scoreInfo" title="score increases with verification, longevity, and vouches">i</span>
-            </div>
-            <div class="muted" id="vouchesLine">vouches left: —</div>
-          </div>
         </div>
       </div>
 
-      <!-- New: Boost your odds panel (pinned above chat) -->
 
       <!-- Market / chart (only post-spawn) -->
       <div class="panel" id="marketPanel" style="margin-bottom:8px; display:none;">
@@ -205,19 +195,6 @@
         </div>
       </div>
 
-      <div class="boostPanel" id="boostPanel">
-        <div class="row" style="justify-content:space-between; align-items:baseline;">
-          <div class="boostTitle">boost your spawn odds</div>
-          <span class="k" id="boostStateChip">SPAWNING</span>
-        </div>
-
-        <div class="row" style="margin-top:8px;">
-          <button class="btn subtle" id="verifyBtn">verify human</button>
-          <span class="badge ok" id="verifiedBadge" style="display:none;">verified ✅</span>
-          <button class="btn subtle small" id="howWorksBtn">how selection works</button>
-        </div>
-
-      </div>
 
       <div class="row" style="gap:8px; margin-bottom:8px;">
         <button class="btn" id="pingBtn">ping</button>
@@ -297,75 +274,6 @@
             <button class="btn subtle" id="profileSave">save</button>
           </div>
           <div class="muted" id="profileHint">shows in chat. duplicates ok. wallet is the id.</div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- WALLET SCORE MODAL -->
-  <div class="modalBack" id="scoreBack" role="dialog" aria-modal="true">
-    <div class="modal">
-      <div class="modalHead">
-        <div class="modalTitle">wallet score</div>
-        <button class="btn subtle" id="scoreClose">close</button>
-      </div>
-
-      <div class="col" style="gap:10px;">
-        <div class="panel">
-          <div class="row" style="justify-content:space-between;">
-            <div class="muted">current</div>
-            <div><span class="k" id="scoreBig">score 50</span></div>
-          </div>
-        </div>
-
-        <div class="panel" id="scoreRows"></div>
-
-        <div class="muted">higher score improves spawn selection odds and trust signals</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- HOW SELECTION WORKS MODAL -->
-  <div class="modalBack" id="howBack" role="dialog" aria-modal="true">
-    <div class="modal">
-      <div class="modalHead">
-        <div class="modalTitle">how selection works</div>
-        <button class="btn subtle" id="howClose">close</button>
-      </div>
-
-      <div class="col" style="gap:8px;">
-        <div class="muted">
-          ping slots open randomly. verified wallets + higher wallet score get better odds during selecting.
-        </div>
-        <div class="muted">
-          vouches also raise trust signals over time. you can always unping before spawn.
-        </div>
-        <div class="muted">verifying + good score increases selection chance</div>
-        <div class="muted">score also affects future launches</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- VERIFY MODAL -->
-  <div class="modalBack" id="verifyBack" role="dialog" aria-modal="true">
-    <div class="modal">
-      <div class="modalHead">
-        <div class="modalTitle">verify human</div>
-        <button class="btn subtle" id="verifyClose">close</button>
-      </div>
-
-      <div class="col" style="gap:10px;">
-        <div class="muted">mock captcha (turnstile/recaptcha goes here)</div>
-        <div class="panel">
-          <label class="row" style="gap:10px; align-items:center;">
-            <input type="checkbox" id="captchaCheck" style="width:18px;height:18px;" />
-            <span>i am not a bot</span>
-          </label>
-          <div class="muted" style="margin-top:8px;">on success, your wallet score updates instantly.</div>
-        </div>
-
-        <div class="row" style="justify-content:flex-end;">
-          <button class="btn" id="verifyConfirm">verify</button>
         </div>
       </div>
     </div>

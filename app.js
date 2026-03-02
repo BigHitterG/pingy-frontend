@@ -12,10 +12,6 @@ const $ = (id) => document.getElementById(id);
     const MAX_WALLET_PCT_TOTAL = 0.005;
     const MAX_TOKENS_PER_WALLET = TOTAL_SUPPLY * MAX_WALLET_PCT_TOTAL; // 5,000,000
 
-    // Quality + distribution requirements
-    const GOOD_SCORE_THRESHOLD = 60;
-    const MIN_GOOD_SOL_SHARE = 0.80;
-    const MIN_ELIGIBLE_WALLETS = 20;
 
     // Virtual spawn curve (SOL per token) — linear, increasing with tranche sold (mock)
     const VPRICE_P0 = 2e-7;   // starting price (SOL per token)
@@ -25,9 +21,6 @@ const $ = (id) => document.getElementById(id);
     const MC_SPAWN = 6600;
     const MC_BONDED = 66000;
 
-    // vouch controls
-    const VOUCHES_PER_THREAD = 2;
-    const MAX_COUNTED_VOUCHES_PER_RECIPIENT = 3;
 
     const homeView = $("homeView");
     const roomView = $("roomView");
@@ -251,12 +244,6 @@ const $ = (id) => document.getElementById(id);
     const profile = {
       namesByWallet: {},
       wallet_first_seen_ms: null,
-      walletScoreByWallet: {},
-      verifiedByRoom: {},
-      verifiedGlobalByWallet: {},
-      vouchesLeftByRoom: {},
-      hasVouched: {},
-      vouchCountedByRoom: {},
       detailsByWallet: {},
       followsByWallet: {}
     };
@@ -276,30 +263,10 @@ const $ = (id) => document.getElementById(id);
         Object.assign(profile, parsed);
       } catch(e){}
       profile.namesByWallet = profile.namesByWallet || {};
-      profile.walletScoreByWallet = profile.walletScoreByWallet || {};
-      profile.verifiedByRoom = profile.verifiedByRoom || {};
-      profile.verifiedGlobalByWallet = profile.verifiedGlobalByWallet || {};
-      profile.vouchesLeftByRoom = profile.vouchesLeftByRoom || {};
-      profile.hasVouched = profile.hasVouched || {};
-      profile.vouchCountedByRoom = profile.vouchCountedByRoom || {};
       profile.detailsByWallet = profile.detailsByWallet || {};
       profile.followsByWallet = profile.followsByWallet || {};
     }
 
-    function getScore(wallet){
-      return Math.max(0, Math.min(100, Number(profile.walletScoreByWallet[wallet] ?? 50)));
-    }
-    function setScore(wallet, val){
-      profile.walletScoreByWallet[wallet] = Math.max(0, Math.min(100, Math.round(Number(val||0))));
-    }
-    function bumpScore(wallet, delta){
-      setScore(wallet, getScore(wallet) + Number(delta||0));
-    }
-    function isVerifiedGlobal(wallet){ return !!profile.verifiedGlobalByWallet[wallet]; }
-    function isVerifiedInRoom(wallet, roomId){
-      const m = profile.verifiedByRoom[roomId] || {};
-      return !!m[wallet];
-    }
     function displayName(pubkey){
       const n = (profile.namesByWallet[pubkey] || "").trim();
       return n ? n : shortWallet(pubkey);
@@ -486,8 +453,6 @@ function connectMock(){
   if(!profile.wallet_first_seen_ms) profile.wallet_first_seen_ms = Date.now();
 
   if(!profile.namesByWallet[connectedWallet]) profile.namesByWallet[connectedWallet] = "big_hitter";
-  if(profile.walletScoreByWallet[connectedWallet] == null) setScore(connectedWallet, 50);
-  if(profile.verifiedGlobalByWallet[connectedWallet] == null) profile.verifiedGlobalByWallet[connectedWallet] = false;
   saveProfileLocal();
 
   renderHome();
@@ -521,9 +486,6 @@ connectBtn.addEventListener("click", connectMock);
     wireModal($("profileBack"), $("profileClose"));
     $("profileDisconnect").addEventListener("click", () => { closeModal($("profileBack")); disconnectMock(); });
     wireModal($("editProfileBack"), $("editProfileClose"));
-    wireModal($("scoreBack"), $("scoreClose"));
-    wireModal($("howBack"), $("howClose"));
-    wireModal($("verifyBack"), $("verifyClose"));
     wireModal($("pingBack"), $("pingClose"));
     wireModal($("unpingBack"), $("unpingClose"));
     wireModal($("shareBack"), $("shareClose"));
@@ -537,7 +499,7 @@ connectBtn.addEventListener("click", connectMock);
         const days = Math.floor(ageMs / (1000*60*60*24));
         $("profileAgeLine").textContent = "wallet age on pingy: " + days + " day" + (days===1? "" : "s");
       } else {
-        $("profileAgeLine").textContent = "connect a wallet to set identity + score";
+        $("profileAgeLine").textContent = "connect a wallet to set identity";
       }
 
       $("profileUsername").value = connectedWallet ? (profile.myUsername || "") : "";
@@ -595,66 +557,11 @@ connectBtn.addEventListener("click", connectMock);
       if(e.key === "Enter"){ e.preventDefault(); saveUsername(); }
     });
 
-    // Wallet score modal
-    function ensureVouchState(roomId){
-      profile.vouchesLeftByRoom[roomId] = profile.vouchesLeftByRoom[roomId] || {};
-      profile.hasVouched[roomId] = profile.hasVouched[roomId] || {};
-      profile.vouchCountedByRoom[roomId] = profile.vouchCountedByRoom[roomId] || {};
-
-      if(connectedWallet){
-        if(profile.vouchesLeftByRoom[roomId][connectedWallet] == null){
-          profile.vouchesLeftByRoom[roomId][connectedWallet] = VOUCHES_PER_THREAD;
-        }
-        profile.hasVouched[roomId][connectedWallet] = profile.hasVouched[roomId][connectedWallet] || {};
-      }
+    function addSystemEvent(roomId, text){
+      if(!roomId) return;
+      state.chat[roomId] = state.chat[roomId] || [];
+      state.chat[roomId].push({ ts: nowStamp(), wallet:"SYSTEM", text });
     }
-    function getVouchesLeft(roomId, wallet){
-      ensureVouchState(roomId);
-      return Number((profile.vouchesLeftByRoom[roomId]||{})[wallet] ?? VOUCHES_PER_THREAD);
-    }
-    function getCountedVouches(roomId, targetWallet){
-      ensureVouchState(roomId);
-      return Number((profile.vouchCountedByRoom[roomId]||{})[targetWallet] ?? 0);
-    }
-    function getGivenVouchCount(roomId, wallet){
-      ensureVouchState(roomId);
-      const m = (profile.hasVouched[roomId]||{})[wallet] || {};
-      return Object.keys(m).length;
-    }
-
-    function openScoreModal(){
-      if(!connectedWallet) return showToast("connect wallet first.");
-      $("scoreBig").textContent = "score " + getScore(connectedWallet);
-      const rows = $("scoreRows");
-      rows.innerHTML = "";
-
-      const checks = [
-        { label:"human verified (this coin)", ok: (activeRoomId && connectedWallet) ? isVerifiedInRoom(connectedWallet, activeRoomId) : false },
-        { label:"wallet age", ok: true },
-        { label:"pingy history", ok: getScore(connectedWallet) >= 55 },
-        { label:"vouched by others", ok: (activeRoomId ? (getCountedVouches(activeRoomId, connectedWallet) > 0) : false) },
-        { label:"vouches given", ok: (activeRoomId ? (getGivenVouchCount(activeRoomId, connectedWallet) > 0) : false) },
-        { label:"clean activity", ok: true }
-      ];
-
-      checks.forEach(c => {
-        const line = document.createElement("div");
-        line.className = "row";
-        line.style.justifyContent = "space-between";
-        line.innerHTML = `
-          <div>${escapeText(c.label)}</div>
-          <div class="muted">${c.ok ? "✓" : "—"}</div>
-        `;
-        rows.appendChild(line);
-      });
-
-      openModal($("scoreBack"));
-    }
-    $("scorePill").addEventListener("click", openScoreModal);
-    $("scoreInfo").addEventListener("click", openScoreModal);
-
-    // How it works modal
-    $("howWorksBtn").addEventListener("click", () => openModal($("howBack")));
 
     $("progressDetailsToggle").addEventListener("click", () => {
       progressDetailsExpanded = !progressDetailsExpanded;
@@ -664,70 +571,9 @@ connectBtn.addEventListener("click", connectMock);
       if(toggle) toggle.textContent = progressDetailsExpanded ? "details ▾" : "details ▸";
     });
 
-    // Verify flow
-    function openVerify(){
-      if(!connectedWallet) return showToast("connect wallet first.");
-      $("captchaCheck").checked = false;
-      openModal($("verifyBack"));
-    }
-    $("verifyBtn").addEventListener("click", openVerify);
-
-    function addSystemEvent(roomId, text){
-      if(!roomId) return;
-      state.chat[roomId] = state.chat[roomId] || [];
-      state.chat[roomId].push({ ts: nowStamp(), wallet:"SYSTEM", text });
-    }
-
-    $("verifyConfirm").addEventListener("click", () => {
-      if(!connectedWallet) return showToast("connect wallet first.");
-      if(!activeRoomId) return;
-      if(!$("captchaCheck").checked) return alert("complete the captcha.");
-      profile.verifiedByRoom[activeRoomId] = profile.verifiedByRoom[activeRoomId] || {};
-      const already = !!profile.verifiedByRoom[activeRoomId][connectedWallet];
-      profile.verifiedByRoom[activeRoomId][connectedWallet] = true;
-      // global reputation grows over time; per-coin verification affects lottery weight
-      if(!already) bumpScore(connectedWallet, 8);
-      profile.verifiedGlobalByWallet[connectedWallet] = true;
-      saveProfileLocal();
-      closeModal($("verifyBack"));
-      showToast("✅ verified");
-      addSystemEvent(activeRoomId, `✅ @${displayName(connectedWallet)} verified`);
-      renderRoom(activeRoomId);
-    });
-
-    // Human confidence weight per wallet (w ∈ [0,1])
-    function humanWeight(roomId, wallet){
-      const score = clamp01((getScore(wallet) || 0) / 100);
-      const vouches = (getCountedVouches(roomId, wallet) || 0);
-
-      let w = 0.35;
-
-      // vouch boost (capped) — verified still best
-      w = Math.max(w, Math.min(0.60 + 0.10 * vouches, 0.90));
-
-      // score boost (small)
-      w += score * 0.15;
-
-      // verified dominates for this room
-      if(isVerifiedInRoom(wallet, roomId)){
-        w = Math.max(w, 0.95);
-        return clamp01(w);
-      }
-
-      // non-verified hard cap
-      w = Math.min(w, 0.95);
-      return clamp01(w);
-    }
-
-    // Progress (certainty-gated funding)
     function walletUsdInRoom(r, wallet){
       const sol = Number((r.positions?.[wallet]?.escrow_sol) || 0);
       return Math.max(0, sol) * SOL_TO_USD;
-    }
-
-    function getEligibleParticipants(r){
-      const pos = r.positions || {};
-      return Object.keys(pos).filter(w => Math.max(0, Number((pos[w]||{}).escrow_sol||0)) > 0 && getScore(w) >= GOOD_SCORE_THRESHOLD);
     }
 
     function totalEscrowSol(r){
@@ -735,23 +581,6 @@ connectBtn.addEventListener("click", connectMock);
       const pos = r.positions || {};
       for(const w of Object.keys(pos)) total += Math.max(0, Number((pos[w]||{}).escrow_sol || 0));
       return total;
-    }
-
-    function goodSol(r){
-      let total = 0;
-      const pos = r.positions || {};
-      for(const w of Object.keys(pos)){
-        const escrow = Math.max(0, Number((pos[w]||{}).escrow_sol || 0));
-        if(escrow <= 0) continue;
-        if(getScore(w) >= GOOD_SCORE_THRESHOLD) total += escrow;
-      }
-      return total;
-    }
-
-    function goodSolShare(r){
-      const total = totalEscrowSol(r);
-      if(total <= 0) return 0;
-      return goodSol(r) / total;
     }
 
     function spawnProgress01(r){
@@ -768,9 +597,7 @@ connectBtn.addEventListener("click", connectMock);
       if(r.state === "SPAWNING"){
         const total = totalEscrowSol(r);
         const target = spawnTargetSol();
-        const goodShare = goodSolShare(r);
-        const eligible = getEligibleParticipants(r);
-        if(total >= target && goodShare >= MIN_GOOD_SOL_SHARE && eligible.length >= MIN_ELIGIBLE_WALLETS){
+        if(total >= target){
           // One-swoop spawn: token + curve created, first 10% bought, then pro-rata distribution.
           const pos = r.positions || {};
           let remainingTokens = SPAWN_TRANCHE_TOKENS;
@@ -782,7 +609,7 @@ connectBtn.addEventListener("click", connectMock);
 
           // capped pro-rata allocation across eligible wallets
           let rounds = 0;
-          let active = eligible.slice();
+          let active = Object.keys(pos).filter(w => Math.max(0, Number((pos[w]||{}).escrow_sol || 0)) > 0);
           while(remainingTokens > 1e-6 && active.length > 0 && rounds < 6){
             let activeSol = 0;
             for(const w of active){ activeSol += Math.max(0, Number((pos[w]||{}).escrow_sol || 0)); }
@@ -827,42 +654,6 @@ connectBtn.addEventListener("click", connectMock);
         }
       }
     }
-    function canVouch(roomId){
-      return connectedWallet && isVerifiedInRoom(connectedWallet, roomId);
-    }
-
-    function tryVouch(roomId, targetWallet){
-      if(!connectedWallet) return showToast("connect wallet first.");
-      if(!canVouch(roomId)) return alert("verify human to vouch.");
-      if(targetWallet === "SYSTEM") return;
-      if(targetWallet === connectedWallet) return alert("cannot vouch for yourself.");
-
-      ensureVouchState(roomId);
-
-      const left = getVouchesLeft(roomId, connectedWallet);
-      if(left <= 0) return alert("no vouches left in this thread.");
-
-      const already = !!profile.hasVouched[roomId][connectedWallet][targetWallet];
-      if(already) return alert("already vouched for this wallet.");
-
-      const counted = getCountedVouches(roomId, targetWallet);
-      const willCount = counted < MAX_COUNTED_VOUCHES_PER_RECIPIENT;
-
-      profile.vouchesLeftByRoom[roomId][connectedWallet] = left - 1;
-      profile.hasVouched[roomId][connectedWallet][targetWallet] = true;
-
-      bumpScore(connectedWallet, 1);
-      if(willCount){
-        profile.vouchCountedByRoom[roomId][targetWallet] = counted + 1;
-        bumpScore(targetWallet, 6);
-      } else {
-        bumpScore(targetWallet, 1);
-      }
-
-      addSystemEvent(roomId, `👍 @${displayName(connectedWallet)} vouched for @${displayName(targetWallet)}`);
-      renderRoom(roomId);
-    }
-
     // Card UI helpers (home cards unchanged)
     function mosaicHtml(room){
       if(room && room.image){
@@ -1284,19 +1075,15 @@ connectBtn.addEventListener("click", connectMock);
 
         const isSys = (m.wallet === "SYSTEM");
         const nm = isSys ? "system" : displayName(m.wallet);
-        const verifiedMark = (!isSys && isVerifiedInRoom(m.wallet, roomId)) ? " ✔" : "";
         const nameHtml = isSys ? `<strong>${escapeText(nm)}</strong>` : escapeText(nm) + verifiedMark;
 
-        const vouchable = (!isSys && canVouch(roomId) && m.wallet !== connectedWallet);
-        const already = connectedWallet && profile.hasVouched[roomId]?.[connectedWallet]?.[m.wallet];
-        const vouchDisabled = !vouchable || !!already || (connectedWallet ? (getVouchesLeft(roomId, connectedWallet) <= 0) : true);
 
         row.innerHTML = `
           <div class="who">
             <div class="whoTop">
               <button class="copyBtn" title="copy wallet">⧉</button>
               <span class="whoName">${nameHtml}</span>
-              ${(!isSys && canVouch(roomId)) ? `<button class="vouchBtn" ${vouchDisabled ? "disabled" : ""} title="vouch">vouch</button>` : ``}
+              
             </div>
           </div>
           <div class="text ${isSys ? "sysLine" : ""}">${escapeText(m.text)}</div>
@@ -1304,10 +1091,6 @@ connectBtn.addEventListener("click", connectMock);
         `;
 
         row.querySelector(".copyBtn").addEventListener("click", () => copyToClipboard(m.wallet));
-        const vb = row.querySelector(".vouchBtn");
-        if(vb){
-          vb.addEventListener("click", () => tryVouch(roomId, m.wallet));
-        }
 
         box.appendChild(row);
       });
@@ -1317,45 +1100,14 @@ connectBtn.addEventListener("click", connectMock);
 
     function canPost(r){
       if(!connectedWallet) return false;
-      // must verify (captcha) per coin to chat
-      if(!isVerifiedInRoom(connectedWallet, r.id)) return false;
-
-      if(r.state === "SPAWNING") return myEscrow(r.id) > 0;
-      return myBond(r.id) > 0;
+      return true;
     }
 
     function setComposerState(r){
-      const verified = !!(connectedWallet && isVerifiedInRoom(connectedWallet, r.id));
-      const hasPos = !!(connectedWallet && ((r.state === "SPAWNING") ? (myEscrow(r.id) > 0) : (myBond(r.id) > 0)));
-      const enabled = verified && hasPos;
-
+      const enabled = !!connectedWallet;
       $("msgInput").disabled = !enabled;
       $("sendBtn").disabled = !enabled;
-
-      if(enabled){
-        $("msgInput").placeholder = "message (plain text only)";
-      } else if(!verified){
-        $("msgInput").placeholder = "verify human to chat";
-      } else {
-        $("msgInput").placeholder = "ping to chat";
-      }
-    }
-
-    function updateBoostUI(r){
-      $("boostStateChip").textContent =
-        (r.state === "SPAWNING") ? "SPAWNING" :
-        (r.state === "BONDING") ? "BONDING" : "BONDED";
-
-      const vb = $("verifyBtn");
-      const badge = $("verifiedBadge");
-      if(connectedWallet && activeRoomId && isVerifiedInRoom(connectedWallet, activeRoomId)){
-        vb.style.display = "none";
-        badge.style.display = "inline-block";
-      } else {
-        vb.style.display = "inline-block";
-        badge.style.display = "none";
-      }
-
+      $("msgInput").placeholder = enabled ? "message" : "connect wallet";
     }
 
     function renderRoom(roomId){
@@ -1363,7 +1115,6 @@ connectBtn.addEventListener("click", connectMock);
       if(!r) return;
 
       maybeAdvance(r);
-      ensureVouchState(roomId);
 
       $("roomTitle").textContent = r.name + "  $" + r.ticker;
       $("roomMeta").textContent = `creator: ${shortWallet(r.creator_wallet)} • created: ${r.created_at}`;
@@ -1447,24 +1198,7 @@ connectBtn.addEventListener("click", connectMock);
       if(progressDetailsToggle) progressDetailsToggle.textContent = progressDetailsExpanded ? "details ▾" : "details ▸";
 
       const spawnInfoLine = $("spawnInfoLine");
-      const goodSolLine = $("goodSolLine");
       if(spawnInfoLine) spawnInfoLine.style.display = (r.state === "SPAWNING") ? "block" : "none";
-      if(goodSolLine){
-        if(r.state === "SPAWNING"){
-          const goodPct = Math.round(goodSolShare(r) * 100);
-          const eligible = getEligibleParticipants(r).length;
-          goodSolLine.style.display = "block";
-          goodSolLine.textContent = `${goodPct}% good SOL • ${eligible}/${MIN_ELIGIBLE_WALLETS} eligible wallets`;
-        } else {
-          goodSolLine.style.display = "none";
-        }
-      }
-
-      const score = connectedWallet ? getScore(connectedWallet) : 0;
-      $("scorePill").textContent = "wallet score: " + (connectedWallet ? score : "—");
-      $("vouchesLine").textContent = connectedWallet ? ("vouches left: " + getVouchesLeft(roomId, connectedWallet)) : "vouches left: —";
-
-      updateBoostUI(r);
 
       const me =
         (r.state === "SPAWNING")
@@ -1522,7 +1256,6 @@ connectBtn.addEventListener("click", connectMock);
       if(r.state === "SPAWNING"){
         applySpawnCommit(r, connectedWallet, sol);
 
-        if(rid && isVerifiedInRoom(connectedWallet, rid)) bumpScore(connectedWallet, 1);
 
         state.chat[r.id] = state.chat[r.id] || [];
         state.chat[r.id].push({ ts: nowStamp(), wallet: connectedWallet, text:`pinged ${sol.toFixed(3)} SOL (escrow).` });
