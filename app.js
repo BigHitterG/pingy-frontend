@@ -13,7 +13,7 @@ import {
   SystemProgram,
   Transaction,
   TransactionInstruction,
-} from "https://esm.sh/@solana/web3.js@1.95.3?bundle";
+} from "./lib/solana.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -428,25 +428,35 @@ const $ = (id) => document.getElementById(id);
       const provider = getProvider();
       if(!provider) throw new Error("Phantom not found");
       if(!connectedWallet) throw new Error("Wallet not connected");
-      if(!provider.publicKey) throw new Error("Wallet provider public key missing");
-      assertIxPubkeys(ix);
 
-      const feePayer = parsePublicKeyStrict(provider.publicKey.toBase58(), "provider public key");
-      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
+      try { assertIxPubkeys(ix); }
+      catch(e){ showToast("assertIxPubkeys: " + (e?.message||e)); throw e; }
+
+      let feePayer;
+      try {
+        feePayer = parsePublicKeyStrict(provider.publicKey?.toBase58?.(), "provider public key");
+      } catch(e){ showToast("provider public key: " + (e?.message||e)); throw e; }
+
+      let blockhash, lastValidBlockHeight;
+      try {
+        ({ blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed"));
+      } catch(e){ showToast("getLatestBlockhash: " + (e?.message||e)); throw e; }
+
       const tx = new Transaction();
       tx.feePayer = feePayer;
       tx.recentBlockhash = blockhash;
       tx.add(ix);
 
-      const sim = await connection.simulateTransaction(tx, { sigVerify: false, commitment: "processed" });
-      console.log("[pingy] tx simulation err:", sim?.value?.err);
-      console.log("[pingy] tx simulation logs:", sim?.value?.logs || []);
-      if(sim?.value?.err){
-        const simErr = new Error(`Transaction simulation failed: ${JSON.stringify(sim.value.err)}`);
-        simErr.logs = sim?.value?.logs || [];
-        showToast(`simulation failed: ${simErr.message}`);
-        throw simErr;
-      }
+      // TEMP: simulation disabled while debugging Phantom signing flow.
+      // const sim = await connection.simulateTransaction(tx, { sigVerify: false, commitment: "processed" });
+      // console.log("[pingy] tx simulation err:", sim?.value?.err);
+      // console.log("[pingy] tx simulation logs:", sim?.value?.logs || []);
+      // if(sim?.value?.err){
+      //   const simErr = new Error(`Transaction simulation failed: ${JSON.stringify(sim.value.err)}`);
+      //   simErr.logs = sim?.value?.logs || [];
+      //   showToast(`simulation failed: ${simErr.message}`);
+      //   throw simErr;
+      // }
 
       console.log("[pingy] about to sign tx", {
         feePayer: tx.feePayer?.toBase58?.(),
@@ -454,48 +464,33 @@ const $ = (id) => document.getElementById(id);
         ixCount: tx.instructions?.length,
         programId: ix.programId?.toBase58?.(),
       });
+      console.log("[pingy] provider methods", {
+        hasSignTransaction: typeof provider.signTransaction,
+        hasSignAndSendTransaction: typeof provider.signAndSendTransaction,
+      });
 
       let signedTx;
       try {
         signedTx = await provider.signTransaction(tx);
-      } catch (e){
-        console.error("[pingy] signTransaction failed", e);
-        showToast("signTransaction failed: " + String(e?.message || e));
+      } catch(e){
+        console.error("signTransaction error", e);
+        showToast("signTransaction: " + String(e?.message || e));
         throw e;
       }
       if(!signedTx) throw new Error("Missing signed transaction");
 
-      const signature = await connection.sendRawTransaction(signedTx.serialize(), { skipPreflight: false });
-      if(!signature) throw new Error("Missing transaction signature");
-      const explorerUrl = `https://explorer.solana.com/tx/${signature}?cluster=devnet`;
-      console.log("[pingy] tx signature:", signature);
-      console.log("[pingy] explorer:", explorerUrl);
+      let sig;
+      try {
+        sig = await connection.sendRawTransaction(signedTx.serialize(), { skipPreflight:false });
+      } catch(e){ showToast("sendRawTransaction: " + (e?.message||e)); throw e; }
+      if(!sig) throw new Error("Missing transaction signature");
 
       try {
-        await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, "confirmed");
-      } catch (confirmErr){
-        console.error("[pingy] tx confirm error:", confirmErr);
-        try {
-          const status = await connection.getSignatureStatus(signature);
-          console.error("[pingy] tx signature status:", status?.value || status);
-        } catch (statusErr){
-          console.error("[pingy] getSignatureStatus failed:", statusErr);
-        }
-        try {
-          const txDetails = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
-          console.error("[pingy] tx details:", txDetails);
-          if(txDetails?.meta?.err){
-            console.error("[pingy] tx program error:", txDetails.meta.err);
-            console.error("[pingy] tx logs:", txDetails.meta.logMessages || []);
-          }
-        } catch (txErr){
-          console.error("[pingy] getTransaction failed:", txErr);
-        }
-        throw confirmErr;
-      }
+        await connection.confirmTransaction({ signature:sig, blockhash, lastValidBlockHeight }, "confirmed");
+      } catch(e){ showToast("confirmTransaction: " + (e?.message||e)); throw e; }
 
-      showToast(`tx confirmed: ${explorerUrl}`);
-      return signature;
+      showToast("tx confirmed: " + sig);
+      return sig;
     }
 
     async function pingDepositTx(roomId, amountLamports){
