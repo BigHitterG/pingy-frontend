@@ -15,6 +15,28 @@ import {
   TransactionInstruction,
 } from "./lib/solana.js";
 
+function surfaceFatalMessage(prefix, err){
+  const message = String(err?.message || err || "unknown error");
+  const full = `${prefix}: ${message}`;
+  console.error(full, err);
+  const toastEl = document.getElementById("toast");
+  const toastTextEl = document.getElementById("toastText");
+  if(toastEl && toastTextEl){
+    toastTextEl.textContent = full;
+    toastEl.classList.add("on");
+    return;
+  }
+  alert(full);
+}
+
+window.addEventListener("error", (event) => {
+  surfaceFatalMessage("[pingy] crash", event?.error || event?.message || event);
+});
+
+window.addEventListener("unhandledrejection", (event) => {
+  surfaceFatalMessage("[pingy] unhandled rejection", event?.reason || event);
+});
+
 const $ = (id) => document.getElementById(id);
 
     // Exposed for devnet wiring checks from browser console.
@@ -57,48 +79,61 @@ const $ = (id) => document.getElementById(id);
     const MC_BONDED = 66000;
 
 
-    const homeView = $("homeView");
-    const roomView = $("roomView");
-    const profileView = $("profileView");
-    const homeBtn = $("homeBtn");
+    let homeView;
+    let roomView;
+    let profileView;
+    let homeBtn;
 
-    const walletPill = $("walletPill");
-    const walletMenu = $("walletMenu");
-    const walletDropdown = $("walletDropdown");
-    const walletProfileItem = $("walletProfileItem");
-    const walletViewWalletItem = $("walletViewWalletItem");
-    const walletCopyItem = $("walletCopyItem");
-    const walletDisconnectItem = $("walletDisconnectItem");
-    const connectBtn = $("connectBtn");
+    let walletPill;
+    let walletMenu;
+    let walletDropdown;
+    let walletProfileItem;
+    let walletViewWalletItem;
+    let walletCopyItem;
+    let walletDisconnectItem;
+    let connectBtn;
 
-    const toast = $("toast");
-    const toastText = $("toastText");
+    let toast;
+    let toastText;
     let toastTimer = null;
+    let onchainEnabled = true;
 
     function showToast(msg){
+      if(!toast || !toastText) return alert(msg || "connect wallet first.");
       toastText.textContent = msg || "connect wallet first.";
       toast.classList.add("on");
       clearTimeout(toastTimer);
       toastTimer = setTimeout(() => toast.classList.remove("on"), 2400);
     }
 
-    if(PROGRAM_ID.toBase58() === "11111111111111111111111111111111"){
-      showToast("FATAL: PROGRAM_ID is System Program. Fix lib/solana.js");
-      throw new Error("PROGRAM_ID misconfigured");
+    function reportFatal(err){
+      surfaceFatalMessage("[pingy] init failed", err);
     }
 
-    (async () => {
+    function disableOnchainFeatures(reason){
+      onchainEnabled = false;
+      showToast(reason);
+      [$("pingConfirm"), $("unpingConfirm")].forEach((btn) => {
+        if(btn) btn.disabled = true;
+      });
+    }
+
+    async function validateOnchainConfig(){
+      if(PROGRAM_ID.toBase58() === "11111111111111111111111111111111"){
+        disableOnchainFeatures("On-chain disabled: PROGRAM_ID misconfigured");
+        return;
+      }
       try {
         const info = await connection.getAccountInfo(PROGRAM_ID, "confirmed");
         console.log("[pingy] program account:", info);
         if(!info || !info.executable){
-          showToast("Program ID not found / not executable on devnet");
+          disableOnchainFeatures("On-chain disabled: PROGRAM_ID misconfigured");
         }
       } catch (err){
         console.error("[pingy] program account check failed", err);
-        showToast("Program ID not found / not executable on devnet");
+        disableOnchainFeatures("On-chain disabled: PROGRAM_ID misconfigured");
       }
-    })();
+    }
 
     function getErrorLogs(err){
       return [
@@ -972,7 +1007,26 @@ const $ = (id) => document.getElementById(id);
       if(location.hash !== target) location.hash = target;
     }
 
-    loadProfileLocal();
+
+    async function init(){
+      homeView = $("homeView");
+      roomView = $("roomView");
+      profileView = $("profileView");
+      homeBtn = $("homeBtn");
+
+      walletPill = $("walletPill");
+      walletMenu = $("walletMenu");
+      walletDropdown = $("walletDropdown");
+      walletProfileItem = $("walletProfileItem");
+      walletViewWalletItem = $("walletViewWalletItem");
+      walletCopyItem = $("walletCopyItem");
+      walletDisconnectItem = $("walletDisconnectItem");
+      connectBtn = $("connectBtn");
+
+      toast = $("toast");
+      toastText = $("toastText");
+
+      loadProfileLocal();
 
     function getProvider(){
       if(typeof window === "undefined") return null;
@@ -1047,6 +1101,9 @@ async function connectMock(){
   const provider = getProvider();
   if(!provider) return showToast("Phantom not found. Install Phantom.");
 
+  console.log("[pingy] provider object:", provider);
+  console.log("[pingy] provider.isPhantom:", provider?.isPhantom);
+
   bindWalletListeners(provider);
 
   try{
@@ -1055,6 +1112,7 @@ async function connectMock(){
     if(!nextWallet) return;
 
     connectedWallet = nextWallet;
+    console.log("[pingy] provider.publicKey after connect:", provider?.publicKey?.toString?.() || provider?.publicKey);
     toast.classList.remove("on");
 
     if(!profile.wallet_first_seen_ms) profile.wallet_first_seen_ms = Date.now();
@@ -1877,6 +1935,7 @@ if(connectBtn){
 
 
     async function approveWallet(roomId, wallet){
+      if(!onchainEnabled) return showToast("On-chain disabled: PROGRAM_ID misconfigured");
       const r = roomById(roomId);
       if(!r || !wallet) return;
       if(!isApprover(r, connectedWallet)) return;
@@ -1895,6 +1954,7 @@ if(connectBtn){
     }
 
     async function denyWallet(roomId, wallet){
+      if(!onchainEnabled) return showToast("On-chain disabled: PROGRAM_ID misconfigured");
       const r = roomById(roomId);
       if(!r || !wallet) return;
       if(!isApprover(r, connectedWallet)) return;
@@ -2107,6 +2167,7 @@ if(connectBtn){
     }
 
     $("pingConfirm").addEventListener("click", async () => {
+      if(!onchainEnabled) return showToast("On-chain disabled: PROGRAM_ID misconfigured");
       const rid = modalRoomId || activeRoomId;
       const r = roomById(rid);
       if(!r) return;
@@ -2209,6 +2270,7 @@ if(connectBtn){
     });
 
     $("unpingConfirm").addEventListener("click", async () => {
+      if(!onchainEnabled) return showToast("On-chain disabled: PROGRAM_ID misconfigured");
       const rid = modalRoomId || activeRoomId;
       const r = roomById(rid);
       if(!r) return;
@@ -2337,3 +2399,10 @@ if(connectBtn){
     })();
     handleHash();
     setInterval(tick, 900);
+
+    await validateOnchainConfig();
+    window.__PINGY_READY__ = true;
+    console.log("[pingy] init complete");
+    }
+
+    window.addEventListener("DOMContentLoaded", () => init().catch(reportFatal));
