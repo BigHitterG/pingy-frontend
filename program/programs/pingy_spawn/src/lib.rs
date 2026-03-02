@@ -32,24 +32,26 @@ pub mod pingy_spawn {
         let thread = &mut ctx.accounts.thread;
         require!(thread.thread_id == thread_id, PingyError::ThreadMismatch);
 
-        let deposit = &mut ctx.accounts.deposit;
+        {
+            let deposit = &mut ctx.accounts.deposit;
 
-        if deposit.rejected_once {
-            return err!(PingyError::DepositRejectedPermanently);
+            if deposit.rejected_once {
+                return err!(PingyError::DepositRejectedPermanently);
+            }
+
+            if deposit.thread_id.is_empty() {
+                deposit.thread_id = thread_id;
+                deposit.user_pubkey = ctx.accounts.user.key();
+                deposit.status = DepositStatus::Pending;
+                deposit.amount_recorded_lamports = 0;
+                deposit.rejected_once = false;
+            }
+
+            require!(
+                deposit.user_pubkey == ctx.accounts.user.key(),
+                PingyError::UserMismatch
+            );
         }
-
-        if deposit.thread_id.is_empty() {
-            deposit.thread_id = thread_id;
-            deposit.user_pubkey = ctx.accounts.user.key();
-            deposit.status = DepositStatus::Pending;
-            deposit.rejected_once = false;
-            deposit.amount_recorded_lamports = 0;
-        }
-
-        require!(
-            deposit.user_pubkey == ctx.accounts.user.key(),
-            PingyError::UserMismatch
-        );
 
         let transfer_ctx = CpiContext::new(
             ctx.accounts.system_program.to_account_info(),
@@ -60,6 +62,7 @@ pub mod pingy_spawn {
         );
         system_program::transfer(transfer_ctx, amount_lamports)?;
 
+        let deposit = &mut ctx.accounts.deposit;
         deposit.amount_recorded_lamports = deposit
             .amount_recorded_lamports
             .checked_add(amount_lamports)
@@ -139,7 +142,7 @@ fn process_refund<'info>(
     require!(thread.thread_id == thread_id, PingyError::ThreadMismatch);
     require!(deposit.user_pubkey == user_pubkey, PingyError::UserMismatch);
 
-    let min_balance = Rent::get()?.minimum_balance(Deposit::LEN);
+    let min_balance = Rent::get()?.minimum_balance(Deposit::SIZE);
     let deposit_info = deposit.to_account_info();
     let current_balance = deposit_info.lamports();
     let refundable = current_balance.saturating_sub(min_balance);
@@ -195,7 +198,7 @@ pub struct PingDeposit<'info> {
     #[account(
         init_if_needed,
         payer = user,
-        space = 8 + Deposit::LEN,
+        space = 8 + Deposit::SIZE,
         seeds = [b"deposit", thread_id.as_bytes(), user.key().as_ref()],
         bump
     )]
@@ -285,7 +288,8 @@ pub struct Deposit {
 
 impl Deposit {
     pub const MAX_THREAD_ID_LEN: usize = 64;
-    pub const LEN: usize = 4 + Self::MAX_THREAD_ID_LEN + 32 + 1 + 1 + 8;
+    pub const SIZE: usize = 4 + Self::MAX_THREAD_ID_LEN + 32 + 1 + 1 + 8;
+    pub const LEN: usize = Self::SIZE;
 }
 
 #[account]
