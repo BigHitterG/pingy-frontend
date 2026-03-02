@@ -30,7 +30,10 @@ const $ = (id) => document.getElementById(id);
     };
 
     console.log('[pingy] app.js loaded');
-    console.log('[pingy] Phantom provider present:', typeof window !== 'undefined' && typeof window.solana !== 'undefined');
+    console.log("[pingy] window.phantom?.solana:", window.phantom?.solana);
+    console.log("[pingy] window.solana:", window.solana);
+    console.log("[pingy] window.solana?.isPhantom:", window.solana?.isPhantom);
+    console.log("[pingy] window.solana?.providers:", window.solana?.providers);
 
     // Tuned assumptions
     const SOL_TO_USD = 100; // internal conversion (mock) — for display only
@@ -856,19 +859,19 @@ const $ = (id) => document.getElementById(id);
 
     function getProvider(){
       if(typeof window === "undefined") return null;
-      const phantomProvider = window.phantom && window.phantom.solana;
-      if(phantomProvider && phantomProvider.isPhantom) return phantomProvider;
+      const p1 = window.phantom?.solana;
+      if(p1?.isPhantom) return p1;
 
-      const provider = window.solana;
-      if(!provider) return null;
-      if(provider.isPhantom) return provider;
+      const p2 = window.solana;
+      if(p2?.isPhantom) return p2;
 
-      if(Array.isArray(provider.providers)){
-        const nestedPhantom = provider.providers.find((p) => p && p.isPhantom);
-        if(nestedPhantom) return nestedPhantom;
+      const list = p2?.providers;
+      if(Array.isArray(list)){
+        const phantom = list.find((p) => p?.isPhantom);
+        if(phantom) return phantom;
       }
 
-      return provider;
+      return null;
     }
 
     async function providerConnect(provider, opts){
@@ -943,12 +946,15 @@ async function connectMock(){
 
     refreshWalletViews();
   } catch(err){
+    console.error("[pingy] connect error:", err);
     const code = Number(err && err.code);
     if(code === 4001 || /reject/i.test(String(err && err.message || ""))){
-      showToast("wallet connection rejected.");
+      const rejectedMsg = String(err?.message || err || "wallet connection rejected.");
+      showToast(rejectedMsg);
       return;
     }
-    showToast("wallet connect failed.");
+    const msg = String(err?.message || err || "wallet connect failed");
+    showToast(msg);
   }
 }
 
