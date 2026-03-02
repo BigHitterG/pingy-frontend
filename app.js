@@ -856,10 +856,35 @@ const $ = (id) => document.getElementById(id);
 
     function getProvider(){
       if(typeof window === "undefined") return null;
+      const phantomProvider = window.phantom && window.phantom.solana;
+      if(phantomProvider && phantomProvider.isPhantom) return phantomProvider;
+
       const provider = window.solana;
       if(!provider) return null;
       if(provider.isPhantom) return provider;
+
+      if(Array.isArray(provider.providers)){
+        const nestedPhantom = provider.providers.find((p) => p && p.isPhantom);
+        if(nestedPhantom) return nestedPhantom;
+      }
+
       return provider;
+    }
+
+    async function providerConnect(provider, opts){
+      if(!provider || typeof provider.connect !== "function"){
+        throw new Error("Wallet provider connect not available");
+      }
+      try {
+        if(opts) return await provider.connect(opts);
+        return await provider.connect();
+      } catch (err){
+        const msg = String(err?.message || err || "").toLowerCase();
+        if(opts && msg.includes("invalid arguments")){
+          return provider.connect();
+        }
+        throw err;
+      }
     }
 
     function getExplorerAccountUrl(wallet){
@@ -905,7 +930,7 @@ async function connectMock(){
   bindWalletListeners(provider);
 
   try{
-    const resp = await provider.connect();
+    const resp = await providerConnect(provider);
     const nextWallet = resp && resp.publicKey ? resp.publicKey.toString() : null;
     if(!nextWallet) return;
 
@@ -2141,7 +2166,7 @@ if(connectBtn){
       if(!provider) return;
       bindWalletListeners(provider);
       try{
-        const resp = await provider.connect({ onlyIfTrusted: true });
+        const resp = await providerConnect(provider, { onlyIfTrusted: true });
         if(resp && resp.publicKey){
           connectedWallet = resp.publicKey.toString();
           refreshWalletViews();
