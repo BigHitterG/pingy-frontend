@@ -1,5 +1,8 @@
 const $ = (id) => document.getElementById(id);
 
+    const SOLANA_CLUSTER = "devnet";
+    const DEVNET_RPC = "https://api.devnet.solana.com";
+
     // Tuned assumptions
     const SOL_TO_USD = 100; // internal conversion (mock) — for display only
 
@@ -249,6 +252,7 @@ const $ = (id) => document.getElementById(id);
     // State
     let connectedWallet = null;
     let activeRoomId = null;
+    let walletListenersBound = false;
 
     const profile = {
       namesByWallet: {},
@@ -466,32 +470,87 @@ const $ = (id) => document.getElementById(id);
 
     loadProfileLocal();
 
-    // Connect wallet (mock)
-function connectMock(){
+    function getProvider(){
+      if(typeof window === "undefined") return null;
+      const provider = window.solana;
+      if(!provider) return null;
+      if(provider.isPhantom) return provider;
+      return provider;
+    }
+
+    function getExplorerAccountUrl(wallet){
+      const base = `https://explorer.solana.com/address/${encodeURIComponent(wallet)}`;
+      return SOLANA_CLUSTER === "devnet" ? `${base}?cluster=devnet` : base;
+    }
+
+    function refreshWalletViews(){
+      updateHeaderWalletUI();
+      renderHome();
+      if(activeRoomId) renderRoom(activeRoomId);
+      if(profileView.classList.contains("on")) renderProfilePage();
+    }
+
+    function clearConnectedWallet(){
+      connectedWallet = null;
+      refreshWalletViews();
+      updateEarningsUI();
+    }
+
+    function bindWalletListeners(provider){
+      if(walletListenersBound || !provider || typeof provider.on !== "function") return;
+      provider.on("accountChanged", (pubkey) => {
+        if(!pubkey){
+          clearConnectedWallet();
+          return;
+        }
+        connectedWallet = pubkey.toString();
+        refreshWalletViews();
+      });
+      provider.on("disconnect", () => {
+        clearConnectedWallet();
+      });
+      walletListenersBound = true;
+    }
+
+    // Connect wallet (Phantom)
+async function connectMock(){
   closeWalletDropdown();
-  connectedWallet = "Fk2a9rQp8wYz3mN7vT5s1kC4dE6hJ9pL2qR8sX1zYb3A";
-  updateHeaderWalletUI();
-  toast.classList.remove("on");
+  const provider = getProvider();
+  if(!provider) return showToast("Phantom not found. Install Phantom.");
 
-  if(!profile.wallet_first_seen_ms) profile.wallet_first_seen_ms = Date.now();
+  bindWalletListeners(provider);
 
-  if(!profile.namesByWallet[connectedWallet]) profile.namesByWallet[connectedWallet] = "big_hitter";
-  saveProfileLocal();
+  try{
+    const resp = await provider.connect();
+    const nextWallet = resp && resp.publicKey ? resp.publicKey.toString() : null;
+    if(!nextWallet) return;
 
-  renderHome();
-  if(activeRoomId) renderRoom(activeRoomId);
-  if(profileView.classList.contains("on")) renderProfilePage();
+    connectedWallet = nextWallet;
+    toast.classList.remove("on");
+
+    if(!profile.wallet_first_seen_ms) profile.wallet_first_seen_ms = Date.now();
+    if(!profile.namesByWallet[connectedWallet]) profile.namesByWallet[connectedWallet] = "big_hitter";
+    saveProfileLocal();
+
+    refreshWalletViews();
+  } catch(err){
+    const code = Number(err && err.code);
+    if(code === 4001 || /reject/i.test(String(err && err.message || ""))){
+      showToast("wallet connection rejected.");
+      return;
+    }
+    showToast("wallet connect failed.");
+  }
 }
 
-function disconnectMock(){
+async function disconnectMock(){
   closeWalletDropdown();
-  connectedWallet = null;
-  updateHeaderWalletUI();
-
-  updateEarningsUI();
-  renderHome();
-  if(activeRoomId) renderRoom(activeRoomId);
-  if(profileView.classList.contains("on")) renderProfilePage();
+  const provider = getProvider();
+  if(provider && typeof provider.disconnect === "function"){
+    try { await provider.disconnect(); }
+    catch(e){ /* no-op */ }
+  }
+  clearConnectedWallet();
   showToast("disconnected.");
 }
 
@@ -546,7 +605,7 @@ connectBtn.addEventListener("click", connectMock);
     walletViewWalletItem.addEventListener("click", () => {
       if(!connectedWallet) return;
       closeWalletDropdown();
-      window.open(`https://solscan.io/account/${encodeURIComponent(connectedWallet)}`, "_blank", "noopener,noreferrer");
+      window.open(getExplorerAccountUrl(connectedWallet), "_blank", "noopener,noreferrer");
     });
     walletCopyItem.addEventListener("click", async () => {
       if(!connectedWallet) return;
@@ -1004,7 +1063,7 @@ connectBtn.addEventListener("click", connectMock);
       $("profileNameOut").textContent = displayName(wallet);
       $("profileWalletOut").textContent = shortWallet(wallet);
       $("profileBioOut").textContent = details.bio || "no bio yet.";
-      $("profileSolscanLink").href = `https://solscan.io/account/${encodeURIComponent(wallet)}`;
+      $("profileSolscanLink").href = getExplorerAccountUrl(wallet);
       if(details.social){
         const social = $("profileSocialOut");
         social.style.display = "inline-flex";
@@ -1578,5 +1637,19 @@ connectBtn.addEventListener("click", connectMock);
 
     setView("home");
     renderHome();
+    (async () => {
+      const provider = getProvider();
+      if(!provider) return;
+      bindWalletListeners(provider);
+      try{
+        const resp = await provider.connect({ onlyIfTrusted: true });
+        if(resp && resp.publicKey){
+          connectedWallet = resp.publicKey.toString();
+          refreshWalletViews();
+        }
+      } catch(e){
+        // ignore untrusted/no-session restore failures
+      }
+    })();
     handleHash();
     setInterval(tick, 900);
