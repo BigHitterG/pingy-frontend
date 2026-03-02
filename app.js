@@ -665,12 +665,38 @@ connectBtn.addEventListener("click", connectMock);
       return !!(wallet && r.approval && r.approval[wallet] === "pending");
     }
 
+    function getRoomEscrowSnapshot(room){
+      const r = room || {};
+      const approval = r.approval || {};
+      const positions = r.positions || {};
+      const byWallet = {};
+      const approvedWallets = [];
+      const pendingWallets = [];
+
+      const wallets = new Set([
+        ...Object.keys(approval),
+        ...Object.keys(positions)
+      ]);
+
+      for(const wallet of wallets){
+        const status = approval[wallet];
+        const escrowSol = Math.max(0, Number((positions[wallet] || {}).escrow_sol || 0));
+        byWallet[wallet] = {
+          status,
+          escrow_sol: escrowSol
+        };
+        if(status === "approved") approvedWallets.push(wallet);
+        if(status === "pending") pendingWallets.push(wallet);
+      }
+
+      return { byWallet, approvedWallets, pendingWallets };
+    }
+
     function approvedEscrowSol(r){
       let total = 0;
-      const pos = r.positions || {};
-      for(const w of Object.keys(pos)){
-        if(!isApproved(r, w)) continue;
-        total += Math.max(0, Number((pos[w]||{}).escrow_sol || 0));
+      const snapshot = getRoomEscrowSnapshot(r);
+      for(const w of snapshot.approvedWallets){
+        total += Number(snapshot.byWallet[w]?.escrow_sol || 0);
       }
       return total;
     }
@@ -678,10 +704,9 @@ connectBtn.addEventListener("click", connectMock);
     function countedEscrowSol(r){
       let total = 0;
       const capSol = walletCapSol(r);
-      const pos = r.positions || {};
-      for(const w of Object.keys(pos)){
-        if(!isApproved(r, w)) continue;
-        const escrow = Math.max(0, Number((pos[w]||{}).escrow_sol || 0));
+      const snapshot = getRoomEscrowSnapshot(r);
+      for(const w of snapshot.approvedWallets){
+        const escrow = Number(snapshot.byWallet[w]?.escrow_sol || 0);
         total += Math.min(escrow, capSol);
       }
       return total;
@@ -1426,9 +1451,13 @@ connectBtn.addEventListener("click", connectMock);
         phaseLabel.textContent = "Funding first 10% of curve";
         statePill.textContent = "SPAWNING";
         phaseBar.style.width = Math.round(spawnProgress01(r)*100) + "%";
-        const counted = countedEscrowSol(r);
-        const target = spawnTargetSol();
+        const snapshot = getRoomEscrowSnapshot(r);
         const capSol = walletCapSol(r);
+        const counted = snapshot.approvedWallets.reduce((sum, w) => {
+          const escrow = Number(snapshot.byWallet[w]?.escrow_sol || 0);
+          return sum + Math.min(escrow, capSol);
+        }, 0);
+        const target = spawnTargetSol();
         const progressLine = $("spawnProgressLine");
         if(progressLine) progressLine.textContent = `approved counted: ${counted.toFixed(3)}/${target.toFixed(3)} SOL • cap per wallet: ${capSol.toFixed(3)} SOL`;
       } else if(r.state === "BONDING"){
