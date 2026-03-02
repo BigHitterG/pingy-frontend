@@ -166,16 +166,18 @@
           <span class="k" id="statePill">SPAWNING</span>
         </div>
         <div class="bar" aria-label="progress bar"><i id="phaseBar"></i></div>
-        <div class="tiny muted" id="spawnInfoLine" style="margin-top:6px;">Token not created yet. Funds refundable until spawn.</div>
-        <div class="tiny muted" id="goodSolLine" style="margin-top:4px;"></div>
+        <button class="btn subtle small" id="progressDetailsToggle" style="margin-top:8px;">details ▸</button>
+        <div id="progressDetailsBody" style="display:none;">
+          <div class="tiny muted" id="spawnInfoLine" style="margin-top:6px;">Token not created yet. Funds refundable until spawn.</div>
+          <div class="tiny muted" id="goodSolLine" style="margin-top:4px;"></div>
 
-        <!-- New: wallet score row -->
-        <div class="row" style="justify-content:space-between; margin-top:8px;">
-          <div class="row" style="gap:6px;">
-            <span class="pill clickable" id="scorePill" title="click for details">wallet score: 50</span>
-            <span class="infoDot" id="scoreInfo" title="score increases with verification, longevity, and vouches">i</span>
+          <div class="row" style="justify-content:space-between; margin-top:8px;">
+            <div class="row" style="gap:6px;">
+              <span class="pill clickable" id="scorePill" title="click for details">wallet score: 50</span>
+              <span class="infoDot" id="scoreInfo" title="score increases with verification, longevity, and vouches">i</span>
+            </div>
+            <div class="muted" id="vouchesLine">vouches left: —</div>
           </div>
-          <div class="muted" id="vouchesLine">vouches left: —</div>
         </div>
       </div>
 
@@ -215,15 +217,6 @@
           <button class="btn subtle small" id="howWorksBtn">how selection works</button>
         </div>
 
-        <div class="tiny" style="margin-top:8px;" id="boostHint">
-          verifying + good score increases selection chance
-        </div>
-        <div class="tiny" style="margin-top:4px;" id="boostHint2">
-          score also affects future launches
-        </div>
-        <div class="tiny" style="margin-top:4px; display:none;" id="poolLockLine">
-          pool locking soon
-        </div>
       </div>
 
       <div class="row" style="gap:8px; margin-bottom:8px;">
@@ -347,6 +340,8 @@
         <div class="muted">
           vouches also raise trust signals over time. you can always unping before spawn.
         </div>
+        <div class="muted">verifying + good score increases selection chance</div>
+        <div class="muted">score also affects future launches</div>
       </div>
     </div>
   </div>
