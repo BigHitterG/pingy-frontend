@@ -1,0 +1,9 @@
+[workspace]
+members = ["programs/pingy_spawn"]
+
+[provider]
+cluster = "Devnet"
+wallet = "~/.config/solana/id.json"
+
+[programs.devnet]
+pingy_spawn = "Pingy1111111111111111111111111111111111111"

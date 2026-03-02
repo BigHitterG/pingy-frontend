@@ -1,0 +1,142 @@
+{
+  "address": "Pingy1111111111111111111111111111111111111",
+  "metadata": {
+    "name": "pingy_spawn",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Pingy spawn escrow/deposit program"
+  },
+  "instructions": [
+    {
+      "name": "initializeThread",
+      "discriminator": [0,0,0,0,0,0,0,1],
+      "accounts": [
+        {"name":"admin","writable":true,"signer":true},
+        {"name":"thread","writable":true},
+        {"name":"spawnPool","writable":true},
+        {"name":"systemProgram","address":"11111111111111111111111111111111"}
+      ],
+      "args": [{"name":"threadId","type":"string"}]
+    },
+    {
+      "name": "pingDeposit",
+      "discriminator": [0,0,0,0,0,0,0,2],
+      "accounts": [
+        {"name":"user","writable":true,"signer":true},
+        {"name":"thread","writable":true},
+        {"name":"deposit","writable":true},
+        {"name":"systemProgram","address":"11111111111111111111111111111111"}
+      ],
+      "args": [
+        {"name":"threadId","type":"string"},
+        {"name":"amountLamports","type":"u64"}
+      ]
+    },
+    {
+      "name": "approveUser",
+      "discriminator": [0,0,0,0,0,0,0,3],
+      "accounts": [
+        {"name":"admin","writable":true,"signer":true},
+        {"name":"thread"},
+        {"name":"deposit","writable":true}
+      ],
+      "args": [
+        {"name":"threadId","type":"string"},
+        {"name":"userPubkey","type":"pubkey"}
+      ]
+    },
+    {
+      "name": "rejectAndRefund",
+      "discriminator": [0,0,0,0,0,0,0,4],
+      "accounts": [
+        {"name":"admin","writable":true,"signer":true},
+        {"name":"thread"},
+        {"name":"deposit","writable":true},
+        {"name":"user","writable":true}
+      ],
+      "args": [
+        {"name":"threadId","type":"string"},
+        {"name":"userPubkey","type":"pubkey"}
+      ]
+    },
+    {
+      "name": "unpingWithdraw",
+      "discriminator": [0,0,0,0,0,0,0,5],
+      "accounts": [
+        {"name":"user","writable":true,"signer":true},
+        {"name":"thread"},
+        {"name":"deposit","writable":true}
+      ],
+      "args": [{"name":"threadId","type":"string"}]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "thread",
+      "discriminator": [0,0,0,0,0,0,1,0]
+    },
+    {
+      "name": "deposit",
+      "discriminator": [0,0,0,0,0,0,1,1]
+    },
+    {
+      "name": "spawnPool",
+      "discriminator": [0,0,0,0,0,0,1,2]
+    }
+  ],
+  "types": [
+    {
+      "name": "thread",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {"name":"threadId","type":"string"},
+          {"name":"adminPubkey","type":"pubkey"},
+          {"name":"spawnState","type":{"defined":{"name":"spawnState"}}},
+          {"name":"participants","type":{"vec":"pubkey"}}
+        ]
+      }
+    },
+    {
+      "name": "deposit",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {"name":"threadId","type":"string"},
+          {"name":"userPubkey","type":"pubkey"},
+          {"name":"status","type":{"defined":{"name":"depositStatus"}}},
+          {"name":"rejectedOnce","type":"bool"},
+          {"name":"amountRecordedLamports","type":"u64"}
+        ]
+      }
+    },
+    {
+      "name": "spawnPool",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {"name":"threadId","type":"string"}
+        ]
+      }
+    },
+    {
+      "name": "spawnState",
+      "type": {
+        "kind": "enum",
+        "variants": [{"name":"open"},{"name":"closed"}]
+      }
+    },
+    {
+      "name": "depositStatus",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {"name":"pending"},
+          {"name":"approved"},
+          {"name":"rejected"},
+          {"name":"withdrawn"}
+        ]
+      }
+    }
+  ]
+}
