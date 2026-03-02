@@ -239,7 +239,6 @@ const $ = (id) => document.getElementById(id);
     // State
     let connectedWallet = null;
     let activeRoomId = null;
-    let progressDetailsExpanded = false;
 
     const profile = {
       namesByWallet: {},
@@ -562,14 +561,6 @@ connectBtn.addEventListener("click", connectMock);
       state.chat[roomId] = state.chat[roomId] || [];
       state.chat[roomId].push({ ts: nowStamp(), wallet:"SYSTEM", text });
     }
-
-    $("progressDetailsToggle").addEventListener("click", () => {
-      progressDetailsExpanded = !progressDetailsExpanded;
-      const body = $("progressDetailsBody");
-      const toggle = $("progressDetailsToggle");
-      if(body) body.style.display = progressDetailsExpanded ? "block" : "none";
-      if(toggle) toggle.textContent = progressDetailsExpanded ? "details ▾" : "details ▸";
-    });
 
     function walletUsdInRoom(r, wallet){
       const sol = Number((r.positions?.[wallet]?.escrow_sol) || 0);
@@ -1046,7 +1037,6 @@ connectBtn.addEventListener("click", connectMock);
     // Room view
     function openRoom(roomId){
       activeRoomId = roomId;
-      progressDetailsExpanded = false;
       setView("room");
       renderRoom(roomId);
 
@@ -1075,8 +1065,7 @@ connectBtn.addEventListener("click", connectMock);
 
         const isSys = (m.wallet === "SYSTEM");
         const nm = isSys ? "system" : displayName(m.wallet);
-        const nameHtml = isSys ? `<strong>${escapeText(nm)}</strong>` : escapeText(nm) + verifiedMark;
-
+        const nameHtml = isSys ? `<strong>${escapeText(nm)}</strong>` : escapeText(nm);
 
         row.innerHTML = `
           <div class="who">
@@ -1191,14 +1180,6 @@ connectBtn.addEventListener("click", connectMock);
         statePill.textContent = "BONDED";
         phaseBar.style.width = "100%";
       }
-
-      const progressDetailsBody = $("progressDetailsBody");
-      const progressDetailsToggle = $("progressDetailsToggle");
-      if(progressDetailsBody) progressDetailsBody.style.display = progressDetailsExpanded ? "block" : "none";
-      if(progressDetailsToggle) progressDetailsToggle.textContent = progressDetailsExpanded ? "details ▾" : "details ▸";
-
-      const spawnInfoLine = $("spawnInfoLine");
-      if(spawnInfoLine) spawnInfoLine.style.display = (r.state === "SPAWNING") ? "block" : "none";
 
       const me =
         (r.state === "SPAWNING")
