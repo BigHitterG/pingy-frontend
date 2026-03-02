@@ -1,7 +1,27 @@
+import {
+  SOLANA_CLUSTER,
+  DEVNET_RPC,
+  connection,
+  PROGRAM_ID,
+  deriveThreadPda,
+  deriveSpawnPoolPda,
+  deriveDepositPda,
+  fetchProgramAccounts,
+} from "./lib/solana.js";
+
 const $ = (id) => document.getElementById(id);
 
-    const SOLANA_CLUSTER = "devnet";
-    const DEVNET_RPC = "https://api.devnet.solana.com";
+    // Exposed for devnet wiring checks from browser console.
+    window.pingySolana = {
+      SOLANA_CLUSTER,
+      DEVNET_RPC,
+      connection,
+      PROGRAM_ID,
+      deriveThreadPda,
+      deriveSpawnPoolPda,
+      deriveDepositPda,
+      fetchProgramAccounts,
+    };
 
     // Tuned assumptions
     const SOL_TO_USD = 100; // internal conversion (mock) — for display only
