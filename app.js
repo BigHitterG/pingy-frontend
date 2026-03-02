@@ -112,10 +112,13 @@ const $ = (id) => document.getElementById(id);
 
     function disableOnchainFeatures(reason){
       onchainEnabled = false;
-      showToast(reason);
-      [$("pingConfirm"), $("unpingConfirm")].forEach((btn) => {
-        if(btn) btn.disabled = true;
-      });
+      console.warn("[pingy] on-chain disabled:", reason);
+      showToast(reason + " — using mock escrow");
+      // DO NOT disable ping/unping confirm buttons.
+    }
+
+    function shouldUseOnchain(){
+      return !!onchainEnabled && !!connectedWallet;
     }
 
     async function validateOnchainConfig(){
@@ -2167,7 +2170,6 @@ if(connectBtn){
     }
 
     $("pingConfirm").addEventListener("click", async () => {
-      if(!onchainEnabled) return showToast("On-chain disabled: PROGRAM_ID misconfigured");
       const rid = modalRoomId || activeRoomId;
       const r = roomById(rid);
       if(!r) return;
@@ -2181,64 +2183,68 @@ if(connectBtn){
           r.approval = r.approval || {};
           if(!r.approval[connectedWallet]) r.approval[connectedWallet] = "pending";
         }
-        const amountLamports = Math.round(solAmount * 1_000_000_000);
-        if(!Number.isInteger(amountLamports) || amountLamports <= 0) return alert("enter at least 1 lamport.");
-        console.log("[ping-debug] amount conversion", { solAmount, amountLamports });
-        const walletPk = new PublicKey(connectedWallet);
-        const [threadPda] = await deriveThreadPda(rid);
-        const [depositPda] = await deriveDepositPda(rid, walletPk);
-        const [spawnPoolPda] = await deriveSpawnPoolPda(rid);
-        const threadInfo = await connection.getAccountInfo(threadPda, "confirmed");
-        if(!threadInfo){
-          console.log("[ping-debug] thread missing, initializing", { rid, threadPda: threadPda.toBase58() });
-          try {
-            await initializeThreadTx(rid);
-            const threadInfoAfterInit = await connection.getAccountInfo(threadPda, "confirmed");
-            if(!threadInfoAfterInit){
-              throw new Error("thread PDA still missing after initializeThreadTx confirmation");
+        if(shouldUseOnchain()){
+          const amountLamports = Math.round(solAmount * 1_000_000_000);
+          if(!Number.isInteger(amountLamports) || amountLamports <= 0) return alert("enter at least 1 lamport.");
+          console.log("[ping-debug] amount conversion", { solAmount, amountLamports });
+          const walletPk = new PublicKey(connectedWallet);
+          const [threadPda] = await deriveThreadPda(rid);
+          const [depositPda] = await deriveDepositPda(rid, walletPk);
+          const [spawnPoolPda] = await deriveSpawnPoolPda(rid);
+          const threadInfo = await connection.getAccountInfo(threadPda, "confirmed");
+          if(!threadInfo){
+            console.log("[ping-debug] thread missing, initializing", { rid, threadPda: threadPda.toBase58() });
+            try {
+              await initializeThreadTx(rid);
+              const threadInfoAfterInit = await connection.getAccountInfo(threadPda, "confirmed");
+              if(!threadInfoAfterInit){
+                throw new Error("thread PDA still missing after initializeThreadTx confirmation");
+              }
+            } catch (e){
+              reportTxError(e, "initialize thread transaction failed");
+              return;
             }
-          } catch (e){
-            reportTxError(e, "initialize thread transaction failed");
+          }
+
+          const balBefore = await connection.getBalance(depositPda, "confirmed");
+          try {
+            const sig = await pingDepositTx(rid, amountLamports);
+            const balAfter = await connection.getBalance(depositPda, "confirmed");
+            const deltaLamports = Number(balAfter || 0) - Number(balBefore || 0);
+            const deltaSol = deltaLamports / 1_000_000_000;
+            console.log("[ping-debug] deposit balance delta", {
+              depositPda: depositPda.toBase58(),
+              balBefore,
+              balAfter,
+              deltaLamports,
+              deltaSol,
+              expectedLamports: amountLamports,
+              txExplorer: explorerTxUrl(sig),
+              depositExplorer: explorerAddressUrl(depositPda.toBase58()),
+            });
+            showToast(`Escrow deposit +${deltaSol.toFixed(9)} SOL (expected ~${solAmount} SOL)`);
+            console.log("[ping-debug] explorer links", {
+              tx: explorerTxUrl(sig),
+              deposit: explorerAddressUrl(depositPda.toBase58()),
+            });
+          } catch(e){
+            reportTxError(e, "ping deposit transaction failed");
+            console.error("[ping-debug] context", {
+              connectedWallet,
+              DEVNET_RPC,
+              SOLANA_CLUSTER,
+              programId: PROGRAM_ID.toBase58(),
+              threadPda: threadPda.toBase58(),
+              depositPda: depositPda.toBase58(),
+              spawnPoolPda: spawnPoolPda.toBase58(),
+              vault: null,
+              solAmount,
+              amountLamports,
+            });
             return;
           }
-        }
-
-        const balBefore = await connection.getBalance(depositPda, "confirmed");
-        try{
-          const sig = await pingDepositTx(rid, amountLamports);
-          const balAfter = await connection.getBalance(depositPda, "confirmed");
-          const deltaLamports = Number(balAfter || 0) - Number(balBefore || 0);
-          const deltaSol = deltaLamports / 1_000_000_000;
-          console.log("[ping-debug] deposit balance delta", {
-            depositPda: depositPda.toBase58(),
-            balBefore,
-            balAfter,
-            deltaLamports,
-            deltaSol,
-            expectedLamports: amountLamports,
-            txExplorer: explorerTxUrl(sig),
-            depositExplorer: explorerAddressUrl(depositPda.toBase58()),
-          });
-          showToast(`Escrow deposit +${deltaSol.toFixed(9)} SOL (expected ~${solAmount} SOL)`);
-          console.log("[ping-debug] explorer links", {
-            tx: explorerTxUrl(sig),
-            deposit: explorerAddressUrl(depositPda.toBase58()),
-          });
-        } catch(e){
-          reportTxError(e, "ping deposit transaction failed");
-          console.error("[ping-debug] context", {
-            connectedWallet,
-            DEVNET_RPC,
-            SOLANA_CLUSTER,
-            programId: PROGRAM_ID.toBase58(),
-            threadPda: threadPda.toBase58(),
-            depositPda: depositPda.toBase58(),
-            spawnPoolPda: spawnPoolPda.toBase58(),
-            vault: null,
-            solAmount,
-            amountLamports,
-          });
-          return;
+        } else {
+          applySpawnCommit(r, connectedWallet, solAmount);
         }
 
         state.chat[r.id] = state.chat[r.id] || [];
@@ -2270,7 +2276,6 @@ if(connectBtn){
     });
 
     $("unpingConfirm").addEventListener("click", async () => {
-      if(!onchainEnabled) return showToast("On-chain disabled: PROGRAM_ID misconfigured");
       const rid = modalRoomId || activeRoomId;
       const r = roomById(rid);
       if(!r) return;
@@ -2282,11 +2287,15 @@ if(connectBtn){
         const cur = myEscrow(rid);
         if(cur <= 0) return alert("you have no escrow to unping.");
         if(sol > cur) return alert("cannot unping more than your escrow.");
-        try{
-          await unpingWithdrawTx(rid);
-        } catch(e){
-          reportTxError(e, "unping transaction failed");
-          return;
+        if(shouldUseOnchain()){
+          try{
+            await unpingWithdrawTx(rid);
+          } catch(e){
+            reportTxError(e, "unping transaction failed");
+            return;
+          }
+        } else {
+          applySpawnUncommit(r, connectedWallet, sol);
         }
 
         state.chat[r.id] = state.chat[r.id] || [];
