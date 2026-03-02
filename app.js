@@ -79,16 +79,33 @@ const $ = (id) => document.getElementById(id);
       toastTimer = setTimeout(() => toast.classList.remove("on"), 2400);
     }
 
+    function getErrorLogs(err){
+      return [
+        ...(Array.isArray(err?.logs) ? err.logs : []),
+        ...(Array.isArray(err?.data?.logs) ? err.data.logs : []),
+        ...(Array.isArray(err?.error?.logs) ? err.error.logs : []),
+      ];
+    }
+
     function summarizeTxError(err){
       const message = String(err?.message || err || "transaction failed");
-      const snippet = message.slice(0, 120);
-      const logs = err?.logs || err?.data?.logs || [];
-      const combined = [message, ...(Array.isArray(logs) ? logs : [String(logs)])].join(" ");
+      const snippet = message.slice(0, 160);
+      const logs = getErrorLogs(err);
+      const combined = [message, ...logs].join(" ");
       const customMatch = combined.match(/custom program error:\s*0x[0-9a-f]+/i);
       const instructionMatch = combined.match(/InstructionError[^\n]*/i);
       if(customMatch) return `${snippet} (${customMatch[0]})`;
       if(instructionMatch) return `${snippet} (${instructionMatch[0]})`;
       return snippet;
+    }
+
+    function reportTxError(err, contextLabel){
+      console.error(err);
+      console.error(err?.message);
+      const logs = getErrorLogs(err);
+      console.error(logs);
+      if(contextLabel) console.error(`[pingy] ${contextLabel}`);
+      showToast(err?.message || summarizeTxError(err));
     }
 
     function setView(which){
@@ -411,17 +428,17 @@ const $ = (id) => document.getElementById(id);
       if(!provider.publicKey) throw new Error("Wallet provider public key missing");
       assertIxPubkeys(ix);
 
+      const feePayer = parsePublicKeyStrict(provider.publicKey.toBase58(), "provider public key");
       const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
-      const tx = new Transaction({ lastValidBlockHeight }).add(ix);
-      tx.feePayer = provider.publicKey;
-      tx.recentBlockhash = blockhash;
+      const tx = new Transaction({ feePayer, recentBlockhash: blockhash, lastValidBlockHeight }).add(ix);
 
       const sim = await connection.simulateTransaction(tx, { sigVerify: false, commitment: "processed" });
       console.log("[pingy] tx simulation err:", sim?.value?.err);
       console.log("[pingy] tx simulation logs:", sim?.value?.logs || []);
       if(sim?.value?.err){
         const simErr = new Error(`Transaction simulation failed: ${JSON.stringify(sim.value.err)}`);
-        simErr.logs = sim.value.logs || [];
+        simErr.logs = sim?.value?.logs || [];
+        showToast(`simulation failed: ${simErr.message}`);
         throw simErr;
       }
 
@@ -430,10 +447,12 @@ const $ = (id) => document.getElementById(id);
 
       const signature = await connection.sendRawTransaction(signedTx.serialize(), { skipPreflight: false });
       if(!signature) throw new Error("Missing transaction signature");
+      const explorerUrl = `https://explorer.solana.com/tx/${signature}?cluster=devnet`;
+      console.log("[pingy] tx signature:", signature);
+      console.log("[pingy] explorer:", explorerUrl);
 
       try {
-        const latest = await connection.getLatestBlockhash("confirmed");
-        await connection.confirmTransaction({ signature, ...latest }, "confirmed");
+        await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, "confirmed");
       } catch (confirmErr){
         console.error("[pingy] tx confirm error:", confirmErr);
         try {
@@ -455,7 +474,7 @@ const $ = (id) => document.getElementById(id);
         throw confirmErr;
       }
 
-      showToast(`tx confirmed: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+      showToast(`tx confirmed: ${explorerUrl}`);
       return signature;
     }
 
@@ -1717,8 +1736,7 @@ if(connectBtn){
       try{
         await approveUserTx(roomId, wallet);
       } catch(e){
-        console.error(e);
-        alert("approve transaction failed.");
+        reportTxError(e, "approve transaction failed");
         return;
       }
 
@@ -1735,8 +1753,7 @@ if(connectBtn){
       try{
         await rejectAndRefundTx(roomId, wallet);
       } catch(e){
-        console.error(e);
-        alert("deny transaction failed.");
+        reportTxError(e, "deny transaction failed");
         return;
       }
 
@@ -1964,9 +1981,7 @@ if(connectBtn){
         try{
           await pingDepositTx(rid, lamports);
         } catch(e){
-          console.error(e);
-          console.error(e?.message);
-          console.error(e?.logs || e?.data?.logs);
+          reportTxError(e, "ping deposit transaction failed");
           console.error("[ping-debug] context", {
             connectedWallet,
             DEVNET_RPC,
@@ -1977,7 +1992,6 @@ if(connectBtn){
             vault: null,
             amountLamports: lamports,
           });
-          showToast(summarizeTxError(e));
           return;
         }
 
@@ -2024,8 +2038,7 @@ if(connectBtn){
         try{
           await unpingWithdrawTx(rid);
         } catch(e){
-          console.error(e);
-          alert("unping transaction failed.");
+          reportTxError(e, "unping transaction failed");
           return;
         }
 
