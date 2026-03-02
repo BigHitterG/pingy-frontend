@@ -105,6 +105,8 @@ const $ = (id) => document.getElementById(id);
         ...(Array.isArray(err?.logs) ? err.logs : []),
         ...(Array.isArray(err?.data?.logs) ? err.data.logs : []),
         ...(Array.isArray(err?.error?.logs) ? err.error.logs : []),
+        ...(Array.isArray(err?.simLogs) ? err.simLogs : []),
+        ...(Array.isArray(err?.txLogs) ? err.txLogs : []),
       ];
     }
 
@@ -126,7 +128,8 @@ const $ = (id) => document.getElementById(id);
       const logs = getErrorLogs(err);
       console.error(logs);
       if(contextLabel) console.error(`[pingy] ${contextLabel}`);
-      showToast(err?.message || summarizeTxError(err));
+      const details = [String(err?.message || summarizeTxError(err)), ...logs].join(" | ").slice(0, 600);
+      showToast(details);
     }
 
     function explorerTxUrl(signature){
@@ -483,9 +486,11 @@ const $ = (id) => document.getElementById(id);
       console.log("[pingy] tx simulation err:", sim?.value?.err);
       console.log("[pingy] tx simulation logs:", sim?.value?.logs || []);
       if(sim?.value?.err){
-        const simErr = new Error(`Transaction simulation failed: ${JSON.stringify(sim.value.err)} | logs: ${(sim?.value?.logs || []).join(" || ")}`);
-        simErr.logs = sim?.value?.logs || [];
-        showToast(`simulation failed: ${JSON.stringify(sim.value.err)}`);
+        const simLogs = sim?.value?.logs || [];
+        const simErr = new Error(`Transaction simulation failed: ${JSON.stringify(sim.value.err)} | logs: ${simLogs.join(" || ")}`);
+        simErr.logs = simLogs;
+        simErr.simLogs = simLogs;
+        showToast(`simulation failed: ${JSON.stringify(sim.value.err)} | ${(simLogs[simLogs.length - 1] || "no logs")}`);
         throw simErr;
       }
 
@@ -516,18 +521,32 @@ const $ = (id) => document.getElementById(id);
       } catch(e){ showToast("sendRawTransaction: " + (e?.message||e)); throw e; }
       if(!sig) throw new Error("Missing transaction signature");
 
-      try {
-        await connection.confirmTransaction({ signature:sig, blockhash, lastValidBlockHeight }, "confirmed");
-      } catch(e){
-        let txLogs = [];
+      let txLogs = [];
+      const fetchTxLogs = async () => {
         try {
           const txInfo = await connection.getTransaction(sig, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
-          txLogs = txInfo?.meta?.logMessages || [];
+          return txInfo?.meta?.logMessages || [];
         } catch (logErr){
           console.error("[ping-debug] failed to fetch tx logs", logErr);
+          return [];
         }
+      };
+
+      try {
+        const confirmRes = await connection.confirmTransaction({ signature:sig, blockhash, lastValidBlockHeight }, "confirmed");
+        if(confirmRes?.value?.err){
+          txLogs = await fetchTxLogs();
+          const confirmErr = new Error(`confirmTransaction returned err: ${JSON.stringify(confirmRes.value.err)}`);
+          confirmErr.logs = txLogs;
+          confirmErr.txLogs = txLogs;
+          confirmErr.signature = sig;
+          throw confirmErr;
+        }
+      } catch(e){
+        if(!txLogs.length) txLogs = await fetchTxLogs();
         e.logs = [...(Array.isArray(e?.logs) ? e.logs : []), ...txLogs];
-        showToast("confirmTransaction failed. check console logs");
+        e.txLogs = txLogs;
+        showToast(`confirm failed: ${String(e?.message || e)} | ${(txLogs[txLogs.length - 1] || "no logs")}`);
         console.error("[ping-debug] confirmTransaction error:", e);
         console.error("[ping-debug] onchain logMessages:", txLogs);
         throw e;
@@ -2113,6 +2132,10 @@ if(connectBtn){
           console.log("[ping-debug] thread missing, initializing", { rid, threadPda: threadPda.toBase58() });
           try {
             await initializeThreadTx(rid);
+            const threadInfoAfterInit = await connection.getAccountInfo(threadPda, "confirmed");
+            if(!threadInfoAfterInit){
+              throw new Error("thread PDA still missing after initializeThreadTx confirmation");
+            }
           } catch (e){
             reportTxError(e, "initialize thread transaction failed");
             return;
