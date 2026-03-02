@@ -433,7 +433,10 @@ const $ = (id) => document.getElementById(id);
 
       const feePayer = parsePublicKeyStrict(provider.publicKey.toBase58(), "provider public key");
       const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
-      const tx = new Transaction({ feePayer, recentBlockhash: blockhash, lastValidBlockHeight }).add(ix);
+      const tx = new Transaction();
+      tx.feePayer = feePayer;
+      tx.recentBlockhash = blockhash;
+      tx.add(ix);
 
       const sim = await connection.simulateTransaction(tx, { sigVerify: false, commitment: "processed" });
       console.log("[pingy] tx simulation err:", sim?.value?.err);
@@ -445,7 +448,21 @@ const $ = (id) => document.getElementById(id);
         throw simErr;
       }
 
-      const signedTx = await provider.signTransaction(tx);
+      console.log("[pingy] about to sign tx", {
+        feePayer: tx.feePayer?.toBase58?.(),
+        recentBlockhash: tx.recentBlockhash,
+        ixCount: tx.instructions?.length,
+        programId: ix.programId?.toBase58?.(),
+      });
+
+      let signedTx;
+      try {
+        signedTx = await provider.signTransaction(tx);
+      } catch (e){
+        console.error("[pingy] signTransaction failed", e);
+        showToast("signTransaction failed: " + String(e?.message || e));
+        throw e;
+      }
       if(!signedTx) throw new Error("Missing signed transaction");
 
       const signature = await connection.sendRawTransaction(signedTx.serialize(), { skipPreflight: false });
