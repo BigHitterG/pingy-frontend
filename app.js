@@ -148,10 +148,7 @@ const $ = (id) => document.getElementById(id);
 
     // Deterministic mock: SOL cost to buy first 10% of supply from the bonding curve.
     function spawnTargetSol(){
-      const T = VPRICE_T;
-      const a = VPRICE_P0;
-      const b = VPRICE_P1;
-      return (a * T) + (b * T / 2);
+      return spawnCostSolForTokens(VPRICE_T);
     }
 
     function spawnCostSolForTokens(tokensIn){
