@@ -82,6 +82,24 @@ const $ = (id) => document.getElementById(id);
       toastTimer = setTimeout(() => toast.classList.remove("on"), 2400);
     }
 
+    if(PROGRAM_ID.toBase58() === "11111111111111111111111111111111"){
+      showToast("FATAL: PROGRAM_ID is System Program. Fix lib/solana.js");
+      throw new Error("PROGRAM_ID misconfigured");
+    }
+
+    (async () => {
+      try {
+        const info = await connection.getAccountInfo(PROGRAM_ID, "confirmed");
+        console.log("[pingy] program account:", info);
+        if(!info || !info.executable){
+          showToast("Program ID not found / not executable on devnet");
+        }
+      } catch (err){
+        console.error("[pingy] program account check failed", err);
+        showToast("Program ID not found / not executable on devnet");
+      }
+    })();
+
     function getErrorLogs(err){
       return [
         ...(Array.isArray(err?.logs) ? err.logs : []),
@@ -447,16 +465,15 @@ const $ = (id) => document.getElementById(id);
       tx.recentBlockhash = blockhash;
       tx.add(ix);
 
-      // TEMP: simulation disabled while debugging Phantom signing flow.
-      // const sim = await connection.simulateTransaction(tx, { sigVerify: false, commitment: "processed" });
-      // console.log("[pingy] tx simulation err:", sim?.value?.err);
-      // console.log("[pingy] tx simulation logs:", sim?.value?.logs || []);
-      // if(sim?.value?.err){
-      //   const simErr = new Error(`Transaction simulation failed: ${JSON.stringify(sim.value.err)}`);
-      //   simErr.logs = sim?.value?.logs || [];
-      //   showToast(`simulation failed: ${simErr.message}`);
-      //   throw simErr;
-      // }
+      const sim = await connection.simulateTransaction(tx, { sigVerify: false, commitment: "processed" });
+      console.log("[pingy] tx simulation err:", sim?.value?.err);
+      console.log("[pingy] tx simulation logs:", sim?.value?.logs || []);
+      if(sim?.value?.err){
+        const simErr = new Error(`Transaction simulation failed: ${JSON.stringify(sim.value.err)}`);
+        simErr.logs = sim?.value?.logs || [];
+        showToast(`simulation failed: ${simErr.message}`);
+        throw simErr;
+      }
 
       console.log("[pingy] about to sign tx", {
         feePayer: tx.feePayer?.toBase58?.(),
@@ -502,11 +519,19 @@ const $ = (id) => document.getElementById(id);
       const walletPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
       const [threadPda] = await deriveThreadPda(rid);
       const [depositPda] = await deriveDepositPda(rid, walletPk);
+      const discriminator = Uint8Array.from([0,0,0,0,0,0,0,2]);
       const data = concatBytes(
-        Uint8Array.from([0,0,0,0,0,0,0,2]),
+        discriminator,
         encodeStringArg(rid),
         encodeU64Arg(lamports)
       );
+      console.log("[ping-debug] ping_deposit ix", {
+        programId: PROGRAM_ID.toBase58(),
+        threadPda: threadPda.toBase58(),
+        depositPda: depositPda.toBase58(),
+        discriminatorHex: Array.from(discriminator).map((b) => b.toString(16).padStart(2, "0")).join(""),
+        idlAccountOrder: ["user", "thread", "deposit", "systemProgram"],
+      });
       return sendProgramInstruction(new TransactionInstruction({
         programId: PROGRAM_ID,
         keys: [
@@ -2029,6 +2054,7 @@ if(connectBtn){
             connectedWallet,
             DEVNET_RPC,
             SOLANA_CLUSTER,
+            programId: PROGRAM_ID.toBase58(),
             threadPda: threadPda.toBase58(),
             depositPda: depositPda.toBase58(),
             spawnPoolPda: spawnPoolPda.toBase58(),
