@@ -37,7 +37,8 @@ const $ = (id) => document.getElementById(id);
     const walletMenu = $("walletMenu");
     const walletDropdown = $("walletDropdown");
     const walletProfileItem = $("walletProfileItem");
-    const walletSwapItem = $("walletSwapItem");
+    const walletViewWalletItem = $("walletViewWalletItem");
+    const walletCopyItem = $("walletCopyItem");
     const walletDisconnectItem = $("walletDisconnectItem");
     const connectBtn = $("connectBtn");
 
@@ -376,8 +377,20 @@ const $ = (id) => document.getElementById(id);
 
 
     function setWalletDropdown(on){
-      walletDropdown.classList.toggle("on", !!on);
-      walletDropdown.setAttribute("aria-hidden", on ? "false" : "true");
+      const open = !!on && !!connectedWallet;
+      walletDropdown.classList.toggle("on", open);
+      walletDropdown.setAttribute("aria-hidden", open ? "false" : "true");
+    }
+
+    function updateHeaderWalletUI(){
+      const connected = !!connectedWallet;
+      walletMenu.style.display = connected ? "block" : "none";
+      connectBtn.style.display = connected ? "none" : "inline-block";
+      if(connected){
+        walletPill.textContent = displayName(connectedWallet);
+      } else {
+        walletPill.textContent = "wallet";
+      }
     }
 
     function closeWalletDropdown(){
@@ -393,9 +406,7 @@ const $ = (id) => document.getElementById(id);
 function connectMock(){
   closeWalletDropdown();
   connectedWallet = "Fk2a9rQp8wYz3mN7vT5s1kC4dE6hJ9pL2qR8sX1zYb3A";
-  walletPill.textContent = "wallet: " + shortWallet(connectedWallet);
-  connectBtn.textContent = "disconnect";
-  connectBtn.disabled = false;
+  updateHeaderWalletUI();
   toast.classList.remove("on");
 
   if(!profile.wallet_first_seen_ms) profile.wallet_first_seen_ms = Date.now();
@@ -411,9 +422,7 @@ function connectMock(){
 function disconnectMock(){
   closeWalletDropdown();
   connectedWallet = null;
-  walletPill.textContent = "wallet: not connected";
-  connectBtn.textContent = "connect";
-  connectBtn.disabled = false;
+  updateHeaderWalletUI();
 
   updateEarningsUI();
   renderHome();
@@ -421,7 +430,7 @@ function disconnectMock(){
   showToast("disconnected.");
 }
 
-connectBtn.addEventListener("click", () => { if(connectedWallet) disconnectMock(); else connectMock(); });
+connectBtn.addEventListener("click", connectMock);
     $("toastConnect").addEventListener("click", connectMock);
     $("toastClose").addEventListener("click", () => toast.classList.remove("on"));
     homeBtn.addEventListener("click", () => setView("home"));
@@ -463,6 +472,7 @@ connectBtn.addEventListener("click", () => { if(connectedWallet) disconnectMock(
       openModal($("profileBack"));
     }
     walletPill.addEventListener("click", () => {
+      if(!connectedWallet) return;
       const next = !walletDropdown.classList.contains("on");
       setWalletDropdown(next);
     });
@@ -471,9 +481,16 @@ connectBtn.addEventListener("click", () => { if(connectedWallet) disconnectMock(
       openProfile();
       navigateHash("profile");
     });
-    walletSwapItem.addEventListener("click", () => {
+    walletViewWalletItem.addEventListener("click", () => {
+      if(!connectedWallet) return;
       closeWalletDropdown();
-      navigateHash("swap");
+      window.open(`https://solscan.io/account/${encodeURIComponent(connectedWallet)}`, "_blank", "noopener,noreferrer");
+    });
+    walletCopyItem.addEventListener("click", async () => {
+      if(!connectedWallet) return;
+      await copyToClipboard(connectedWallet);
+      closeWalletDropdown();
+      showToast("address copied.");
     });
     walletDisconnectItem.addEventListener("click", () => {
       if(!connectedWallet) return;
@@ -483,6 +500,8 @@ connectBtn.addEventListener("click", () => { if(connectedWallet) disconnectMock(
       if(!walletMenu.contains(e.target)) closeWalletDropdown();
     });
 
+    updateHeaderWalletUI();
+
     function saveUsername(){
       if(!connectedWallet) return showToast("connect wallet first.");
       const raw = ($("profileUsername").value || "").trim();
@@ -490,6 +509,7 @@ connectBtn.addEventListener("click", () => { if(connectedWallet) disconnectMock(
       if(!ok) return alert("username: letters/numbers/spaces/_/- (max 20).");
       profile.namesByWallet[connectedWallet] = raw;
       $("profileHint").textContent = raw ? `saved: ${raw}` : "cleared. showing wallet instead.";
+      updateHeaderWalletUI();
       if(activeRoomId) renderRoom(activeRoomId);
     }
     $("profileSave").addEventListener("click", saveUsername);
@@ -1368,6 +1388,7 @@ connectBtn.addEventListener("click", () => { if(connectedWallet) disconnectMock(
     // Init + ticker
     function tick(){
       renderHome();
+      updateHeaderWalletUI();
       if(activeRoomId) renderRoom(activeRoomId);
     }
 
