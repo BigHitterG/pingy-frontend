@@ -11,7 +11,14 @@
     <div class="topbar">
       <div class="brand">pingy</div>
       <div class="right">
-        <div class="pill clickable" id="walletPill" title="profile">wallet: not connected</div>
+        <div class="walletMenu" id="walletMenu">
+          <div class="pill clickable" id="walletPill" title="wallet menu">wallet: not connected</div>
+          <div class="walletDropdown" id="walletDropdown" role="menu" aria-hidden="true">
+            <button class="walletItem" id="walletProfileItem" role="menuitem">profile</button>
+            <button class="walletItem" id="walletSwapItem" role="menuitem">pingyswap</button>
+            <button class="walletItem" id="walletDisconnectItem" role="menuitem">disconnect</button>
+          </div>
+        </div>
         <button class="btn" id="connectBtn">connect</button>
         <button class="btn subtle" id="homeBtn" style="display:none;">home</button>
       </div>
