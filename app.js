@@ -425,10 +425,37 @@ const $ = (id) => document.getElementById(id);
         throw simErr;
       }
 
-      const res = await provider.signAndSendTransaction(tx);
-      const signature = res && (res.signature || res);
+      const signedTx = await provider.signTransaction(tx);
+      if(!signedTx) throw new Error("Missing signed transaction");
+
+      const signature = await connection.sendRawTransaction(signedTx.serialize(), { skipPreflight: false });
       if(!signature) throw new Error("Missing transaction signature");
-      await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, "confirmed");
+
+      try {
+        const latest = await connection.getLatestBlockhash("confirmed");
+        await connection.confirmTransaction({ signature, ...latest }, "confirmed");
+      } catch (confirmErr){
+        console.error("[pingy] tx confirm error:", confirmErr);
+        try {
+          const status = await connection.getSignatureStatus(signature);
+          console.error("[pingy] tx signature status:", status?.value || status);
+        } catch (statusErr){
+          console.error("[pingy] getSignatureStatus failed:", statusErr);
+        }
+        try {
+          const txDetails = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
+          console.error("[pingy] tx details:", txDetails);
+          if(txDetails?.meta?.err){
+            console.error("[pingy] tx program error:", txDetails.meta.err);
+            console.error("[pingy] tx logs:", txDetails.meta.logMessages || []);
+          }
+        } catch (txErr){
+          console.error("[pingy] getTransaction failed:", txErr);
+        }
+        throw confirmErr;
+      }
+
+      showToast(`tx confirmed: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
       return signature;
     }
 
