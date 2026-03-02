@@ -298,15 +298,31 @@ const $ = (id) => document.getElementById(id);
     state.rooms[2].token_address = "4khTDC...tG8d";
     state.rooms[2].image = null;
 
+    state.rooms.forEach((r) => {
+      r.approvedWallets = r.approvedWallets || {};
+      r.approverWallets = r.approverWallets || {};
+      r.deniedWallets = r.deniedWallets || {};
+      r.blockedWallets = r.blockedWallets || {};
+      if(r.creator_wallet){
+        r.approvedWallets[r.creator_wallet] = true;
+        r.approverWallets[r.creator_wallet] = true;
+      }
+    });
+
     function mkRoom(id, name, ticker, desc){
+      const creator_wallet = (Math.random().toString(16).slice(2,10) + '111111111111111111111111111111').slice(0,44);
       return {
         id, name, ticker, desc,
-        creator_wallet: (Math.random().toString(16).slice(2,10) + '111111111111111111111111111111').slice(0,44),
+        creator_wallet,
         socials: { x:'', tg:'', web:'' },
         created_at: nowStamp(),
         state: "SPAWNING",          // SPAWNING | BONDING | BONDED
         spawn_tokens_total: 0,      // virtual tokens sold in the spawn tranche (pre-token)
         positions: {},              // wallet -> { escrow_sol, bond_sol, spawn_tokens }
+        approvedWallets: { [creator_wallet]: true },        // wallet => true
+        approverWallets: { [creator_wallet]: true },        // wallet => true
+        deniedWallets: {},          // wallet => true
+        blockedWallets: {},         // wallet => true
         market_cap_usd: 0,
         change_pct: (Math.random() * 10 - 5),
         token_address: null,
@@ -574,10 +590,30 @@ connectBtn.addEventListener("click", connectMock);
       return total;
     }
 
+    function isCreator(r, wallet){ return !!wallet && wallet === r.creator_wallet; }
+    function isApproved(r, wallet){ return !!(wallet && r.approvedWallets && r.approvedWallets[wallet]); }
+    function isApprover(r, wallet){ return isCreator(r, wallet) || !!(wallet && r.approverWallets && r.approverWallets[wallet]); }
+    function isDenied(r, wallet){ return !!(wallet && r.deniedWallets && r.deniedWallets[wallet]); }
+    function isPending(r, wallet){
+      if(!wallet) return false;
+      const escrow = Math.max(0, Number((r.positions?.[wallet]?.escrow_sol) || 0));
+      return escrow > 0 && !isApproved(r, wallet) && !isDenied(r, wallet);
+    }
+
+    function approvedEscrowSol(r){
+      let total = 0;
+      const pos = r.positions || {};
+      for(const w of Object.keys(pos)){
+        if(!isApproved(r, w)) continue;
+        total += Math.max(0, Number((pos[w]||{}).escrow_sol || 0));
+      }
+      return total;
+    }
+
     function spawnProgress01(r){
       const target = spawnTargetSol();
       if(target <= 0) return 0;
-      return clamp01(totalEscrowSol(r) / target);
+      return clamp01(approvedEscrowSol(r) / target);
     }
     function bondingProgress01(r){
       const MC = Number(r.market_cap_usd || 0);
@@ -586,10 +622,9 @@ connectBtn.addEventListener("click", connectMock);
 
     function maybeAdvance(r){
       if(r.state === "SPAWNING"){
-        const total = totalEscrowSol(r);
+        const total = approvedEscrowSol(r);
         const target = spawnTargetSol();
         if(total >= target){
-          // One-swoop spawn: token + curve created, first 10% bought, then pro-rata distribution.
           const pos = r.positions || {};
           let remainingTokens = SPAWN_TRANCHE_TOKENS;
 
@@ -598,9 +633,8 @@ connectBtn.addEventListener("click", connectMock);
             p.spawn_tokens = 0;
           }
 
-          // capped pro-rata allocation across eligible wallets
           let rounds = 0;
-          let active = Object.keys(pos).filter(w => Math.max(0, Number((pos[w]||{}).escrow_sol || 0)) > 0);
+          let active = Object.keys(pos).filter(w => isApproved(r, w) && Math.max(0, Number((pos[w]||{}).escrow_sol || 0)) > 0);
           while(remainingTokens > 1e-6 && active.length > 0 && rounds < 6){
             let activeSol = 0;
             for(const w of active){ activeSol += Math.max(0, Number((pos[w]||{}).escrow_sol || 0)); }
@@ -622,14 +656,19 @@ connectBtn.addEventListener("click", connectMock);
             rounds += 1;
           }
 
+          let refundedPending = false;
           for(const w of Object.keys(pos)){
             const p = ensurePos(r, w);
             const e = Math.max(0, Number(p.escrow_sol||0));
-            if(e > 0){
+            if(e <= 0) continue;
+            if(isApproved(r, w)){
               p.bond_sol = Number(p.bond_sol||0) + e;
-              p.escrow_sol = 0;
+            } else {
+              refundedPending = true;
             }
+            p.escrow_sol = 0;
           }
+          if(refundedPending) addSystemEvent(r.id, "spawn triggered — pending escrow refunded");
           r.spawn_tokens_total = SPAWN_TRANCHE_TOKENS - Math.max(0, remainingTokens);
 
           r.state = "BONDING";
@@ -853,6 +892,12 @@ connectBtn.addEventListener("click", connectMock);
       const id = "r" + Math.random().toString(16).slice(2,6);
       const r = mkRoom(id, name, ticker, desc);
       r.creator_wallet = connectedWallet;
+      r.approvedWallets = r.approvedWallets || {};
+      r.approverWallets = r.approverWallets || {};
+      r.deniedWallets = r.deniedWallets || {};
+      r.blockedWallets = r.blockedWallets || {};
+      r.approvedWallets[connectedWallet] = true;
+      r.approverWallets[connectedWallet] = true;
       r.socials = { x: xUrl, tg: tgUrl, web: webUrl };
       if(newImgData) r.image = newImgData;
       state.rooms.unshift(r);
@@ -860,7 +905,7 @@ connectBtn.addEventListener("click", connectMock);
 
       if(commit > 0){
         applySpawnCommit(r, connectedWallet, commit);
-        state.chat[id].push({ ts: nowStamp(), wallet: connectedWallet, text:`pinged ${commit.toFixed(3)} SOL (escrow).` });
+        state.chat[id].push({ ts: nowStamp(), wallet: "SYSTEM", text:`@${shortWallet(connectedWallet)} pinged ${commit.toFixed(3)} SOL (pending approval)` });
       }
 
       $("newName").value = "";
@@ -1053,11 +1098,23 @@ connectBtn.addEventListener("click", connectMock);
       openModal($("shareBack"));
     }
     $("shareCopy").addEventListener("click", () => copyToClipboard($("shareOut").value||""));
+    let pingersOpen = false;
+    const pingersToggle = $("pingersToggle");
+    if(pingersToggle){
+      pingersToggle.addEventListener("click", () => {
+        pingersOpen = !pingersOpen;
+        const tri = pingersOpen ? "▾" : "▸";
+        pingersToggle.textContent = `pingers ${tri}`;
+        const content = $("pingersContent");
+        if(content) content.style.display = pingersOpen ? "block" : "none";
+      });
+    }
 
     function renderChat(roomId){
       const box = $("chatBox");
       box.innerHTML = "";
       const msgs = state.chat[roomId] || [];
+      const r = roomById(roomId);
 
       msgs.forEach((m) => {
         const row = document.createElement("div");
@@ -1067,12 +1124,29 @@ connectBtn.addEventListener("click", connectMock);
         const nm = isSys ? "system" : displayName(m.wallet);
         const nameHtml = isSys ? `<strong>${escapeText(nm)}</strong>` : escapeText(nm);
 
+        let extras = "";
+        if(!isSys && r){
+          const wallet = m.wallet;
+          if(isApprover(r, wallet)) extras += `<span class="k">APPROVER</span>`;
+          else if(isApproved(r, wallet)) extras += `<span class="k">PINGER</span>`;
+          else if(isPending(r, wallet)) extras += `<span class="k">PENDING</span>`;
+
+          if(connectedWallet && isApprover(r, connectedWallet) && isPending(r, wallet)){
+            extras += ` <button class="btn subtle small" data-approve="${escapeText(wallet)}">approve</button>`;
+            extras += ` <button class="btn subtle small" data-deny="${escapeText(wallet)}">deny</button>`;
+          }
+          if(connectedWallet && isCreator(r, connectedWallet) && isApproved(r, wallet) && !isCreator(r, wallet)){
+            const isAp = !!(r.approverWallets && r.approverWallets[wallet]);
+            extras += ` <button class="btn subtle small" data-toggle-approver="${escapeText(wallet)}">${isAp ? "remove approver" : "make approver"}</button>`;
+          }
+        }
+
         row.innerHTML = `
           <div class="who">
             <div class="whoTop">
               <button class="copyBtn" title="copy wallet">⧉</button>
               <span class="whoName">${nameHtml}</span>
-              
+              ${extras}
             </div>
           </div>
           <div class="text ${isSys ? "sysLine" : ""}">${escapeText(m.text)}</div>
@@ -1080,6 +1154,12 @@ connectBtn.addEventListener("click", connectMock);
         `;
 
         row.querySelector(".copyBtn").addEventListener("click", () => copyToClipboard(m.wallet));
+        const approveBtn = row.querySelector("[data-approve]");
+        const denyBtn = row.querySelector("[data-deny]");
+        const toggleBtn = row.querySelector("[data-toggle-approver]");
+        if(approveBtn) approveBtn.addEventListener("click", () => approveWallet(roomId, m.wallet));
+        if(denyBtn) denyBtn.addEventListener("click", () => denyWallet(roomId, m.wallet));
+        if(toggleBtn) toggleBtn.addEventListener("click", () => toggleApproverWallet(roomId, m.wallet));
 
         box.appendChild(row);
       });
@@ -1089,6 +1169,7 @@ connectBtn.addEventListener("click", connectMock);
 
     function canPost(r){
       if(!connectedWallet) return false;
+      if(r && r.blockedWallets && r.blockedWallets[connectedWallet]) return false;
       return true;
     }
 
@@ -1097,6 +1178,54 @@ connectBtn.addEventListener("click", connectMock);
       $("msgInput").disabled = !enabled;
       $("sendBtn").disabled = !enabled;
       $("msgInput").placeholder = enabled ? "message" : "connect wallet";
+    }
+
+
+    function approveWallet(roomId, wallet){
+      const r = roomById(roomId);
+      if(!r || !wallet) return;
+      if(!isApprover(r, connectedWallet)) return;
+      if(!isPending(r, wallet)) return;
+      r.approvedWallets = r.approvedWallets || {};
+      r.deniedWallets = r.deniedWallets || {};
+      r.approvedWallets[wallet] = true;
+      delete r.deniedWallets[wallet];
+      addSystemEvent(roomId, `@${shortWallet(wallet)} approved — now a PINGER`);
+      renderRoom(roomId);
+      renderHome();
+    }
+
+    function denyWallet(roomId, wallet){
+      const r = roomById(roomId);
+      if(!r || !wallet) return;
+      if(!isApprover(r, connectedWallet)) return;
+      const p = ensurePos(r, wallet);
+      p.escrow_sol = 0;
+      r.deniedWallets = r.deniedWallets || {};
+      r.blockedWallets = r.blockedWallets || {};
+      delete (r.approvedWallets || {})[wallet];
+      r.deniedWallets[wallet] = true;
+      r.blockedWallets[wallet] = true;
+      addSystemEvent(roomId, `@${shortWallet(wallet)} denied — escrow refunded`);
+      renderRoom(roomId);
+      renderHome();
+    }
+
+    function toggleApproverWallet(roomId, wallet){
+      const r = roomById(roomId);
+      if(!r || !wallet) return;
+      if(!isCreator(r, connectedWallet)) return;
+      if(!isApproved(r, wallet)) return;
+      r.approverWallets = r.approverWallets || {};
+      if(r.approverWallets[wallet]){
+        delete r.approverWallets[wallet];
+        addSystemEvent(roomId, `@${shortWallet(wallet)} removed as approver`);
+      } else {
+        r.approverWallets[wallet] = true;
+        addSystemEvent(roomId, `@${shortWallet(wallet)} is now an approver`);
+      }
+      renderRoom(roomId);
+      renderHome();
     }
 
     function renderRoom(roomId){
@@ -1133,6 +1262,43 @@ connectBtn.addEventListener("click", connectMock);
       }
 
       $("shareBtn").onclick = () => openShareModal(roomId);
+
+      const pingers = Object.keys(r.approvedWallets || {});
+      const approvers = Object.keys(r.approverWallets || {}).filter((w) => isApprover(r, w));
+      const pingersList = $("pingersList");
+      const approversList = $("approversList");
+      if(pingersList){
+        pingersList.innerHTML = "";
+        if(pingers.length === 0){
+          const e = document.createElement("span");
+          e.className = "muted tiny";
+          e.textContent = "none";
+          pingersList.appendChild(e);
+        } else {
+          pingers.forEach((w) => {
+            const tag = document.createElement("span");
+            tag.className = "k";
+            tag.textContent = shortWallet(w);
+            pingersList.appendChild(tag);
+          });
+        }
+      }
+      if(approversList){
+        approversList.innerHTML = "";
+        if(approvers.length === 0){
+          const e = document.createElement("span");
+          e.className = "muted tiny";
+          e.textContent = "none";
+          approversList.appendChild(e);
+        } else {
+          approvers.forEach((w) => {
+            const tag = document.createElement("span");
+            tag.className = "k";
+            tag.textContent = shortWallet(w);
+            approversList.appendChild(tag);
+          });
+        }
+      }
 
       // room image (if provided)
       const imgEl = $("roomImg");
@@ -1187,7 +1353,7 @@ connectBtn.addEventListener("click", connectMock);
           : `you: ${myBond(roomId).toFixed(3)} SOL position`;
       $("meLine").textContent = connectedWallet ? me : "connect wallet";
 
-      $("pingBtn").disabled = !connectedWallet;
+      $("pingBtn").disabled = !connectedWallet || !!(connectedWallet && r.blockedWallets && r.blockedWallets[connectedWallet]);
       $("unpingBtn").disabled = !connectedWallet || r.state !== "SPAWNING";
 
       setComposerState(r);
@@ -1235,11 +1401,11 @@ connectBtn.addEventListener("click", connectMock);
       if(!s || Number.isNaN(sol) || sol <= 0) return alert("enter a valid SOL amount.");
 
       if(r.state === "SPAWNING"){
+        if(r.blockedWallets && r.blockedWallets[connectedWallet]) return alert("you were denied from this spawn.");
         applySpawnCommit(r, connectedWallet, sol);
 
-
         state.chat[r.id] = state.chat[r.id] || [];
-        state.chat[r.id].push({ ts: nowStamp(), wallet: connectedWallet, text:`pinged ${sol.toFixed(3)} SOL (escrow).` });
+        state.chat[r.id].push({ ts: nowStamp(), wallet: "SYSTEM", text:`@${shortWallet(connectedWallet)} pinged ${sol.toFixed(3)} SOL (pending approval)` });
 
         maybeAdvance(r);
 
