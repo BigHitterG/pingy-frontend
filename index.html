@@ -101,6 +101,42 @@
 
     </div>
 
+    <!-- PROFILE VIEW -->
+    <div class="view" id="profileView">
+      <div class="panel">
+        <div class="row" style="align-items:flex-start; gap:12px;">
+          <div class="profileAvatar" id="profileAvatar" aria-hidden="true">?</div>
+          <div style="min-width:0; flex:1;">
+            <div class="h" id="profileNameOut" style="margin-bottom:4px;">—</div>
+            <div class="muted" id="profileWalletOut">—</div>
+            <div class="row" style="margin-top:8px;">
+              <a class="linkBtn" id="profileSolscanLink" href="#" target="_blank" rel="noopener noreferrer">view on solscan</a>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" style="margin-top:10px;">
+        <div class="h">bio</div>
+        <div class="muted" id="profileBioOut">no bio yet.</div>
+        <div class="row" style="margin-top:8px;">
+          <a class="linkBtn" id="profileSocialOut" href="#" target="_blank" rel="noopener noreferrer" style="display:none;">social</a>
+        </div>
+      </div>
+
+      <div class="panel" style="margin-top:10px;">
+        <div class="row profileCounts" style="justify-content:space-between;">
+          <div><span class="muted">followers</span> <strong id="followersCountOut">0</strong></div>
+          <div><span class="muted">following</span> <strong id="followingCountOut">0</strong></div>
+          <div><span class="muted">created coins</span> <strong id="createdCountOut">0</strong></div>
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:10px;">
+        <button class="btn subtle" id="profileActionBtn">edit profile</button>
+      </div>
+    </div>
+
     <!-- ROOM VIEW -->
     <div class="view" id="roomView">
       <div class="roomHeader">
@@ -201,6 +237,36 @@
       <div class="composer">
         <textarea id="msgInput" placeholder="ping to post" maxlength="300" disabled></textarea>
         <button class="btn" id="sendBtn" disabled>send</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modalBack" id="editProfileBack" role="dialog" aria-modal="true">
+    <div class="modal">
+      <div class="modalHead">
+        <div class="modalTitle">edit profile</div>
+        <button class="btn subtle" id="editProfileClose">close</button>
+      </div>
+
+      <div class="col" style="gap:10px;">
+        <div class="panel">
+          <div class="muted">profile image</div>
+          <input id="editProfileImage" type="file" accept="image/*" />
+          <div class="imgPrev" id="editProfileImagePreview" style="margin-top:6px;"><span class="muted">no image</span></div>
+        </div>
+
+        <div class="panel">
+          <div class="muted">display name</div>
+          <input id="editProfileName" maxlength="32" placeholder="e.g. big_hitter" />
+          <div class="muted" style="margin-top:8px;">bio</div>
+          <textarea id="editProfileBio" maxlength="240" placeholder="say hi to pingy"></textarea>
+          <div class="muted" style="margin-top:8px;">social link (optional)</div>
+          <input id="editProfileSocial" maxlength="120" placeholder="https://x.com/yourname" />
+        </div>
+
+        <div class="row" style="justify-content:flex-end;">
+          <button class="btn" id="editProfileSave">save profile</button>
+        </div>
       </div>
     </div>
   </div>
