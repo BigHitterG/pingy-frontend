@@ -491,12 +491,15 @@ const $ = (id) => document.getElementById(id);
       }
     }
 
-    async function sendProgramInstruction(ix){
+    async function sendProgramInstructions(ixs){
       const provider = getProvider();
       if(!provider) throw new Error("Phantom not found");
       if(!connectedWallet) throw new Error("Wallet not connected");
 
-      try { assertIxPubkeys(ix); }
+      const instructions = Array.isArray(ixs) ? ixs : [ixs];
+      if(!instructions.length) throw new Error("No instructions provided");
+
+      try { instructions.forEach(assertIxPubkeys); }
       catch(e){ showToast("assertIxPubkeys: " + (e?.message||e)); throw e; }
 
       let feePayer;
@@ -512,11 +515,11 @@ const $ = (id) => document.getElementById(id);
       const tx = new Transaction();
       tx.feePayer = feePayer;
       tx.recentBlockhash = blockhash;
-      tx.add(ix);
+      instructions.forEach((ix) => tx.add(ix));
 
       console.log("[ping-debug] sendProgramInstruction program checks", {
         PROGRAM_ID: PROGRAM_ID.toBase58(),
-        ixProgramId: ix.programId?.toBase58?.(),
+        ixProgramIds: instructions.map((ix) => ix.programId?.toBase58?.()),
         txInstructionProgramIds: tx.instructions.map((i) => i.programId?.toBase58?.()),
       });
 
@@ -536,7 +539,7 @@ const $ = (id) => document.getElementById(id);
         feePayer: tx.feePayer?.toBase58?.(),
         recentBlockhash: tx.recentBlockhash,
         ixCount: tx.instructions?.length,
-        programId: ix.programId?.toBase58?.(),
+        programId: instructions[0]?.programId?.toBase58?.(),
       });
       console.log("[pingy] provider methods", {
         hasSignTransaction: typeof provider.signTransaction,
@@ -594,6 +597,10 @@ const $ = (id) => document.getElementById(id);
       return sig;
     }
 
+    async function sendProgramInstruction(ix){
+      return sendProgramInstructions([ix]);
+    }
+
     async function pingDepositTx(roomId, amountLamports){
       const rid = String(roomId || "");
       const lamports = Number(amountLamports);
@@ -633,6 +640,49 @@ const $ = (id) => document.getElementById(id);
         keys,
         data,
       }));
+    }
+
+    async function pingWithOptionalThreadInitTx(roomId, amountLamports, includeThreadInit){
+      const rid = String(roomId || "");
+      const lamports = Number(amountLamports);
+      if(!Number.isInteger(lamports) || lamports <= 0){
+        throw new Error("amountLamports must be a positive integer");
+      }
+      const walletPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
+      const [threadPda] = await deriveThreadPda(rid);
+      const [spawnPoolPda] = await deriveSpawnPoolPda(rid);
+      const [depositPda] = await deriveDepositPda(rid, walletPk);
+
+      const instructions = [];
+      if(includeThreadInit){
+        instructions.push(new TransactionInstruction({
+          programId: PROGRAM_ID,
+          keys: [
+            { pubkey: walletPk, isSigner: true, isWritable: true },
+            { pubkey: threadPda, isSigner: false, isWritable: true },
+            { pubkey: spawnPoolPda, isSigner: false, isWritable: true },
+            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+          ],
+          data: concatBytes(Uint8Array.from([0,0,0,0,0,0,0,1]), encodeStringArg(rid)),
+        }));
+      }
+
+      instructions.push(new TransactionInstruction({
+        programId: PROGRAM_ID,
+        keys: [
+          { pubkey: walletPk, isSigner: true, isWritable: true },
+          { pubkey: threadPda, isSigner: false, isWritable: true },
+          { pubkey: depositPda, isSigner: false, isWritable: true },
+          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        ],
+        data: concatBytes(
+          Uint8Array.from([0,0,0,0,0,0,0,2]),
+          encodeStringArg(rid),
+          encodeU64Arg(lamports)
+        ),
+      }));
+
+      return sendProgramInstructions(instructions);
     }
 
     async function initializeThreadTx(threadId){
@@ -726,6 +776,7 @@ const $ = (id) => document.getElementById(id);
 
     function decodeThreadAccount(data){
       const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+      if(!bytes?.length || bytes.length < 8) return null;
       let o = 8; // anchor discriminator
       const [threadId, o1] = readString(bytes, o);
       o = o1;
@@ -746,6 +797,7 @@ const $ = (id) => document.getElementById(id);
 
     function decodeDepositAccount(data){
       const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+      if(!bytes?.length || bytes.length < 8) return null;
       let o = 8; // anchor discriminator
       const [threadId, o1] = readString(bytes, o);
       o = o1;
@@ -770,21 +822,23 @@ const $ = (id) => document.getElementById(id);
       if(!roomId) return null;
       const [threadPda] = await deriveThreadPda(roomId);
       const threadInfo = await connection.getAccountInfo(threadPda, "confirmed");
-      if(!threadInfo){
+      if(!threadInfo || !threadInfo.data || threadInfo.data.length < 8){
         state.onchain[roomId] = null;
         return null;
       }
 
       const thread = decodeThreadAccount(threadInfo.data);
+      if(!thread) return null;
       const byWallet = {};
       const approvedWallets = [];
       const pendingWallets = [];
 
       for(const participant of thread.participants){
-        const [depositPda] = await deriveDepositPda(roomId, participant);
+        const [depositPda] = await deriveDepositPda(roomId, new PublicKey(participant));
         const depositInfo = await connection.getAccountInfo(depositPda, "confirmed");
-        if(!depositInfo) continue;
+        if(!depositInfo || !depositInfo.data || depositInfo.data.length < 8) continue;
         const deposit = decodeDepositAccount(depositInfo.data);
+        if(!deposit) continue;
         const lamports = await connection.getBalance(depositPda, "confirmed");
         const escrowSol = Math.max(0, Number(lamports || 0) / 1_000_000_000);
 
@@ -2192,24 +2246,13 @@ if(connectBtn){
           const [depositPda] = await deriveDepositPda(rid, walletPk);
           const [spawnPoolPda] = await deriveSpawnPoolPda(rid);
           const threadInfo = await connection.getAccountInfo(threadPda, "confirmed");
-          if(!threadInfo){
-            console.log("[ping-debug] thread missing, initializing", { rid, threadPda: threadPda.toBase58() });
-            try {
-              await initializeThreadTx(rid);
-              const threadInfoAfterInit = await connection.getAccountInfo(threadPda, "confirmed");
-              if(!threadInfoAfterInit){
-                throw new Error("thread PDA still missing after initializeThreadTx confirmation");
-              }
-            } catch (e){
-              reportTxError(e, "initialize thread transaction failed");
-              return;
-            }
-          }
 
-          const balBefore = await connection.getBalance(depositPda, "confirmed");
+          const depositInfoBefore = await connection.getAccountInfo(depositPda, "confirmed");
+          const balBefore = depositInfoBefore ? await connection.getBalance(depositPda, "confirmed") : 0;
           try {
-            const sig = await pingDepositTx(rid, amountLamports);
-            const balAfter = await connection.getBalance(depositPda, "confirmed");
+            const sig = await pingWithOptionalThreadInitTx(rid, amountLamports, !threadInfo);
+            const depositInfoAfter = await connection.getAccountInfo(depositPda, "confirmed");
+            const balAfter = depositInfoAfter ? await connection.getBalance(depositPda, "confirmed") : 0;
             const deltaLamports = Number(balAfter || 0) - Number(balBefore || 0);
             const deltaSol = deltaLamports / 1_000_000_000;
             console.log("[ping-debug] deposit balance delta", {
