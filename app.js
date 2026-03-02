@@ -31,6 +31,7 @@ const $ = (id) => document.getElementById(id);
 
     const homeView = $("homeView");
     const roomView = $("roomView");
+    const profileView = $("profileView");
     const homeBtn = $("homeBtn");
 
     const walletPill = $("walletPill");
@@ -55,8 +56,11 @@ const $ = (id) => document.getElementById(id);
 
     function setView(which){
       const isHome = (which === "home");
+      const isRoom = (which === "room");
+      const isProfile = (which === "profile");
       homeView.classList.toggle("on", isHome);
-      roomView.classList.toggle("on", !isHome);
+      roomView.classList.toggle("on", isRoom);
+      profileView.classList.toggle("on", isProfile);
       homeBtn.style.display = isHome ? "none" : "inline-block";
     }
 
@@ -251,8 +255,35 @@ const $ = (id) => document.getElementById(id);
       verifiedGlobalByWallet: {},
       vouchesLeftByRoom: {},
       hasVouched: {},
-      vouchCountedByRoom: {}
+      vouchCountedByRoom: {},
+      detailsByWallet: {},
+      followsByWallet: {}
     };
+
+    const PROFILE_STORAGE_KEY = "pingy_profile_v1";
+
+    function saveProfileLocal(){
+      try { localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(profile)); }
+      catch(e){}
+    }
+    function loadProfileLocal(){
+      try{
+        const raw = localStorage.getItem(PROFILE_STORAGE_KEY);
+        if(!raw) return;
+        const parsed = JSON.parse(raw);
+        if(!parsed || typeof parsed !== "object") return;
+        Object.assign(profile, parsed);
+      } catch(e){}
+      profile.namesByWallet = profile.namesByWallet || {};
+      profile.walletScoreByWallet = profile.walletScoreByWallet || {};
+      profile.verifiedByRoom = profile.verifiedByRoom || {};
+      profile.verifiedGlobalByWallet = profile.verifiedGlobalByWallet || {};
+      profile.vouchesLeftByRoom = profile.vouchesLeftByRoom || {};
+      profile.hasVouched = profile.hasVouched || {};
+      profile.vouchCountedByRoom = profile.vouchCountedByRoom || {};
+      profile.detailsByWallet = profile.detailsByWallet || {};
+      profile.followsByWallet = profile.followsByWallet || {};
+    }
 
     function getScore(wallet){
       return Math.max(0, Math.min(100, Number(profile.walletScoreByWallet[wallet] ?? 50)));
@@ -318,6 +349,46 @@ const $ = (id) => document.getElementById(id);
     }
 
     function roomById(id){ return state.rooms.find(r => r.id === id); }
+
+    function getProfileDetails(wallet){
+      profile.detailsByWallet = profile.detailsByWallet || {};
+      const d = profile.detailsByWallet[wallet] || {};
+      return {
+        image: d.image || "",
+        bio: d.bio || "",
+        social: d.social || ""
+      };
+    }
+    function setProfileDetails(wallet, next){
+      if(!wallet) return;
+      profile.detailsByWallet[wallet] = {
+        image: String(next.image || ""),
+        bio: String(next.bio || "").trim(),
+        social: String(next.social || "").trim()
+      };
+      saveProfileLocal();
+    }
+    function getFollowingMap(wallet){
+      profile.followsByWallet = profile.followsByWallet || {};
+      profile.followsByWallet[wallet] = profile.followsByWallet[wallet] || {};
+      return profile.followsByWallet[wallet];
+    }
+    function isFollowing(followerWallet, targetWallet){
+      if(!followerWallet || !targetWallet) return false;
+      return !!getFollowingMap(followerWallet)[targetWallet];
+    }
+    function followCount(wallet){
+      return Object.keys(getFollowingMap(wallet)).length;
+    }
+    function followerCount(wallet){
+      let n = 0;
+      const all = profile.followsByWallet || {};
+      Object.keys(all).forEach((f) => { if(all[f] && all[f][wallet]) n += 1; });
+      return n;
+    }
+    function createdCoinsCount(wallet){
+      return state.rooms.filter(r => r.creator_wallet === wallet).length;
+    }
 
     function myEscrow(roomId){
       if(!connectedWallet) return 0;
@@ -402,6 +473,8 @@ const $ = (id) => document.getElementById(id);
       if(location.hash !== target) location.hash = target;
     }
 
+    loadProfileLocal();
+
     // Connect wallet (mock)
 function connectMock(){
   closeWalletDropdown();
@@ -414,9 +487,11 @@ function connectMock(){
   if(!profile.namesByWallet[connectedWallet]) profile.namesByWallet[connectedWallet] = "big_hitter";
   if(profile.walletScoreByWallet[connectedWallet] == null) setScore(connectedWallet, 50);
   if(profile.verifiedGlobalByWallet[connectedWallet] == null) profile.verifiedGlobalByWallet[connectedWallet] = false;
+  saveProfileLocal();
 
   renderHome();
   if(activeRoomId) renderRoom(activeRoomId);
+  if(profileView.classList.contains("on")) renderProfilePage();
 }
 
 function disconnectMock(){
@@ -427,6 +502,7 @@ function disconnectMock(){
   updateEarningsUI();
   renderHome();
   if(activeRoomId) renderRoom(activeRoomId);
+  if(profileView.classList.contains("on")) renderProfilePage();
   showToast("disconnected.");
 }
 
@@ -443,6 +519,7 @@ connectBtn.addEventListener("click", connectMock);
     }
     wireModal($("profileBack"), $("profileClose"));
     $("profileDisconnect").addEventListener("click", () => { closeModal($("profileBack")); disconnectMock(); });
+    wireModal($("editProfileBack"), $("editProfileClose"));
     wireModal($("scoreBack"), $("scoreClose"));
     wireModal($("howBack"), $("howClose"));
     wireModal($("verifyBack"), $("verifyClose"));
@@ -478,7 +555,6 @@ connectBtn.addEventListener("click", connectMock);
     });
     walletProfileItem.addEventListener("click", () => {
       closeWalletDropdown();
-      openProfile();
       navigateHash("profile");
     });
     walletViewWalletItem.addEventListener("click", () => {
@@ -508,6 +584,7 @@ connectBtn.addEventListener("click", connectMock);
       const ok = /^[a-zA-Z0-9 _-]{0,20}$/.test(raw);
       if(!ok) return alert("username: letters/numbers/spaces/_/- (max 20).");
       profile.namesByWallet[connectedWallet] = raw;
+      saveProfileLocal();
       $("profileHint").textContent = raw ? `saved: ${raw}` : "cleared. showing wallet instead.";
       updateHeaderWalletUI();
       if(activeRoomId) renderRoom(activeRoomId);
@@ -602,6 +679,7 @@ connectBtn.addEventListener("click", connectMock);
       // global reputation grows over time; per-coin verification affects lottery weight
       if(!already) bumpScore(connectedWallet, 8);
       profile.verifiedGlobalByWallet[connectedWallet] = true;
+      saveProfileLocal();
       closeModal($("verifyBack"));
       showToast("✅ verified");
       addSystemEvent(activeRoomId, `✅ @${displayName(connectedWallet)} verified`);
@@ -1021,19 +1099,163 @@ connectBtn.addEventListener("click", connectMock);
       });
     }
 
+    function profileRouteWallet(){
+      const raw = (location.hash || "").replace(/^#\/?/, "");
+      const parts = raw.split("/").filter(Boolean);
+      if(parts[0] !== "profile") return null;
+      const walletFromRoute = parts[1] ? decodeURIComponent(parts[1]) : "";
+      return walletFromRoute || connectedWallet;
+    }
+
+    function renderProfileAvatar(wallet, dataUrl){
+      const avatar = $("profileAvatar");
+      avatar.innerHTML = "";
+      if(dataUrl){
+        const im = document.createElement("img");
+        im.src = dataUrl;
+        im.alt = "";
+        avatar.appendChild(im);
+        return;
+      }
+      avatar.textContent = shortWallet(wallet || "wallet").slice(0,1).toUpperCase();
+    }
+
+    function renderProfilePage(){
+      const wallet = profileRouteWallet();
+      if(!wallet){
+        $("profileNameOut").textContent = "not connected";
+        $("profileWalletOut").textContent = "connect wallet to view profile.";
+        $("profileBioOut").textContent = "no bio yet.";
+        $("profileSolscanLink").href = "https://solscan.io";
+        $("profileSocialOut").style.display = "none";
+        $("followersCountOut").textContent = "0";
+        $("followingCountOut").textContent = "0";
+        $("createdCountOut").textContent = "0";
+        $("profileActionBtn").textContent = "edit profile";
+        $("profileActionBtn").disabled = true;
+        renderProfileAvatar("", "");
+        return;
+      }
+
+      const details = getProfileDetails(wallet);
+      $("profileNameOut").textContent = displayName(wallet);
+      $("profileWalletOut").textContent = shortWallet(wallet);
+      $("profileBioOut").textContent = details.bio || "no bio yet.";
+      $("profileSolscanLink").href = `https://solscan.io/account/${encodeURIComponent(wallet)}`;
+      if(details.social){
+        const social = $("profileSocialOut");
+        social.style.display = "inline-flex";
+        social.href = details.social;
+      } else {
+        $("profileSocialOut").style.display = "none";
+      }
+      $("followersCountOut").textContent = String(followerCount(wallet));
+      $("followingCountOut").textContent = String(followCount(wallet));
+      $("createdCountOut").textContent = String(createdCoinsCount(wallet));
+      renderProfileAvatar(wallet, details.image || "");
+
+      const isSelf = !!connectedWallet && connectedWallet === wallet;
+      const actionBtn = $("profileActionBtn");
+      if(isSelf){
+        actionBtn.textContent = "edit profile";
+        actionBtn.disabled = false;
+      } else {
+        actionBtn.disabled = !connectedWallet;
+        actionBtn.textContent = isFollowing(connectedWallet, wallet) ? "unfollow" : "follow";
+      }
+    }
+
+    function openEditProfileModal(){
+      if(!connectedWallet) return showToast("connect wallet first.");
+      const details = getProfileDetails(connectedWallet);
+      editProfileImageData = "";
+      $("editProfileImage").value = "";
+      $("editProfileName").value = profile.namesByWallet[connectedWallet] || "";
+      $("editProfileBio").value = details.bio || "";
+      $("editProfileSocial").value = details.social || "";
+
+      const prev = $("editProfileImagePreview");
+      prev.innerHTML = "";
+      if(details.image){
+        const im = document.createElement("img");
+        im.src = details.image;
+        im.alt = "";
+        prev.appendChild(im);
+      } else {
+        prev.innerHTML = '<span class="muted">no image</span>';
+      }
+
+      openModal($("editProfileBack"));
+    }
+
+    let editProfileImageData = "";
+    $("editProfileImage").addEventListener("change", (e) => {
+      const f = e.target.files && e.target.files[0];
+      if(!f) return;
+      if(!String(f.type||"").startsWith("image/")) return alert("please choose an image file.");
+      if(f.size > 1500000) return alert("image too large (max ~1.5MB for mock).");
+      const reader = new FileReader();
+      reader.onload = () => {
+        editProfileImageData = String(reader.result || "");
+        const prev = $("editProfileImagePreview");
+        prev.innerHTML = "";
+        const im = document.createElement("img");
+        im.src = editProfileImageData;
+        im.alt = "";
+        prev.appendChild(im);
+      };
+      reader.readAsDataURL(f);
+    });
+
+    $("editProfileSave").addEventListener("click", () => {
+      if(!connectedWallet) return showToast("connect wallet first.");
+      const rawName = ($("editProfileName").value || "").trim();
+      if(rawName && !/^[a-zA-Z0-9 _-]{1,32}$/.test(rawName)) return alert("display name: letters/numbers/spaces/_/- (max 32).");
+      profile.namesByWallet[connectedWallet] = rawName;
+      const curDetails = getProfileDetails(connectedWallet);
+      setProfileDetails(connectedWallet, {
+        image: editProfileImageData || curDetails.image || "",
+        bio: $("editProfileBio").value || "",
+        social: normalizeUrl($("editProfileSocial").value || "", "web") || ""
+      });
+      saveProfileLocal();
+      updateHeaderWalletUI();
+      closeModal($("editProfileBack"));
+      renderProfilePage();
+      renderHome();
+      if(activeRoomId) renderRoom(activeRoomId);
+    });
+
+    $("profileActionBtn").addEventListener("click", () => {
+      const wallet = profileRouteWallet();
+      if(!wallet) return;
+      if(!connectedWallet) return showToast("connect wallet first.");
+
+      if(wallet === connectedWallet){
+        openEditProfileModal();
+        return;
+      }
+
+      const map = getFollowingMap(connectedWallet);
+      if(map[wallet]) delete map[wallet];
+      else map[wallet] = true;
+      saveProfileLocal();
+      renderProfilePage();
+    });
+
     // Room view
     function openRoom(roomId){
       activeRoomId = roomId;
       setView("room");
       renderRoom(roomId);
 
-      const h = "room=" + encodeURIComponent(roomId);
-      if(location.hash.replace("#","") !== h) history.replaceState(null,"","#"+h);
+      const h = "#/room/" + encodeURIComponent(roomId);
+      if(location.hash !== h) history.replaceState(null,"",h);
     }
 
     function shareLink(roomId){
       const base = location.origin + location.pathname;
-      return base + "#room=" + encodeURIComponent(roomId);
+      return base + "#/room/" + encodeURIComponent(roomId);
     }
     function openShareModal(roomId){
       $("shareOut").value = shareLink(roomId);
@@ -1367,20 +1589,43 @@ connectBtn.addEventListener("click", connectMock);
 
     // Hash routing
     function handleHash(){
-      const h = (location.hash || "").replace("#","");
-      if(!h) return;
-      const params = new URLSearchParams(h);
+      const h = (location.hash || "").replace(/^#/, "");
+      if(!h){
+        setView("home");
+        return;
+      }
+
+      const clean = h.replace(/^\//, "");
+      const parts = clean.split("/").filter(Boolean);
+
+      if(parts[0] === "profile"){
+        setView("profile");
+        renderProfilePage();
+        return;
+      }
+
+      if(parts[0] === "room" && parts[1]){
+        const ridFromPath = decodeURIComponent(parts[1]);
+        const r = roomById(ridFromPath);
+        if(r){
+          if(!connectedWallet) showToast("connect wallet first.");
+          else openRoom(ridFromPath);
+          return;
+        }
+      }
+
+      const params = new URLSearchParams(clean);
       const rid = params.get("room");
       if(rid){
         const r = roomById(rid);
         if(r){
-          if(!connectedWallet){
-            showToast("connect wallet first.");
-          } else {
-            openRoom(rid);
-          }
+          if(!connectedWallet) showToast("connect wallet first.");
+          else openRoom(rid);
+          return;
         }
       }
+
+      setView("home");
     }
     window.addEventListener("hashchange", handleHash);
     document.addEventListener("keydown", (e) => { if(e.key === "Escape") closeWalletDropdown(); });
@@ -1390,6 +1635,7 @@ connectBtn.addEventListener("click", connectMock);
       renderHome();
       updateHeaderWalletUI();
       if(activeRoomId) renderRoom(activeRoomId);
+      if(profileView.classList.contains("on")) renderProfilePage();
     }
 
     setView("home");
