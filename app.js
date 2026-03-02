@@ -8,7 +8,12 @@ import {
   deriveDepositPda,
   fetchProgramAccounts,
 } from "./lib/solana.js";
-import { PublicKey } from "https://esm.sh/@solana/web3.js@1.95.3?bundle";
+import {
+  PublicKey,
+  SystemProgram,
+  Transaction,
+  TransactionInstruction,
+} from "https://esm.sh/@solana/web3.js@1.95.3?bundle";
 
 const $ = (id) => document.getElementById(id);
 
@@ -339,6 +344,134 @@ const $ = (id) => document.getElementById(id);
     function readPubkey(bytes, offset){
       const keyBytes = bytes.slice(offset, offset + 32);
       return [new PublicKey(keyBytes), offset + 32];
+    }
+
+    function encodeStringArg(v){
+      const strBytes = new TextEncoder().encode(String(v || ""));
+      const out = new Uint8Array(4 + strBytes.length);
+      new DataView(out.buffer).setUint32(0, strBytes.length, true);
+      out.set(strBytes, 4);
+      return out;
+    }
+
+    function encodeU64Arg(v){
+      const out = new Uint8Array(8);
+      new DataView(out.buffer).setBigUint64(0, BigInt(v || 0), true);
+      return out;
+    }
+
+    function concatBytes(...parts){
+      const total = parts.reduce((n, p) => n + p.length, 0);
+      const out = new Uint8Array(total);
+      let o = 0;
+      parts.forEach((p) => {
+        out.set(p, o);
+        o += p.length;
+      });
+      return out;
+    }
+
+    async function sendProgramInstruction(ix){
+      const provider = getProvider();
+      if(!provider) throw new Error("Phantom not found");
+      if(!connectedWallet) throw new Error("Wallet not connected");
+
+      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
+      const tx = new Transaction({
+        feePayer: new PublicKey(connectedWallet),
+        blockhash,
+        lastValidBlockHeight,
+      }).add(ix);
+
+      const res = await provider.signAndSendTransaction(tx);
+      const signature = res && (res.signature || res);
+      if(!signature) throw new Error("Missing transaction signature");
+      await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, "confirmed");
+      return signature;
+    }
+
+    async function pingDepositTx(roomId, amountLamports){
+      const rid = String(roomId || "");
+      const walletPk = new PublicKey(connectedWallet);
+      const [threadPda] = await deriveThreadPda(rid);
+      const [depositPda] = await deriveDepositPda(rid, walletPk);
+      const data = concatBytes(
+        Uint8Array.from([0,0,0,0,0,0,0,2]),
+        encodeStringArg(rid),
+        encodeU64Arg(amountLamports)
+      );
+      return sendProgramInstruction(new TransactionInstruction({
+        programId: PROGRAM_ID,
+        keys: [
+          { pubkey: walletPk, isSigner: true, isWritable: true },
+          { pubkey: threadPda, isSigner: false, isWritable: true },
+          { pubkey: depositPda, isSigner: false, isWritable: true },
+          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        ],
+        data,
+      }));
+    }
+
+    async function unpingWithdrawTx(roomId){
+      const rid = String(roomId || "");
+      const walletPk = new PublicKey(connectedWallet);
+      const [threadPda] = await deriveThreadPda(rid);
+      const [depositPda] = await deriveDepositPda(rid, walletPk);
+      const data = concatBytes(Uint8Array.from([0,0,0,0,0,0,0,5]), encodeStringArg(rid));
+      return sendProgramInstruction(new TransactionInstruction({
+        programId: PROGRAM_ID,
+        keys: [
+          { pubkey: walletPk, isSigner: true, isWritable: true },
+          { pubkey: threadPda, isSigner: false, isWritable: false },
+          { pubkey: depositPda, isSigner: false, isWritable: true },
+        ],
+        data,
+      }));
+    }
+
+    async function approveUserTx(roomId, userWallet){
+      const rid = String(roomId || "");
+      const adminPk = new PublicKey(connectedWallet);
+      const userPk = new PublicKey(userWallet);
+      const [threadPda] = await deriveThreadPda(rid);
+      const [depositPda] = await deriveDepositPda(rid, userPk);
+      const data = concatBytes(
+        Uint8Array.from([0,0,0,0,0,0,0,3]),
+        encodeStringArg(rid),
+        userPk.toBytes()
+      );
+      return sendProgramInstruction(new TransactionInstruction({
+        programId: PROGRAM_ID,
+        keys: [
+          { pubkey: adminPk, isSigner: true, isWritable: true },
+          { pubkey: threadPda, isSigner: false, isWritable: false },
+          { pubkey: depositPda, isSigner: false, isWritable: true },
+        ],
+        data,
+      }));
+    }
+
+    async function rejectAndRefundTx(roomId, userWallet){
+      const rid = String(roomId || "");
+      const adminPk = new PublicKey(connectedWallet);
+      const userPk = new PublicKey(userWallet);
+      const [threadPda] = await deriveThreadPda(rid);
+      const [depositPda] = await deriveDepositPda(rid, userPk);
+      const data = concatBytes(
+        Uint8Array.from([0,0,0,0,0,0,0,4]),
+        encodeStringArg(rid),
+        userPk.toBytes()
+      );
+      return sendProgramInstruction(new TransactionInstruction({
+        programId: PROGRAM_ID,
+        keys: [
+          { pubkey: adminPk, isSigner: true, isWritable: true },
+          { pubkey: threadPda, isSigner: false, isWritable: false },
+          { pubkey: depositPda, isSigner: false, isWritable: true },
+          { pubkey: userPk, isSigner: false, isWritable: true },
+        ],
+        data,
+      }));
     }
 
     function decodeThreadAccount(data){
@@ -1473,18 +1606,16 @@ connectBtn.addEventListener("click", connectMock);
       if(!r || !wallet) return;
       if(!isApprover(r, connectedWallet)) return;
       if(!isPending(r, wallet)) return;
-      r.approval = r.approval || {};
-      r.approval[wallet] = "approved";
-      const escrow = Math.max(0, Number((r.positions?.[wallet]?.escrow_sol) || 0));
-      const capSol = walletCapSol(r);
-      if(escrow > capSol){
-        addSystemEvent(roomId, `@${shortWallet(wallet)} approved — cap is ${capSol.toFixed(3)} SOL counted toward spawn (excess escrow not counted)`);
-      } else {
-        addSystemEvent(roomId, `@${shortWallet(wallet)} approved — now a PINGER`);
+      try{
+        await approveUserTx(roomId, wallet);
+      } catch(e){
+        console.error(e);
+        alert("approve transaction failed.");
+        return;
       }
-      renderRoom(roomId);
-      renderHome();
-      await refreshRoomOnchainSnapshot(roomId, { force: true });
+
+      addSystemEvent(roomId, `@${shortWallet(wallet)} approved — now a PINGER`);
+      await fetchRoomOnchainSnapshot(roomId);
       renderRoom(roomId);
       renderHome();
     }
@@ -1493,16 +1624,16 @@ connectBtn.addEventListener("click", connectMock);
       const r = roomById(roomId);
       if(!r || !wallet) return;
       if(!isApprover(r, connectedWallet)) return;
-      const p = ensurePos(r, wallet);
-      p.escrow_sol = 0;
-      r.approval = r.approval || {};
-      r.blockedWallets = r.blockedWallets || {};
-      r.approval[wallet] = "denied";
-      r.blockedWallets[wallet] = true;
+      try{
+        await rejectAndRefundTx(roomId, wallet);
+      } catch(e){
+        console.error(e);
+        alert("deny transaction failed.");
+        return;
+      }
+
       addSystemEvent(roomId, `@${shortWallet(wallet)} denied — escrow refunded`);
-      renderRoom(roomId);
-      renderHome();
-      await refreshRoomOnchainSnapshot(roomId, { force: true });
+      await fetchRoomOnchainSnapshot(roomId);
       renderRoom(roomId);
       renderHome();
     }
@@ -1702,7 +1833,7 @@ connectBtn.addEventListener("click", connectMock);
       r.change_pct = Math.max(-99, Math.min(999, r.change_pct));
     }
 
-    $("pingConfirm").addEventListener("click", () => {
+    $("pingConfirm").addEventListener("click", async () => {
       const rid = modalRoomId || activeRoomId;
       const r = roomById(rid);
       if(!r) return;
@@ -1716,7 +1847,15 @@ connectBtn.addEventListener("click", connectMock);
           r.approval = r.approval || {};
           if(!r.approval[connectedWallet]) r.approval[connectedWallet] = "pending";
         }
-        applySpawnCommit(r, connectedWallet, sol);
+        const lamports = Math.round(sol * 1_000_000_000);
+        if(lamports <= 0) return alert("enter at least 1 lamport.");
+        try{
+          await pingDepositTx(rid, lamports);
+        } catch(e){
+          console.error(e);
+          alert("ping transaction failed.");
+          return;
+        }
 
         state.chat[r.id] = state.chat[r.id] || [];
         const statusText = isApproved(r, connectedWallet) ? "approved" : "pending approval";
@@ -1739,16 +1878,14 @@ connectBtn.addEventListener("click", connectMock);
       }
 
       closeModal($("pingBack"));
-      refreshRoomOnchainSnapshot(rid, { force: true }).then(() => {
-        if(activeRoomId === rid) renderRoom(rid);
-      });
+      await fetchRoomOnchainSnapshot(rid);
       renderRoom(rid);
       r._pulseUntil = Date.now() + 900;
       r._lastActivity = Date.now();
       renderHome();
     });
 
-    $("unpingConfirm").addEventListener("click", () => {
+    $("unpingConfirm").addEventListener("click", async () => {
       const rid = modalRoomId || activeRoomId;
       const r = roomById(rid);
       if(!r) return;
@@ -1760,8 +1897,13 @@ connectBtn.addEventListener("click", connectMock);
         const cur = myEscrow(rid);
         if(cur <= 0) return alert("you have no escrow to unping.");
         if(sol > cur) return alert("cannot unping more than your escrow.");
-
-        applySpawnUncommit(r, connectedWallet, sol);
+        try{
+          await unpingWithdrawTx(rid);
+        } catch(e){
+          console.error(e);
+          alert("unping transaction failed.");
+          return;
+        }
 
         state.chat[r.id] = state.chat[r.id] || [];
         state.chat[r.id].push({ ts: nowStamp(), wallet: connectedWallet, text:`unpinged ${sol.toFixed(3)} SOL (escrow).` });
@@ -1771,9 +1913,7 @@ connectBtn.addEventListener("click", connectMock);
       }
 
       closeModal($("unpingBack"));
-      refreshRoomOnchainSnapshot(rid, { force: true }).then(() => {
-        if(activeRoomId === rid) renderRoom(rid);
-      });
+      await fetchRoomOnchainSnapshot(rid);
       renderRoom(rid);
       r._pulseUntil = Date.now() + 900;
       r._lastActivity = Date.now();
