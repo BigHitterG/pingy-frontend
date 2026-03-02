@@ -129,6 +129,14 @@ const $ = (id) => document.getElementById(id);
       showToast(err?.message || summarizeTxError(err));
     }
 
+    function explorerTxUrl(signature){
+      return `https://explorer.solana.com/tx/${signature}?cluster=devnet`;
+    }
+
+    function explorerAddressUrl(address){
+      return `https://explorer.solana.com/address/${address}?cluster=devnet`;
+    }
+
     function setView(which){
       const isHome = (which === "home");
       const isRoom = (which === "room");
@@ -465,13 +473,19 @@ const $ = (id) => document.getElementById(id);
       tx.recentBlockhash = blockhash;
       tx.add(ix);
 
+      console.log("[ping-debug] sendProgramInstruction program checks", {
+        PROGRAM_ID: PROGRAM_ID.toBase58(),
+        ixProgramId: ix.programId?.toBase58?.(),
+        txInstructionProgramIds: tx.instructions.map((i) => i.programId?.toBase58?.()),
+      });
+
       const sim = await connection.simulateTransaction(tx, { sigVerify: false, commitment: "processed" });
       console.log("[pingy] tx simulation err:", sim?.value?.err);
       console.log("[pingy] tx simulation logs:", sim?.value?.logs || []);
       if(sim?.value?.err){
-        const simErr = new Error(`Transaction simulation failed: ${JSON.stringify(sim.value.err)}`);
+        const simErr = new Error(`Transaction simulation failed: ${JSON.stringify(sim.value.err)} | logs: ${(sim?.value?.logs || []).join(" || ")}`);
         simErr.logs = sim?.value?.logs || [];
-        showToast(`simulation failed: ${simErr.message}`);
+        showToast(`simulation failed: ${JSON.stringify(sim.value.err)}`);
         throw simErr;
       }
 
@@ -504,7 +518,20 @@ const $ = (id) => document.getElementById(id);
 
       try {
         await connection.confirmTransaction({ signature:sig, blockhash, lastValidBlockHeight }, "confirmed");
-      } catch(e){ showToast("confirmTransaction: " + (e?.message||e)); throw e; }
+      } catch(e){
+        let txLogs = [];
+        try {
+          const txInfo = await connection.getTransaction(sig, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
+          txLogs = txInfo?.meta?.logMessages || [];
+        } catch (logErr){
+          console.error("[ping-debug] failed to fetch tx logs", logErr);
+        }
+        e.logs = [...(Array.isArray(e?.logs) ? e.logs : []), ...txLogs];
+        showToast("confirmTransaction failed. check console logs");
+        console.error("[ping-debug] confirmTransaction error:", e);
+        console.error("[ping-debug] onchain logMessages:", txLogs);
+        throw e;
+      }
 
       showToast("tx confirmed: " + sig);
       return sig;
@@ -525,21 +552,55 @@ const $ = (id) => document.getElementById(id);
         encodeStringArg(rid),
         encodeU64Arg(lamports)
       );
+      const keys = [
+        { pubkey: walletPk, isSigner: true, isWritable: true },
+        { pubkey: threadPda, isSigner: false, isWritable: true },
+        { pubkey: depositPda, isSigner: false, isWritable: true },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      ];
       console.log("[ping-debug] ping_deposit ix", {
         programId: PROGRAM_ID.toBase58(),
         threadPda: threadPda.toBase58(),
         depositPda: depositPda.toBase58(),
-        discriminatorHex: Array.from(discriminator).map((b) => b.toString(16).padStart(2, "0")).join(""),
+        discriminatorBytes: Array.from(discriminator),
+        dataLength: data.length,
         idlAccountOrder: ["user", "thread", "deposit", "systemProgram"],
+        keys: keys.map((k) => ({
+          pubkey: k.pubkey.toBase58(),
+          isSigner: k.isSigner,
+          isWritable: k.isWritable,
+        })),
       });
       return sendProgramInstruction(new TransactionInstruction({
         programId: PROGRAM_ID,
-        keys: [
-          { pubkey: walletPk, isSigner: true, isWritable: true },
-          { pubkey: threadPda, isSigner: false, isWritable: true },
-          { pubkey: depositPda, isSigner: false, isWritable: true },
-          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-        ],
+        keys,
+        data,
+      }));
+    }
+
+    async function initializeThreadTx(threadId){
+      const rid = String(threadId || "");
+      const adminPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
+      const [threadPda] = await deriveThreadPda(rid);
+      const [spawnPoolPda] = await deriveSpawnPoolPda(rid);
+      const discriminator = Uint8Array.from([0,0,0,0,0,0,0,1]);
+      const data = concatBytes(discriminator, encodeStringArg(rid));
+      const keys = [
+        { pubkey: adminPk, isSigner: true, isWritable: true },
+        { pubkey: threadPda, isSigner: false, isWritable: true },
+        { pubkey: spawnPoolPda, isSigner: false, isWritable: true },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      ];
+      console.log("[ping-debug] initialize_thread ix", {
+        programId: PROGRAM_ID.toBase58(),
+        discriminatorBytes: Array.from(discriminator),
+        dataLength: data.length,
+        idlAccountOrder: ["admin", "thread", "spawnPool", "systemProgram"],
+        keys: keys.map((k) => ({ pubkey: k.pubkey.toBase58(), isSigner: k.isSigner, isWritable: k.isWritable })),
+      });
+      return sendProgramInstruction(new TransactionInstruction({
+        programId: PROGRAM_ID,
+        keys,
         data,
       }));
     }
@@ -2031,8 +2092,8 @@ if(connectBtn){
       const r = roomById(rid);
       if(!r) return;
       const s = ($("pingAmount").value||"").trim();
-      const sol = Number(s);
-      if(!s || Number.isNaN(sol) || sol <= 0) return alert("enter a valid SOL amount.");
+      const solAmount = Number(s);
+      if(!s || Number.isNaN(solAmount) || solAmount <= 0) return alert("enter a valid SOL amount.");
 
       if(r.state === "SPAWNING"){
         if(r.blockedWallets && r.blockedWallets[connectedWallet]) return alert("you were denied from this spawn.");
@@ -2040,14 +2101,45 @@ if(connectBtn){
           r.approval = r.approval || {};
           if(!r.approval[connectedWallet]) r.approval[connectedWallet] = "pending";
         }
-        const lamports = Math.round(sol * 1_000_000_000);
-        if(lamports <= 0) return alert("enter at least 1 lamport.");
+        const amountLamports = Math.round(solAmount * 1_000_000_000);
+        if(!Number.isInteger(amountLamports) || amountLamports <= 0) return alert("enter at least 1 lamport.");
+        console.log("[ping-debug] amount conversion", { solAmount, amountLamports });
         const walletPk = new PublicKey(connectedWallet);
         const [threadPda] = await deriveThreadPda(rid);
         const [depositPda] = await deriveDepositPda(rid, walletPk);
         const [spawnPoolPda] = await deriveSpawnPoolPda(rid);
+        const threadInfo = await connection.getAccountInfo(threadPda, "confirmed");
+        if(!threadInfo){
+          console.log("[ping-debug] thread missing, initializing", { rid, threadPda: threadPda.toBase58() });
+          try {
+            await initializeThreadTx(rid);
+          } catch (e){
+            reportTxError(e, "initialize thread transaction failed");
+            return;
+          }
+        }
+
+        const balBefore = await connection.getBalance(depositPda, "confirmed");
         try{
-          await pingDepositTx(rid, lamports);
+          const sig = await pingDepositTx(rid, amountLamports);
+          const balAfter = await connection.getBalance(depositPda, "confirmed");
+          const deltaLamports = Number(balAfter || 0) - Number(balBefore || 0);
+          const deltaSol = deltaLamports / 1_000_000_000;
+          console.log("[ping-debug] deposit balance delta", {
+            depositPda: depositPda.toBase58(),
+            balBefore,
+            balAfter,
+            deltaLamports,
+            deltaSol,
+            expectedLamports: amountLamports,
+            txExplorer: explorerTxUrl(sig),
+            depositExplorer: explorerAddressUrl(depositPda.toBase58()),
+          });
+          showToast(`Escrow deposit +${deltaSol.toFixed(9)} SOL (expected ~${solAmount} SOL)`);
+          console.log("[ping-debug] explorer links", {
+            tx: explorerTxUrl(sig),
+            deposit: explorerAddressUrl(depositPda.toBase58()),
+          });
         } catch(e){
           reportTxError(e, "ping deposit transaction failed");
           console.error("[ping-debug] context", {
@@ -2059,29 +2151,30 @@ if(connectBtn){
             depositPda: depositPda.toBase58(),
             spawnPoolPda: spawnPoolPda.toBase58(),
             vault: null,
-            amountLamports: lamports,
+            solAmount,
+            amountLamports,
           });
           return;
         }
 
         state.chat[r.id] = state.chat[r.id] || [];
         const statusText = isApproved(r, connectedWallet) ? "approved" : "pending approval";
-        state.chat[r.id].push({ ts: nowStamp(), wallet: "SYSTEM", text:`@${shortWallet(connectedWallet)} pinged ${sol.toFixed(3)} SOL (${statusText})` });
+        state.chat[r.id].push({ ts: nowStamp(), wallet: "SYSTEM", text:`@${shortWallet(connectedWallet)} pinged ${solAmount.toFixed(3)} SOL (${statusText})` });
 
         maybeAdvance(r);
 
       } else if(r.state === "BONDING") {
         r.positions[connectedWallet] = r.positions[connectedWallet] || {escrow_sol:0, bond_sol:0, spawn_tokens:0};
-        r.positions[connectedWallet].bond_sol = Number(r.positions[connectedWallet].bond_sol||0) + sol;
+        r.positions[connectedWallet].bond_sol = Number(r.positions[connectedWallet].bond_sol||0) + solAmount;
 
-        const add = Math.round(sol * SOL_TO_USD * 12);
+        const add = Math.round(solAmount * SOL_TO_USD * 12);
         r.market_cap_usd = Number(r.market_cap_usd||0) + add;
         nudgeChange(r, Math.random()*3);
 
         maybeAdvance(r);
 
         state.chat[r.id] = state.chat[r.id] || [];
-        state.chat[r.id].push({ ts: nowStamp(), wallet: connectedWallet, text:`bought ${sol.toFixed(3)} SOL on curve.` });
+        state.chat[r.id].push({ ts: nowStamp(), wallet: connectedWallet, text:`bought ${solAmount.toFixed(3)} SOL on curve.` });
       }
 
       closeModal($("pingBack"));
