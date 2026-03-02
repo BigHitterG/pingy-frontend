@@ -160,8 +160,8 @@ const $ = (id) => document.getElementById(id);
       return (a * N) + ((b / (2 * T)) * N * N);
     }
 
-    function walletCapSol(){
-      return spawnCostSolForTokens(MAX_TOKENS_PER_WALLET);
+    function walletCapSol(room){
+      return spawnTargetSol(room) / 20;
     }
 
     function applySpawnCommit(r, wallet, solIn){
@@ -309,12 +309,11 @@ const $ = (id) => document.getElementById(id);
     state.rooms[2].image = null;
 
     state.rooms.forEach((r) => {
-      r.approvedWallets = r.approvedWallets || {};
+      r.approval = r.approval || {};
       r.approverWallets = r.approverWallets || {};
-      r.deniedWallets = r.deniedWallets || {};
       r.blockedWallets = r.blockedWallets || {};
       if(r.creator_wallet){
-        r.approvedWallets[r.creator_wallet] = true;
+        r.approval[r.creator_wallet] = "approved";
         r.approverWallets[r.creator_wallet] = true;
       }
     });
@@ -329,9 +328,8 @@ const $ = (id) => document.getElementById(id);
         state: "SPAWNING",          // SPAWNING | BONDING | BONDED
         spawn_tokens_total: 0,      // virtual tokens sold in the spawn tranche (pre-token)
         positions: {},              // wallet -> { escrow_sol, bond_sol, spawn_tokens }
-        approvedWallets: { [creator_wallet]: true },        // wallet => true
+        approval: { [creator_wallet]: "approved" },        // wallet => approved|pending|denied
         approverWallets: { [creator_wallet]: true },        // wallet => true
-        deniedWallets: {},          // wallet => true
         blockedWallets: {},         // wallet => true
         market_cap_usd: 0,
         change_pct: (Math.random() * 10 - 5),
@@ -601,13 +599,11 @@ connectBtn.addEventListener("click", connectMock);
     }
 
     function isCreator(r, wallet){ return !!wallet && wallet === r.creator_wallet; }
-    function isApproved(r, wallet){ return !!(wallet && r.approvedWallets && r.approvedWallets[wallet]); }
+    function isApproved(r, wallet){ return !!(wallet && r.approval && r.approval[wallet] === "approved"); }
     function isApprover(r, wallet){ return isCreator(r, wallet) || !!(wallet && r.approverWallets && r.approverWallets[wallet]); }
-    function isDenied(r, wallet){ return !!(wallet && r.deniedWallets && r.deniedWallets[wallet]); }
+    function isDenied(r, wallet){ return !!(wallet && r.approval && r.approval[wallet] === "denied"); }
     function isPending(r, wallet){
-      if(!wallet) return false;
-      const escrow = Math.max(0, Number((r.positions?.[wallet]?.escrow_sol) || 0));
-      return escrow > 0 && !isApproved(r, wallet) && !isDenied(r, wallet);
+      return !!(wallet && r.approval && r.approval[wallet] === "pending");
     }
 
     function approvedEscrowSol(r){
@@ -620,9 +616,9 @@ connectBtn.addEventListener("click", connectMock);
       return total;
     }
 
-    function approvedCountedEscrowSol(r){
+    function countedEscrowSol(r){
       let total = 0;
-      const capSol = walletCapSol();
+      const capSol = walletCapSol(r);
       const pos = r.positions || {};
       for(const w of Object.keys(pos)){
         if(!isApproved(r, w)) continue;
@@ -635,7 +631,7 @@ connectBtn.addEventListener("click", connectMock);
     function spawnProgress01(r){
       const target = spawnTargetSol();
       if(target <= 0) return 0;
-      return clamp01(approvedCountedEscrowSol(r) / target);
+      return clamp01(countedEscrowSol(r) / target);
     }
     function bondingProgress01(r){
       const MC = Number(r.market_cap_usd || 0);
@@ -644,11 +640,11 @@ connectBtn.addEventListener("click", connectMock);
 
     function maybeAdvance(r){
       if(r.state === "SPAWNING"){
-        const total = approvedCountedEscrowSol(r);
+        const total = countedEscrowSol(r);
         const target = spawnTargetSol();
         if(total >= target){
           const pos = r.positions || {};
-          const capSol = walletCapSol();
+          const capSol = walletCapSol(r);
           let remainingTokens = SPAWN_TRANCHE_TOKENS;
 
           for(const w of Object.keys(pos)){
@@ -925,11 +921,9 @@ connectBtn.addEventListener("click", connectMock);
       const id = "r" + Math.random().toString(16).slice(2,6);
       const r = mkRoom(id, name, ticker, desc);
       r.creator_wallet = connectedWallet;
-      r.approvedWallets = r.approvedWallets || {};
+      r.approval = { [connectedWallet]: "approved" };
       r.approverWallets = r.approverWallets || {};
-      r.deniedWallets = r.deniedWallets || {};
       r.blockedWallets = r.blockedWallets || {};
-      r.approvedWallets[connectedWallet] = true;
       r.approverWallets[connectedWallet] = true;
       r.socials = { x: xUrl, tg: tgUrl, web: webUrl };
       if(newImgData) r.image = newImgData;
@@ -938,7 +932,7 @@ connectBtn.addEventListener("click", connectMock);
 
       if(commit > 0){
         applySpawnCommit(r, connectedWallet, commit);
-        state.chat[id].push({ ts: nowStamp(), wallet: "SYSTEM", text:`@${shortWallet(connectedWallet)} pinged ${commit.toFixed(3)} SOL (pending approval)` });
+        state.chat[id].push({ ts: nowStamp(), wallet: "SYSTEM", text:`@${shortWallet(connectedWallet)} pinged ${commit.toFixed(3)} SOL (approved)` });
       }
 
       $("newName").value = "";
@@ -1219,12 +1213,10 @@ connectBtn.addEventListener("click", connectMock);
       if(!r || !wallet) return;
       if(!isApprover(r, connectedWallet)) return;
       if(!isPending(r, wallet)) return;
-      r.approvedWallets = r.approvedWallets || {};
-      r.deniedWallets = r.deniedWallets || {};
-      r.approvedWallets[wallet] = true;
-      delete r.deniedWallets[wallet];
+      r.approval = r.approval || {};
+      r.approval[wallet] = "approved";
       const escrow = Math.max(0, Number((r.positions?.[wallet]?.escrow_sol) || 0));
-      const capSol = walletCapSol();
+      const capSol = walletCapSol(r);
       if(escrow > capSol){
         addSystemEvent(roomId, `@${shortWallet(wallet)} approved — cap is ${capSol.toFixed(3)} SOL counted toward spawn (excess escrow not counted)`);
       } else {
@@ -1240,10 +1232,9 @@ connectBtn.addEventListener("click", connectMock);
       if(!isApprover(r, connectedWallet)) return;
       const p = ensurePos(r, wallet);
       p.escrow_sol = 0;
-      r.deniedWallets = r.deniedWallets || {};
+      r.approval = r.approval || {};
       r.blockedWallets = r.blockedWallets || {};
-      delete (r.approvedWallets || {})[wallet];
-      r.deniedWallets[wallet] = true;
+      r.approval[wallet] = "denied";
       r.blockedWallets[wallet] = true;
       addSystemEvent(roomId, `@${shortWallet(wallet)} denied — escrow refunded`);
       renderRoom(roomId);
@@ -1302,7 +1293,7 @@ connectBtn.addEventListener("click", connectMock);
 
       $("shareBtn").onclick = () => openShareModal(roomId);
 
-      const pingers = Object.keys(r.approvedWallets || {});
+      const pingers = Object.keys(r.approval || {}).filter((w) => isApproved(r, w));
       const approvers = Object.keys(r.approverWallets || {}).filter((w) => isApprover(r, w));
       const pingersList = $("pingersList");
       const approversList = $("approversList");
@@ -1376,9 +1367,9 @@ connectBtn.addEventListener("click", connectMock);
         phaseLabel.textContent = "Funding first 10% of curve";
         statePill.textContent = "SPAWNING";
         phaseBar.style.width = Math.round(spawnProgress01(r)*100) + "%";
-        const counted = approvedCountedEscrowSol(r);
+        const counted = countedEscrowSol(r);
         const target = spawnTargetSol();
-        const capSol = walletCapSol();
+        const capSol = walletCapSol(r);
         const progressLine = $("spawnProgressLine");
         if(progressLine) progressLine.textContent = `approved counted: ${counted.toFixed(3)}/${target.toFixed(3)} SOL • cap per wallet: ${capSol.toFixed(3)} SOL`;
       } else if(r.state === "BONDING"){
@@ -1450,10 +1441,15 @@ connectBtn.addEventListener("click", connectMock);
 
       if(r.state === "SPAWNING"){
         if(r.blockedWallets && r.blockedWallets[connectedWallet]) return alert("you were denied from this spawn.");
+        if(!isCreator(r, connectedWallet)){
+          r.approval = r.approval || {};
+          if(!r.approval[connectedWallet]) r.approval[connectedWallet] = "pending";
+        }
         applySpawnCommit(r, connectedWallet, sol);
 
         state.chat[r.id] = state.chat[r.id] || [];
-        state.chat[r.id].push({ ts: nowStamp(), wallet: "SYSTEM", text:`@${shortWallet(connectedWallet)} pinged ${sol.toFixed(3)} SOL (pending approval)` });
+        const statusText = isApproved(r, connectedWallet) ? "approved" : "pending approval";
+        state.chat[r.id].push({ ts: nowStamp(), wallet: "SYSTEM", text:`@${shortWallet(connectedWallet)} pinged ${sol.toFixed(3)} SOL (${statusText})` });
 
         maybeAdvance(r);
 
