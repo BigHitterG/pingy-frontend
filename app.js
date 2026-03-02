@@ -34,6 +34,11 @@ const $ = (id) => document.getElementById(id);
     const homeBtn = $("homeBtn");
 
     const walletPill = $("walletPill");
+    const walletMenu = $("walletMenu");
+    const walletDropdown = $("walletDropdown");
+    const walletProfileItem = $("walletProfileItem");
+    const walletSwapItem = $("walletSwapItem");
+    const walletDisconnectItem = $("walletDisconnectItem");
     const connectBtn = $("connectBtn");
 
     const toast = $("toast");
@@ -369,8 +374,24 @@ const $ = (id) => document.getElementById(id);
       reader.readAsDataURL(f);
     });
 
+
+    function setWalletDropdown(on){
+      walletDropdown.classList.toggle("on", !!on);
+      walletDropdown.setAttribute("aria-hidden", on ? "false" : "true");
+    }
+
+    function closeWalletDropdown(){
+      setWalletDropdown(false);
+    }
+
+    function navigateHash(path){
+      const target = "#/" + path;
+      if(location.hash !== target) location.hash = target;
+    }
+
     // Connect wallet (mock)
 function connectMock(){
+  closeWalletDropdown();
   connectedWallet = "Fk2a9rQp8wYz3mN7vT5s1kC4dE6hJ9pL2qR8sX1zYb3A";
   walletPill.textContent = "wallet: " + shortWallet(connectedWallet);
   connectBtn.textContent = "disconnect";
@@ -388,6 +409,7 @@ function connectMock(){
 }
 
 function disconnectMock(){
+  closeWalletDropdown();
   connectedWallet = null;
   walletPill.textContent = "wallet: not connected";
   connectBtn.textContent = "connect";
@@ -440,7 +462,26 @@ connectBtn.addEventListener("click", () => { if(connectedWallet) disconnectMock(
 
       openModal($("profileBack"));
     }
-    walletPill.addEventListener("click", openProfile);
+    walletPill.addEventListener("click", () => {
+      const next = !walletDropdown.classList.contains("on");
+      setWalletDropdown(next);
+    });
+    walletProfileItem.addEventListener("click", () => {
+      closeWalletDropdown();
+      openProfile();
+      navigateHash("profile");
+    });
+    walletSwapItem.addEventListener("click", () => {
+      closeWalletDropdown();
+      navigateHash("swap");
+    });
+    walletDisconnectItem.addEventListener("click", () => {
+      if(!connectedWallet) return;
+      disconnectMock();
+    });
+    document.addEventListener("click", (e) => {
+      if(!walletMenu.contains(e.target)) closeWalletDropdown();
+    });
 
     function saveUsername(){
       if(!connectedWallet) return showToast("connect wallet first.");
@@ -1322,6 +1363,7 @@ connectBtn.addEventListener("click", () => { if(connectedWallet) disconnectMock(
       }
     }
     window.addEventListener("hashchange", handleHash);
+    document.addEventListener("keydown", (e) => { if(e.key === "Escape") closeWalletDropdown(); });
 
     // Init + ticker
     function tick(){
