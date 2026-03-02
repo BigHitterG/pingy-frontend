@@ -5,17 +5,17 @@ const $ = (id) => document.getElementById(id);
 
     // Single-curve: virtual tranche before spawn, realized on spawn
     const TOTAL_SUPPLY = 1_000_000_000;
-    const SPAWN_TRANCHE_PCT = 0.10;
-    const SPAWN_TRANCHE_TOKENS = TOTAL_SUPPLY * SPAWN_TRANCHE_PCT; // 100,000,000
+    const SPAWN_PERCENT = 0.10;
+    const SPAWN_TRANCHE_TOKENS = TOTAL_SUPPLY * SPAWN_PERCENT; // first 10% of supply
 
     // Per-wallet cap at spawn: ≤0.5% of total supply (i.e., ≤5% of the spawn tranche)
     const MAX_WALLET_PCT_TOTAL = 0.005;
     const MAX_TOKENS_PER_WALLET = TOTAL_SUPPLY * MAX_WALLET_PCT_TOTAL; // 5,000,000
 
     // Quality + distribution requirements
-    const GOOD_W_THRESHOLD = 0.80;      // humanWeight threshold to be considered "good"
-    const GOOD_TOKEN_FRACTION = 0.80;   // need ≥80% of sold spawn tokens held by good wallets
-    const MIN_GOOD_WALLETS = 20;        // 1 / 0.05 = 20 (min wallets if everyone is maxed)
+    const GOOD_SCORE_THRESHOLD = 60;
+    const MIN_GOOD_SOL_SHARE = 0.80;
+    const MIN_ELIGIBLE_WALLETS = 20;
 
     // Virtual spawn curve (SOL per token) — linear, increasing with tranche sold (mock)
     const VPRICE_P0 = 2e-7;   // starting price (SOL per token)
@@ -143,30 +143,12 @@ const $ = (id) => document.getElementById(id);
       return r.positions[wallet];
     }
 
-    // Linear price: P(s) = P0 + P1*(s/T), where s is tokens already sold in the spawn tranche.
-    // Closed-form solve for tokensOut given solIn.
-    function tokensForSol(solIn, tokensSold){
-      const sol = Math.max(0, Number(solIn||0));
-      const s = Math.max(0, Number(tokensSold||0));
-      if(sol <= 0) return 0;
-
+    // Deterministic mock: SOL cost to buy first 10% of supply from the bonding curve.
+    function spawnTargetSol(){
       const T = VPRICE_T;
       const a = VPRICE_P0;
       const b = VPRICE_P1;
-
-      // cost(t) = a*t + (b/(2T))*((s+t)^2 - s^2) = (b/(2T))*t^2 + (a + b*s/T)*t
-      const A = (b/(2*T));
-      const B = (a + (b*s/T));
-      const C = -sol;
-
-      // If A is ~0, fallback to flat price.
-      if(Math.abs(A) < 1e-18){
-        return sol / Math.max(1e-18, B);
-      }
-
-      const disc = B*B - 4*A*C;
-      const t = (-B + Math.sqrt(Math.max(0, disc))) / (2*A);
-      return Math.max(0, t);
+      return (a * T) + (b * T / 2);
     }
 
     function applySpawnCommit(r, wallet, solIn){
@@ -176,19 +158,7 @@ const $ = (id) => document.getElementById(id);
 
       // escrow bucket (refundable pre-spawn)
       pos.escrow_sol = Number(pos.escrow_sol||0) + sol;
-
-      // allocate virtual spawn tokens
-      const walletRemain = Math.max(0, MAX_TOKENS_PER_WALLET - Number(pos.spawn_tokens||0));
-      const trancheRemain = Math.max(0, SPAWN_TRANCHE_TOKENS - Number(r.spawn_tokens_total||0));
-
-      let tokensOut = tokensForSol(sol, Number(r.spawn_tokens_total||0));
-      tokensOut = Math.min(tokensOut, walletRemain, trancheRemain);
-      tokensOut = Math.max(0, tokensOut);
-
-      pos.spawn_tokens = Number(pos.spawn_tokens||0) + tokensOut;
-      r.spawn_tokens_total = Number(r.spawn_tokens_total||0) + tokensOut;
-
-      return tokensOut;
+      return sol;
     }
 
     function applySpawnUncommit(r, wallet, solOut){
@@ -198,17 +168,8 @@ const $ = (id) => document.getElementById(id);
       if(sol <= 0 || curSol <= 0) return 0;
 
       const take = Math.min(sol, curSol);
-      const ratio = take / curSol;
-
-      // proportional unwind (mock)
-      const curTokens = Math.max(0, Number(pos.spawn_tokens||0));
-      const tokensRemove = curTokens * ratio;
-
       pos.escrow_sol = curSol - take;
-      pos.spawn_tokens = Math.max(0, curTokens - tokensRemove);
-      r.spawn_tokens_total = Math.max(0, Number(r.spawn_tokens_total||0) - tokensRemove);
-
-      return tokensRemove;
+      return take;
     }
     function fmtK(n){
       const v = Number(n||0);
@@ -618,35 +579,37 @@ connectBtn.addEventListener("click", () => { if(connectedWallet) disconnectMock(
 
     function getEligibleParticipants(r){
       const pos = r.positions || {};
-      return Object.keys(pos).filter(w => Math.max(0, Number((pos[w]||{}).spawn_tokens||0)) > 0 && humanWeight(r.id, w) >= GOOD_W_THRESHOLD);
+      return Object.keys(pos).filter(w => Math.max(0, Number((pos[w]||{}).escrow_sol||0)) > 0 && getScore(w) >= GOOD_SCORE_THRESHOLD);
     }
 
-    function goodWalletCount(r){
-      return getEligibleParticipants(r).length;
+    function totalEscrowSol(r){
+      let total = 0;
+      const pos = r.positions || {};
+      for(const w of Object.keys(pos)) total += Math.max(0, Number((pos[w]||{}).escrow_sol || 0));
+      return total;
+    }
+
+    function goodSol(r){
+      let total = 0;
+      const pos = r.positions || {};
+      for(const w of Object.keys(pos)){
+        const escrow = Math.max(0, Number((pos[w]||{}).escrow_sol || 0));
+        if(escrow <= 0) continue;
+        if(getScore(w) >= GOOD_SCORE_THRESHOLD) total += escrow;
+      }
+      return total;
+    }
+
+    function goodSolShare(r){
+      const total = totalEscrowSol(r);
+      if(total <= 0) return 0;
+      return goodSol(r) / total;
     }
 
     function spawnProgress01(r){
-      // Spawn is driven by virtual tranche sold + quality of holders (no $ targets).
-      const T_total = Math.max(0, Number(r.spawn_tokens_total || 0));
-      if(T_total <= 0) return 0;
-
-      // good tokens = tokens held by wallets whose humanWeight >= threshold
-      let T_good = 0;
-      const pos = r.positions || {};
-      for(const w of Object.keys(pos)){
-        const p = pos[w] || {};
-        const t = Math.max(0, Number(p.spawn_tokens || 0));
-        if(t <= 0) continue;
-        if(humanWeight(r.id, w) >= GOOD_W_THRESHOLD) T_good += t;
-      }
-
-      const goodShare = (T_total > 0) ? (T_good / T_total) : 0;
-
-      const p_tranche = T_total / SPAWN_TRANCHE_TOKENS;
-      const p_good = goodShare / GOOD_TOKEN_FRACTION;
-      const p_wallets = goodWalletCount(r) / MIN_GOOD_WALLETS;
-
-      return clamp01(Math.min(p_tranche, p_good, p_wallets));
+      const target = spawnTargetSol();
+      if(target <= 0) return 0;
+      return clamp01(totalEscrowSol(r) / target);
     }
     function bondingProgress01(r){
       const MC = Number(r.market_cap_usd || 0);
@@ -655,9 +618,44 @@ connectBtn.addEventListener("click", () => { if(connectedWallet) disconnectMock(
 
     function maybeAdvance(r){
       if(r.state === "SPAWNING"){
-        if(spawnProgress01(r) >= 1 && goodWalletCount(r) >= MIN_GOOD_WALLETS){
-          // Realize the virtual tranche: escrow becomes first buys on the real curve
+        const total = totalEscrowSol(r);
+        const target = spawnTargetSol();
+        const goodShare = goodSolShare(r);
+        const eligible = getEligibleParticipants(r);
+        if(total >= target && goodShare >= MIN_GOOD_SOL_SHARE && eligible.length >= MIN_ELIGIBLE_WALLETS){
+          // One-swoop spawn: token + curve created, first 10% bought, then pro-rata distribution.
           const pos = r.positions || {};
+          let remainingTokens = SPAWN_TRANCHE_TOKENS;
+
+          for(const w of Object.keys(pos)){
+            const p = ensurePos(r, w);
+            p.spawn_tokens = 0;
+          }
+
+          // capped pro-rata allocation across eligible wallets
+          let rounds = 0;
+          let active = eligible.slice();
+          while(remainingTokens > 1e-6 && active.length > 0 && rounds < 6){
+            let activeSol = 0;
+            for(const w of active){ activeSol += Math.max(0, Number((pos[w]||{}).escrow_sol || 0)); }
+            if(activeSol <= 0) break;
+
+            const nextActive = [];
+            for(const w of active){
+              const p = ensurePos(r, w);
+              const wSol = Math.max(0, Number(p.escrow_sol || 0));
+              const roomShare = wSol / activeSol;
+              const addTokens = remainingTokens * roomShare;
+              const capRemain = Math.max(0, MAX_TOKENS_PER_WALLET - Number(p.spawn_tokens||0));
+              const granted = Math.min(addTokens, capRemain);
+              p.spawn_tokens = Number(p.spawn_tokens||0) + granted;
+              remainingTokens -= granted;
+              if(capRemain - granted > 1e-6) nextActive.push(w);
+            }
+            active = nextActive;
+            rounds += 1;
+          }
+
           for(const w of Object.keys(pos)){
             const p = ensurePos(r, w);
             const e = Math.max(0, Number(p.escrow_sol||0));
@@ -666,11 +664,12 @@ connectBtn.addEventListener("click", () => { if(connectedWallet) disconnectMock(
               p.escrow_sol = 0;
             }
           }
+          r.spawn_tokens_total = SPAWN_TRANCHE_TOKENS - Math.max(0, remainingTokens);
 
           r.state = "BONDING";
           r.market_cap_usd = Math.max(Number(r.market_cap_usd || 0), MC_SPAWN);
           if(!r.token_address) r.token_address = mockTokenAddress(r.ticker || r.name || "PINGY");
-          addSystemEvent(r.id, "token spawned. bonding started.");
+          addSystemEvent(r.id, "spawn complete: token + curve created, first 10% bought, now bonding.");
         }
       }
       if(r.state === "BONDING"){
@@ -741,7 +740,7 @@ connectBtn.addEventListener("click", () => { if(connectedWallet) disconnectMock(
               <div class="tiny subline">${escapeText(r.desc || "prespawn chat open")}</div>
               <div class="bar"><i style="width:${pct}%"></i></div>
               <div class="barRow">
-                <div class="tiny">prespawn chat open</div>
+                <div class="tiny">funding first 10% of curve</div>
                 <div class="pct">${pct}%</div>
               </div>
             </div>
@@ -1137,7 +1136,7 @@ connectBtn.addEventListener("click", () => { if(connectedWallet) disconnectMock(
       const phaseBar = $("phaseBar");
 
       if(r.state === "SPAWNING"){
-        phaseLabel.textContent = "SPAWNING";
+        phaseLabel.textContent = "Funding first 10% of curve";
         statePill.textContent = "SPAWNING";
         phaseBar.style.width = Math.round(spawnProgress01(r)*100) + "%";
       } else if(r.state === "BONDING"){
@@ -1148,6 +1147,20 @@ connectBtn.addEventListener("click", () => { if(connectedWallet) disconnectMock(
         phaseLabel.textContent = "BONDED";
         statePill.textContent = "BONDED";
         phaseBar.style.width = "100%";
+      }
+
+      const spawnInfoLine = $("spawnInfoLine");
+      const goodSolLine = $("goodSolLine");
+      if(spawnInfoLine) spawnInfoLine.style.display = (r.state === "SPAWNING") ? "block" : "none";
+      if(goodSolLine){
+        if(r.state === "SPAWNING"){
+          const goodPct = Math.round(goodSolShare(r) * 100);
+          const eligible = getEligibleParticipants(r).length;
+          goodSolLine.style.display = "block";
+          goodSolLine.textContent = `${goodPct}% good SOL • ${eligible}/${MIN_ELIGIBLE_WALLETS} eligible wallets`;
+        } else {
+          goodSolLine.style.display = "none";
+        }
       }
 
       const score = connectedWallet ? getScore(connectedWallet) : 0;
@@ -1163,7 +1176,7 @@ connectBtn.addEventListener("click", () => { if(connectedWallet) disconnectMock(
       $("meLine").textContent = connectedWallet ? me : "connect wallet";
 
       $("pingBtn").disabled = !connectedWallet;
-      $("unpingBtn").disabled = !connectedWallet;
+      $("unpingBtn").disabled = !connectedWallet || r.state !== "SPAWNING";
 
       setComposerState(r);
       renderChat(roomId);
@@ -1187,6 +1200,7 @@ connectBtn.addEventListener("click", () => { if(connectedWallet) disconnectMock(
       const rid = roomId || activeRoomId;
       const r = roomById(rid);
       if(!r) return;
+      if(r.state !== "SPAWNING") return alert("refunds are only available before spawn.");
       modalRoomId = rid;
       $("unpingAmount").value = "";
       $("unpingRoomLine").textContent = `coin: ${r.name}  $${r.ticker}`;
@@ -1209,7 +1223,7 @@ connectBtn.addEventListener("click", () => { if(connectedWallet) disconnectMock(
       if(!s || Number.isNaN(sol) || sol <= 0) return alert("enter a valid SOL amount.");
 
       if(r.state === "SPAWNING"){
-        const tOut = applySpawnCommit(r, connectedWallet, sol);
+        applySpawnCommit(r, connectedWallet, sol);
 
         if(rid && isVerifiedInRoom(connectedWallet, rid)) bumpScore(connectedWallet, 1);
 
@@ -1257,18 +1271,8 @@ connectBtn.addEventListener("click", () => { if(connectedWallet) disconnectMock(
         state.chat[r.id] = state.chat[r.id] || [];
         state.chat[r.id].push({ ts: nowStamp(), wallet: connectedWallet, text:`unpinged ${sol.toFixed(3)} SOL (escrow).` });
 
-      } else if(r.state === "BONDING"){
-        const cur = myBond(rid);
-        if(cur <= 0) return alert("you have no position to sell.");
-        if(sol > cur) return alert("cannot sell more than your position.");
-
-        r.positions[connectedWallet].bond_sol = cur - sol;
-        const sub = Math.round(sol * SOL_TO_USD * 9);
-        r.market_cap_usd = Math.max(0, Number(r.market_cap_usd||0) - sub);
-        nudgeChange(r, -(Math.random()*3));
-
-        state.chat[r.id] = state.chat[r.id] || [];
-        state.chat[r.id].push({ ts: nowStamp(), wallet: connectedWallet, text:`sold ${sol.toFixed(3)} SOL on curve.` });
+      } else {
+        return alert("refunds are disabled after spawn.");
       }
 
       closeModal($("unpingBack"));
