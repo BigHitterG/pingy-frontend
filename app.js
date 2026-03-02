@@ -154,6 +154,19 @@ const $ = (id) => document.getElementById(id);
       return (a * T) + (b * T / 2);
     }
 
+    function spawnCostSolForTokens(tokensIn){
+      const T = Math.max(0, Number(VPRICE_T || 0));
+      if(T <= 0) return 0;
+      const N = Math.max(0, Math.min(T, Number(tokensIn || 0)));
+      const a = Number(VPRICE_P0 || 0);
+      const b = Number(VPRICE_P1 || 0);
+      return (a * N) + ((b / (2 * T)) * N * N);
+    }
+
+    function walletCapSol(){
+      return spawnCostSolForTokens(MAX_TOKENS_PER_WALLET);
+    }
+
     function applySpawnCommit(r, wallet, solIn){
       const pos = ensurePos(r, wallet);
       const sol = Math.max(0, Number(solIn||0));
@@ -610,10 +623,22 @@ connectBtn.addEventListener("click", connectMock);
       return total;
     }
 
+    function approvedCountedEscrowSol(r){
+      let total = 0;
+      const capSol = walletCapSol();
+      const pos = r.positions || {};
+      for(const w of Object.keys(pos)){
+        if(!isApproved(r, w)) continue;
+        const escrow = Math.max(0, Number((pos[w]||{}).escrow_sol || 0));
+        total += Math.min(escrow, capSol);
+      }
+      return total;
+    }
+
     function spawnProgress01(r){
       const target = spawnTargetSol();
       if(target <= 0) return 0;
-      return clamp01(approvedEscrowSol(r) / target);
+      return clamp01(approvedCountedEscrowSol(r) / target);
     }
     function bondingProgress01(r){
       const MC = Number(r.market_cap_usd || 0);
@@ -622,10 +647,11 @@ connectBtn.addEventListener("click", connectMock);
 
     function maybeAdvance(r){
       if(r.state === "SPAWNING"){
-        const total = approvedEscrowSol(r);
+        const total = approvedCountedEscrowSol(r);
         const target = spawnTargetSol();
         if(total >= target){
           const pos = r.positions || {};
+          const capSol = walletCapSol();
           let remainingTokens = SPAWN_TRANCHE_TOKENS;
 
           for(const w of Object.keys(pos)){
@@ -634,16 +660,24 @@ connectBtn.addEventListener("click", connectMock);
           }
 
           let rounds = 0;
-          let active = Object.keys(pos).filter(w => isApproved(r, w) && Math.max(0, Number((pos[w]||{}).escrow_sol || 0)) > 0);
+          let active = Object.keys(pos).filter(w => {
+            if(!isApproved(r, w)) return false;
+            const escrow = Math.max(0, Number((pos[w]||{}).escrow_sol || 0));
+            return Math.min(escrow, capSol) > 0;
+          });
           while(remainingTokens > 1e-6 && active.length > 0 && rounds < 6){
             let activeSol = 0;
-            for(const w of active){ activeSol += Math.max(0, Number((pos[w]||{}).escrow_sol || 0)); }
+            for(const w of active){
+              const escrow = Math.max(0, Number((pos[w]||{}).escrow_sol || 0));
+              activeSol += Math.min(escrow, capSol);
+            }
             if(activeSol <= 0) break;
 
             const nextActive = [];
             for(const w of active){
               const p = ensurePos(r, w);
-              const wSol = Math.max(0, Number(p.escrow_sol || 0));
+              const escrow = Math.max(0, Number(p.escrow_sol || 0));
+              const wSol = Math.min(escrow, capSol);
               const roomShare = wSol / activeSol;
               const addTokens = remainingTokens * roomShare;
               const capRemain = Math.max(0, MAX_TOKENS_PER_WALLET - Number(p.spawn_tokens||0));
@@ -662,7 +696,9 @@ connectBtn.addEventListener("click", connectMock);
             const e = Math.max(0, Number(p.escrow_sol||0));
             if(e <= 0) continue;
             if(isApproved(r, w)){
-              p.bond_sol = Number(p.bond_sol||0) + e;
+              const counted = Math.min(e, capSol);
+              const excess = Math.max(0, e - counted);
+              if(excess > 0) p.bond_sol = Number(p.bond_sol||0) + excess;
             } else {
               refundedPending = true;
             }
@@ -1190,7 +1226,13 @@ connectBtn.addEventListener("click", connectMock);
       r.deniedWallets = r.deniedWallets || {};
       r.approvedWallets[wallet] = true;
       delete r.deniedWallets[wallet];
-      addSystemEvent(roomId, `@${shortWallet(wallet)} approved — now a PINGER`);
+      const escrow = Math.max(0, Number((r.positions?.[wallet]?.escrow_sol) || 0));
+      const capSol = walletCapSol();
+      if(escrow > capSol){
+        addSystemEvent(roomId, `@${shortWallet(wallet)} approved — cap is ${capSol.toFixed(3)} SOL counted toward spawn (excess escrow not counted)`);
+      } else {
+        addSystemEvent(roomId, `@${shortWallet(wallet)} approved — now a PINGER`);
+      }
       renderRoom(roomId);
       renderHome();
     }
@@ -1337,14 +1379,23 @@ connectBtn.addEventListener("click", connectMock);
         phaseLabel.textContent = "Funding first 10% of curve";
         statePill.textContent = "SPAWNING";
         phaseBar.style.width = Math.round(spawnProgress01(r)*100) + "%";
+        const counted = approvedCountedEscrowSol(r);
+        const target = spawnTargetSol();
+        const capSol = walletCapSol();
+        const progressLine = $("spawnProgressLine");
+        if(progressLine) progressLine.textContent = `approved counted: ${counted.toFixed(3)}/${target.toFixed(3)} SOL • cap per wallet: ${capSol.toFixed(3)} SOL`;
       } else if(r.state === "BONDING"){
         phaseLabel.textContent = "BONDING";
         statePill.textContent = "BONDING";
         phaseBar.style.width = Math.round(bondingProgress01(r)*100) + "%";
+        const progressLine = $("spawnProgressLine");
+        if(progressLine) progressLine.textContent = "";
       } else {
         phaseLabel.textContent = "BONDED";
         statePill.textContent = "BONDED";
         phaseBar.style.width = "100%";
+        const progressLine = $("spawnProgressLine");
+        if(progressLine) progressLine.textContent = "";
       }
 
       const me =
