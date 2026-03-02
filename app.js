@@ -29,6 +29,9 @@ const $ = (id) => document.getElementById(id);
       fetchProgramAccounts,
     };
 
+    console.log('[pingy] app.js loaded');
+    console.log('[pingy] Phantom provider present:', typeof window !== 'undefined' && typeof window.solana !== 'undefined');
+
     // Tuned assumptions
     const SOL_TO_USD = 100; // internal conversion (mock) — for display only
 
@@ -699,7 +702,14 @@ const $ = (id) => document.getElementById(id);
       $("createTri").textContent = on ? "▼" : "▶";
       $("createCoinHead").setAttribute("aria-expanded", on ? "true" : "false");
     }
-    $("createCoinHead").addEventListener("click", () => toggleCreateCoin());
+    const createCoinHead = $("createCoinHead");
+    console.log("[pingy] DOM check createCoinHead:", !!createCoinHead);
+    if(createCoinHead){
+      createCoinHead.addEventListener("click", () => {
+        console.log("[pingy] createCoinHead click");
+        toggleCreateCoin();
+      });
+    }
 
     // Create coin image (local preview)
     let newImgData = null;
@@ -839,7 +849,13 @@ async function disconnectMock(){
   showToast("disconnected.");
 }
 
-connectBtn.addEventListener("click", connectMock);
+console.log("[pingy] DOM check connectBtn:", !!connectBtn);
+if(connectBtn){
+  connectBtn.addEventListener("click", () => {
+    console.log("[pingy] connectBtn click");
+    connectMock();
+  });
+}
     $("toastConnect").addEventListener("click", connectMock);
     $("toastClose").addEventListener("click", () => toast.classList.remove("on"));
     homeBtn.addEventListener("click", () => setView("home"));
@@ -856,6 +872,11 @@ connectBtn.addEventListener("click", connectMock);
     wireModal($("pingBack"), $("pingClose"));
     wireModal($("unpingBack"), $("unpingClose"));
     wireModal($("shareBack"), $("shareClose"));
+
+    const visibleModalOverlays = Array.from(document.querySelectorAll(".modalBack"))
+      .filter((el) => getComputedStyle(el).display !== "none")
+      .map((el) => el.id);
+    console.log("[pingy] visible modal overlays at init:", visibleModalOverlays);
 
     // Profile modal
     function openProfile(){
@@ -1962,6 +1983,7 @@ connectBtn.addEventListener("click", connectMock);
     // Hash routing
     function handleHash(){
       const h = (location.hash || "").replace(/^#/, "");
+      console.log("[pingy] handleHash:", h || "<empty>");
       if(!h){
         setView("home");
         return;
