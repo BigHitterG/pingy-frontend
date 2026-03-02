@@ -191,50 +191,6 @@
     .collapseBody{display:none; margin-top:10px}
     .collapse.on .collapseBody{display:block}
 
-    /* Boost panel */
-    .boostPanel{
-      border:1px solid var(--line);
-      padding:10px;
-      margin:8px 0;
-      background:#fff;
-      position:sticky;
-      top:64px;
-      z-index:9;
-    }
-    .boostTitle{font-weight:700}
-    .infoDot{
-      display:inline-block;
-      width:18px;height:18px;
-      border:1px solid var(--line);
-      border-radius:999px;
-      text-align:center;
-      line-height:16px;
-      font-size:12px;
-      color:var(--muted);
-      cursor:pointer;
-      user-select:none;
-    }
-    .badge{
-      display:inline-block;
-      border:1px solid var(--line);
-      border-radius:999px;
-      padding:1px 6px;
-      font-size:12px;
-      color:var(--muted);
-      white-space:nowrap;
-    }
-    .badge.ok{color:var(--up); border-color:rgba(11,122,75,.35)}
-    .vouchBtn{
-      border:1px solid var(--line);
-      background:#fff;
-      color:var(--muted);
-      padding:2px 6px;
-      cursor:pointer;
-      font:inherit;
-      line-height:1.1;
-      white-space:nowrap;
-    }
-    .vouchBtn[disabled]{opacity:.4; cursor:not-allowed}
     .sysLine{
       color:var(--muted);
       font-style:italic;
