@@ -79,6 +79,18 @@ const $ = (id) => document.getElementById(id);
       toastTimer = setTimeout(() => toast.classList.remove("on"), 2400);
     }
 
+    function summarizeTxError(err){
+      const message = String(err?.message || err || "transaction failed");
+      const snippet = message.slice(0, 120);
+      const logs = err?.logs || err?.data?.logs || [];
+      const combined = [message, ...(Array.isArray(logs) ? logs : [String(logs)])].join(" ");
+      const customMatch = combined.match(/custom program error:\s*0x[0-9a-f]+/i);
+      const instructionMatch = combined.match(/InstructionError[^\n]*/i);
+      if(customMatch) return `${snippet} (${customMatch[0]})`;
+      if(instructionMatch) return `${snippet} (${instructionMatch[0]})`;
+      return snippet;
+    }
+
     function setView(which){
       const isHome = (which === "home");
       const isRoom = (which === "room");
@@ -1887,11 +1899,27 @@ if(connectBtn){
         }
         const lamports = Math.round(sol * 1_000_000_000);
         if(lamports <= 0) return alert("enter at least 1 lamport.");
+        const walletPk = new PublicKey(connectedWallet);
+        const [threadPda] = await deriveThreadPda(rid);
+        const [depositPda] = await deriveDepositPda(rid, walletPk);
+        const [spawnPoolPda] = await deriveSpawnPoolPda(rid);
         try{
           await pingDepositTx(rid, lamports);
         } catch(e){
           console.error(e);
-          alert("ping transaction failed.");
+          console.error(e?.message);
+          console.error(e?.logs || e?.data?.logs);
+          console.error("[ping-debug] context", {
+            connectedWallet,
+            DEVNET_RPC,
+            SOLANA_CLUSTER,
+            threadPda: threadPda.toBase58(),
+            depositPda: depositPda.toBase58(),
+            spawnPoolPda: spawnPoolPda.toBase58(),
+            vault: null,
+            amountLamports: lamports,
+          });
+          showToast(summarizeTxError(e));
           return;
         }
 
