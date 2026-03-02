@@ -386,17 +386,44 @@ const $ = (id) => document.getElementById(id);
       return out;
     }
 
+    function parsePublicKeyStrict(value, label){
+      try {
+        return new PublicKey(value);
+      } catch (err){
+        throw new Error(`Invalid public key for ${label}: ${String(value || "")}`);
+      }
+    }
+
+    function assertIxPubkeys(ix){
+      (ix?.keys || []).forEach((k, i) => {
+        if(!k || !k.pubkey) throw new Error(`Missing pubkey in instruction key ${i}`);
+        parsePublicKeyStrict(k.pubkey.toBase58 ? k.pubkey.toBase58() : k.pubkey, `instruction key ${i}`);
+      });
+      if(ix?.programId){
+        parsePublicKeyStrict(ix.programId.toBase58 ? ix.programId.toBase58() : ix.programId, "instruction programId");
+      }
+    }
+
     async function sendProgramInstruction(ix){
       const provider = getProvider();
       if(!provider) throw new Error("Phantom not found");
       if(!connectedWallet) throw new Error("Wallet not connected");
+      if(!provider.publicKey) throw new Error("Wallet provider public key missing");
+      assertIxPubkeys(ix);
 
       const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
-      const tx = new Transaction({
-        feePayer: new PublicKey(connectedWallet),
-        blockhash,
-        lastValidBlockHeight,
-      }).add(ix);
+      const tx = new Transaction({ lastValidBlockHeight }).add(ix);
+      tx.feePayer = provider.publicKey;
+      tx.recentBlockhash = blockhash;
+
+      const sim = await connection.simulateTransaction(tx, { sigVerify: false, commitment: "processed" });
+      console.log("[pingy] tx simulation err:", sim?.value?.err);
+      console.log("[pingy] tx simulation logs:", sim?.value?.logs || []);
+      if(sim?.value?.err){
+        const simErr = new Error(`Transaction simulation failed: ${JSON.stringify(sim.value.err)}`);
+        simErr.logs = sim.value.logs || [];
+        throw simErr;
+      }
 
       const res = await provider.signAndSendTransaction(tx);
       const signature = res && (res.signature || res);
@@ -407,13 +434,17 @@ const $ = (id) => document.getElementById(id);
 
     async function pingDepositTx(roomId, amountLamports){
       const rid = String(roomId || "");
-      const walletPk = new PublicKey(connectedWallet);
+      const lamports = Number(amountLamports);
+      if(!Number.isInteger(lamports) || lamports <= 0){
+        throw new Error("amountLamports must be a positive integer");
+      }
+      const walletPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
       const [threadPda] = await deriveThreadPda(rid);
       const [depositPda] = await deriveDepositPda(rid, walletPk);
       const data = concatBytes(
         Uint8Array.from([0,0,0,0,0,0,0,2]),
         encodeStringArg(rid),
-        encodeU64Arg(amountLamports)
+        encodeU64Arg(lamports)
       );
       return sendProgramInstruction(new TransactionInstruction({
         programId: PROGRAM_ID,
@@ -429,7 +460,7 @@ const $ = (id) => document.getElementById(id);
 
     async function unpingWithdrawTx(roomId){
       const rid = String(roomId || "");
-      const walletPk = new PublicKey(connectedWallet);
+      const walletPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
       const [threadPda] = await deriveThreadPda(rid);
       const [depositPda] = await deriveDepositPda(rid, walletPk);
       const data = concatBytes(Uint8Array.from([0,0,0,0,0,0,0,5]), encodeStringArg(rid));
@@ -446,8 +477,8 @@ const $ = (id) => document.getElementById(id);
 
     async function approveUserTx(roomId, userWallet){
       const rid = String(roomId || "");
-      const adminPk = new PublicKey(connectedWallet);
-      const userPk = new PublicKey(userWallet);
+      const adminPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
+      const userPk = parsePublicKeyStrict(userWallet, "approved user wallet");
       const [threadPda] = await deriveThreadPda(rid);
       const [depositPda] = await deriveDepositPda(rid, userPk);
       const data = concatBytes(
@@ -468,8 +499,8 @@ const $ = (id) => document.getElementById(id);
 
     async function rejectAndRefundTx(roomId, userWallet){
       const rid = String(roomId || "");
-      const adminPk = new PublicKey(connectedWallet);
-      const userPk = new PublicKey(userWallet);
+      const adminPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
+      const userPk = parsePublicKeyStrict(userWallet, "rejected user wallet");
       const [threadPda] = await deriveThreadPda(rid);
       const [depositPda] = await deriveDepositPda(rid, userPk);
       const data = concatBytes(
