@@ -943,12 +943,24 @@ connectBtn.addEventListener("click", connectMock);
     }
 
     function isCreator(r, wallet){ return !!wallet && wallet === r.creator_wallet; }
+    function normalizeDepositStatus(status){
+      const raw = String(status || "").toLowerCase();
+      if(raw === "rejected") return "denied";
+      return raw;
+    }
+
+    function isCountedDepositStatus(status){
+      const normalized = normalizeDepositStatus(status);
+      return normalized === "approved" || normalized === "swept";
+    }
+
     function walletStatus(r, wallet){
       if(!wallet) return "";
       const snapshot = getRoomEscrowSnapshot(r);
       const status = snapshot.byWallet?.[wallet]?.status;
       if(status) return status;
-      return r.approval?.[wallet] || "";
+      if(isCreator(r, wallet)) return "approved";
+      return "";
     }
     function isApproved(r, wallet){ return walletStatus(r, wallet) === "approved"; }
     function isApprover(r, wallet){
@@ -964,37 +976,42 @@ connectBtn.addEventListener("click", connectMock);
     function getRoomEscrowSnapshot(room){
       const r = room || {};
       const onchain = state.onchain?.[r.id];
-      if(onchain && onchain.byWallet) return onchain;
+      if(onchain && onchain.byWallet){
+        const byWallet = {};
+        const approvedWallets = [];
+        const pendingWallets = [];
 
-      const approval = r.approval || {};
-      const positions = r.positions || {};
-      const byWallet = {};
-      const approvedWallets = [];
-      const pendingWallets = [];
+        for(const wallet of Object.keys(onchain.byWallet)){
+          const row = onchain.byWallet[wallet] || {};
+          const status = normalizeDepositStatus(row.status);
+          const rawEscrowSol = Math.max(0, Number(row.escrow_sol || 0));
+          const escrowSol = isCountedDepositStatus(status) ? rawEscrowSol : 0;
 
-      const wallets = new Set([
-        ...Object.keys(approval),
-        ...Object.keys(positions)
-      ]);
+          byWallet[wallet] = {
+            ...row,
+            status,
+            escrow_sol: escrowSol
+          };
 
-      for(const wallet of wallets){
-        const status = approval[wallet];
-        const escrowSol = Math.max(0, Number((positions[wallet] || {}).escrow_sol || 0));
-        byWallet[wallet] = {
-          status,
-          escrow_sol: escrowSol
+          if(isCountedDepositStatus(status)) approvedWallets.push(wallet);
+          if(status === "pending") pendingWallets.push(wallet);
+        }
+
+        return {
+          ...onchain,
+          byWallet,
+          approvedWallets,
+          pendingWallets
         };
-        if(status === "approved") approvedWallets.push(wallet);
-        if(status === "pending") pendingWallets.push(wallet);
       }
 
       return {
         roomId: r.id,
         admin: r.creator_wallet,
         approverWallets: r.creator_wallet ? [r.creator_wallet] : [],
-        byWallet,
-        approvedWallets,
-        pendingWallets
+        byWallet: {},
+        approvedWallets: [],
+        pendingWallets: []
       };
     }
 
