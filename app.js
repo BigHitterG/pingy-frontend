@@ -2405,4 +2405,15 @@ if(connectBtn){
     console.log("[pingy] init complete");
     }
 
-    window.addEventListener("DOMContentLoaded", () => init().catch(reportFatal));
+    let initStarted = false;
+    function startInit(){
+      if(initStarted) return;
+      initStarted = true;
+      init().catch(reportFatal);
+    }
+
+    if(document.readyState === "loading"){
+      window.addEventListener("DOMContentLoaded", startInit, { once: true });
+    } else {
+      startInit();
+    }
