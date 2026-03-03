@@ -5,6 +5,7 @@ import {
   PROGRAM_ID,
   deriveThreadPda,
   deriveSpawnPoolPda,
+  deriveFeeVaultPda,
   deriveDepositPda,
   deriveUserVaultPda,
   fetchProgramAccounts,
@@ -46,6 +47,7 @@ const $ = (id) => document.getElementById(id);
       PROGRAM_ID,
       deriveThreadPda,
       deriveSpawnPoolPda,
+      deriveFeeVaultPda,
       deriveDepositPda,
       deriveUserVaultPda,
       fetchProgramAccounts,
@@ -77,6 +79,8 @@ const $ = (id) => document.getElementById(id);
 
     const MC_SPAWN = 6600;
     const MC_BONDED = 66000;
+    const SPAWN_FEE_BPS = 100;
+    const BPS_DENOM = 10_000;
 
 
     let homeView;
@@ -770,6 +774,7 @@ const $ = (id) => document.getElementById(id);
             { pubkey: walletPk, isSigner: true, isWritable: true },
             { pubkey: threadPda, isSigner: false, isWritable: true },
             { pubkey: spawnPoolPda, isSigner: false, isWritable: true },
+            { pubkey: (await deriveFeeVaultPda())[0], isSigner: false, isWritable: true },
             { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
           ],
           data: concatBytes(await anchorDiscriminator("initialize_thread"), encodeStringArg(rid)),
@@ -806,13 +811,14 @@ const $ = (id) => document.getElementById(id);
         { pubkey: adminPk, isSigner: true, isWritable: true },
         { pubkey: threadPda, isSigner: false, isWritable: true },
         { pubkey: spawnPoolPda, isSigner: false, isWritable: true },
+        { pubkey: (await deriveFeeVaultPda())[0], isSigner: false, isWritable: true },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       ];
       console.log("[ping-debug] initialize_thread ix", {
         programId: PROGRAM_ID.toBase58(),
         discriminatorBytes: Array.from(discriminator),
         dataLength: data.length,
-        idlAccountOrder: ["admin", "thread", "spawnPool", "systemProgram"],
+        idlAccountOrder: ["admin", "thread", "spawnPool", "feeVault", "systemProgram"],
         keys: keys.map((k) => ({ pubkey: k.pubkey.toBase58(), isSigner: k.isSigner, isWritable: k.isWritable })),
       });
       return sendProgramInstruction(new TransactionInstruction({
@@ -1101,6 +1107,7 @@ const $ = (id) => document.getElementById(id);
         created_at: nowStamp(),
         state: "SPAWNING",          // SPAWNING | BONDING | BONDED
         spawn_tokens_total: 0,      // virtual tokens sold in the spawn tranche (pre-token)
+        spawn_fee_paid_sol: 0,      // actual spawn fee charged only when spawn executes
         positions: {},              // wallet -> { escrow_sol, bond_sol, spawn_tokens }
         approval: { [creator_wallet]: "approved" },        // wallet => approved|pending|denied
         approverWallets: { [creator_wallet]: true },        // wallet => true
@@ -1765,6 +1772,10 @@ if(connectBtn){
           }
           if(refundedPending) addSystemEvent(r.id, "spawn triggered — pending escrow refunded");
           r.spawn_tokens_total = SPAWN_TRANCHE_TOKENS - Math.max(0, remainingTokens);
+          const feeSol = total * (SPAWN_FEE_BPS / BPS_DENOM);
+          const netSol = Math.max(0, total - feeSol);
+          r.spawn_fee_paid_sol = feeSol;
+          addSystemEvent(r.id, `spawn fee paid: ${feeSol.toFixed(3)} SOL (1%), net used: ${netSol.toFixed(3)} SOL`);
 
           r.state = "BONDING";
           r.market_cap_usd = Math.max(Number(r.market_cap_usd || 0), MC_SPAWN);
@@ -2566,19 +2577,19 @@ if(connectBtn){
         }, 0);
         const target = spawnTargetSol();
         const progressLine = $("spawnProgressLine");
-        if(progressLine) progressLine.textContent = `approved counted: ${counted.toFixed(3)}/${target.toFixed(3)} SOL • cap per wallet: ${capSol.toFixed(3)} SOL`;
+        if(progressLine) progressLine.textContent = `approved counted: ${counted.toFixed(3)}/${target.toFixed(3)} SOL • cap per wallet: ${capSol.toFixed(3)} SOL • Spawn fee: 1% (only charged if coin spawns)`;
       } else if(r.state === "BONDING"){
         phaseLabel.textContent = "BONDING";
         statePill.textContent = "BONDING";
         phaseBar.style.width = Math.round(bondingProgress01(r)*100) + "%";
         const progressLine = $("spawnProgressLine");
-        if(progressLine) progressLine.textContent = "";
+        if(progressLine) progressLine.textContent = `spawn fee paid: ${Number(r.spawn_fee_paid_sol || 0).toFixed(3)} SOL`;
       } else {
         phaseLabel.textContent = "BONDED";
         statePill.textContent = "BONDED";
         phaseBar.style.width = "100%";
         const progressLine = $("spawnProgressLine");
-        if(progressLine) progressLine.textContent = "";
+        if(progressLine) progressLine.textContent = `spawn fee paid: ${Number(r.spawn_fee_paid_sol || 0).toFixed(3)} SOL`;
       }
 
       const me =
