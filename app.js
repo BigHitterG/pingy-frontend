@@ -13,7 +13,7 @@ import {
   SystemProgram,
   Transaction,
   TransactionInstruction,
-} from "./lib/solana.js";
+} from "https://esm.sh/@solana/web3.js@1.95.4";
 
 function surfaceFatalMessage(prefix, err){
   const message = String(err?.message || err || "unknown error");
@@ -1214,14 +1214,37 @@ const $ = (id) => document.getElementById(id);
 
     async function runWalletSmokeTest(){
       if(!connectedWallet) return showToast("connect wallet first.");
+      const provider = getProvider();
+      if(!provider) return showToast("Phantom not found. Install Phantom.");
       const walletPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
       traceStep("wallet-smoke-test:start", { wallet: connectedWallet }, "smoke test: requesting phantom popup...");
       try {
-        const sig = await sendProgramInstruction(SystemProgram.transfer({
+        let blockhash, lastValidBlockHeight;
+        ({ blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed"));
+
+        const tx = new Transaction({
+          feePayer: walletPk,
+          recentBlockhash: blockhash,
+        }).add(SystemProgram.transfer({
           fromPubkey: walletPk,
           toPubkey: walletPk,
           lamports: 1,
         }));
+
+        console.log("SystemProgram.transfer type:", typeof SystemProgram.transfer);
+
+        let sig;
+        if(typeof provider.signAndSendTransaction === "function"){
+          const sendRes = await provider.signAndSendTransaction(tx, { skipPreflight: false });
+          sig = typeof sendRes === "string" ? sendRes : sendRes?.signature;
+        }
+
+        if(!sig){
+          const signedTx = await provider.signTransaction(tx);
+          sig = await connection.sendRawTransaction(signedTx.serialize(), { skipPreflight: false });
+        }
+
+        await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, "confirmed");
         traceStep("wallet-smoke-test:ok", { signature: sig }, "smoke test confirmed");
       } catch (err){
         traceStep("wallet-smoke-test:failed", { error: String(err?.message || err) }, "smoke test failed");
