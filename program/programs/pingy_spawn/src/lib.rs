@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_lang::system_program;
 
-declare_id!("Pingy1111111111111111111111111111111111111");
+declare_id!("11111111111111111111111111111111");
 
 #[program]
 pub mod pingy_spawn {
@@ -43,7 +43,7 @@ pub mod pingy_spawn {
                 deposit.thread_id = thread_id;
                 deposit.user_pubkey = ctx.accounts.user.key();
                 deposit.status = DepositStatus::Pending;
-                deposit.amount_recorded_lamports = 0;
+                deposit.allocated_lamports = 0;
                 deposit.rejected_once = false;
             }
 
@@ -57,14 +57,24 @@ pub mod pingy_spawn {
             ctx.accounts.system_program.to_account_info(),
             system_program::Transfer {
                 from: ctx.accounts.user.to_account_info(),
-                to: ctx.accounts.deposit.to_account_info(),
+                to: ctx.accounts.user_vault.to_account_info(),
             },
         );
         system_program::transfer(transfer_ctx, amount_lamports)?;
 
+        let user_vault = &mut ctx.accounts.user_vault;
+        if user_vault.user_pubkey == Pubkey::default() {
+            user_vault.user_pubkey = ctx.accounts.user.key();
+            user_vault.refundable_lamports = 0;
+        }
+        require!(
+            user_vault.user_pubkey == ctx.accounts.user.key(),
+            PingyError::UserMismatch
+        );
+
         let deposit = &mut ctx.accounts.deposit;
-        deposit.amount_recorded_lamports = deposit
-            .amount_recorded_lamports
+        deposit.allocated_lamports = deposit
+            .allocated_lamports
             .checked_add(amount_lamports)
             .ok_or(PingyError::AmountOverflow)?;
 
@@ -105,59 +115,68 @@ pub mod pingy_spawn {
         thread_id: String,
         user_pubkey: Pubkey,
     ) -> Result<()> {
-        process_refund(
-            &ctx.accounts.thread,
-            &mut ctx.accounts.deposit,
-            &ctx.accounts.user.to_account_info(),
-            thread_id,
-            user_pubkey,
-            true,
-            DepositStatus::Rejected,
-        )
+        let thread = &ctx.accounts.thread;
+        require!(thread.thread_id == thread_id, PingyError::ThreadMismatch);
+
+        let deposit = &mut ctx.accounts.deposit;
+        require!(deposit.user_pubkey == user_pubkey, PingyError::UserMismatch);
+        require!(!deposit.rejected_once, PingyError::DepositRejectedPermanently);
+
+        let user_vault = &mut ctx.accounts.user_vault;
+        require!(user_vault.user_pubkey == user_pubkey, PingyError::UserMismatch);
+
+        user_vault.refundable_lamports = user_vault
+            .refundable_lamports
+            .checked_add(deposit.allocated_lamports)
+            .ok_or(PingyError::AmountOverflow)?;
+        deposit.allocated_lamports = 0;
+        deposit.status = DepositStatus::Rejected;
+        deposit.rejected_once = true;
+
+        Ok(())
     }
 
     pub fn unping_withdraw(ctx: Context<UserWithdraw>, thread_id: String) -> Result<()> {
+        let thread = &ctx.accounts.thread;
+        require!(thread.thread_id == thread_id, PingyError::ThreadMismatch);
+
         let user_key = ctx.accounts.user.key();
-        process_refund(
-            &ctx.accounts.thread,
-            &mut ctx.accounts.deposit,
-            &ctx.accounts.user.to_account_info(),
-            thread_id,
-            user_key,
-            false,
-            DepositStatus::Withdrawn,
-        )
-    }
-}
+        let deposit = &mut ctx.accounts.deposit;
+        require!(deposit.user_pubkey == user_key, PingyError::UserMismatch);
 
-fn process_refund<'info>(
-    thread: &Account<'info, Thread>,
-    deposit: &mut Account<'info, Deposit>,
-    user: &AccountInfo<'info>,
-    thread_id: String,
-    user_pubkey: Pubkey,
-    rejected_once: bool,
-    new_status: DepositStatus,
-) -> Result<()> {
-    require!(thread.thread_id == thread_id, PingyError::ThreadMismatch);
-    require!(deposit.user_pubkey == user_pubkey, PingyError::UserMismatch);
+        let user_vault = &mut ctx.accounts.user_vault;
+        require!(user_vault.user_pubkey == user_key, PingyError::UserMismatch);
 
-    let min_balance = Rent::get()?.minimum_balance(Deposit::SIZE);
-    let deposit_info = deposit.to_account_info();
-    let current_balance = deposit_info.lamports();
-    let refundable = current_balance.saturating_sub(min_balance);
-    require!(refundable > 0, PingyError::NothingToRefund);
+        user_vault.refundable_lamports = user_vault
+            .refundable_lamports
+            .checked_add(deposit.allocated_lamports)
+            .ok_or(PingyError::AmountOverflow)?;
+        deposit.allocated_lamports = 0;
+        deposit.status = DepositStatus::Withdrawn;
 
-    **deposit_info.try_borrow_mut_lamports()? -= refundable;
-    **user.try_borrow_mut_lamports()? += refundable;
-
-    deposit.amount_recorded_lamports = deposit.amount_recorded_lamports.saturating_sub(refundable);
-    deposit.status = new_status;
-    if rejected_once {
-        deposit.rejected_once = true;
+        Ok(())
     }
 
-    Ok(())
+    pub fn refund_all(ctx: Context<RefundAll>) -> Result<()> {
+        let user_vault = &mut ctx.accounts.user_vault;
+        require!(
+            user_vault.user_pubkey == ctx.accounts.user.key(),
+            PingyError::UserMismatch
+        );
+
+        let min_balance = Rent::get()?.minimum_balance(8 + UserVault::SIZE);
+        let vault_info = user_vault.to_account_info();
+        let available = vault_info.lamports().saturating_sub(min_balance);
+        let payout = user_vault.refundable_lamports.min(available);
+        require!(payout > 0, PingyError::NothingToRefund);
+
+        **vault_info.try_borrow_mut_lamports()? -= payout;
+        **ctx.accounts.user.to_account_info().try_borrow_mut_lamports()? += payout;
+
+        user_vault.refundable_lamports = user_vault.refundable_lamports.saturating_sub(payout);
+
+        Ok(())
+    }
 }
 
 #[derive(Accounts)]
@@ -203,6 +222,14 @@ pub struct PingDeposit<'info> {
         bump
     )]
     pub deposit: Account<'info, Deposit>,
+    #[account(
+        init_if_needed,
+        payer = user,
+        space = 8 + UserVault::SIZE,
+        seeds = [b"vault", user.key().as_ref()],
+        bump
+    )]
+    pub user_vault: Account<'info, UserVault>,
     pub system_program: Program<'info, System>,
 }
 
@@ -240,9 +267,12 @@ pub struct AdminRefund<'info> {
         bump
     )]
     pub deposit: Account<'info, Deposit>,
-    /// CHECK: Must match deposit.user_pubkey, validated in handler.
-    #[account(mut, address = user_pubkey)]
-    pub user: UncheckedAccount<'info>,
+    #[account(
+        mut,
+        seeds = [b"vault", user_pubkey.as_ref()],
+        bump
+    )]
+    pub user_vault: Account<'info, UserVault>,
 }
 
 #[derive(Accounts)]
@@ -261,6 +291,25 @@ pub struct UserWithdraw<'info> {
         bump
     )]
     pub deposit: Account<'info, Deposit>,
+    #[account(
+        mut,
+        seeds = [b"vault", user.key().as_ref()],
+        bump
+    )]
+    pub user_vault: Account<'info, UserVault>,
+}
+
+#[derive(Accounts)]
+pub struct RefundAll<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [b"vault", user.key().as_ref()],
+        bump
+    )]
+    pub user_vault: Account<'info, UserVault>,
+    pub system_program: Program<'info, System>,
 }
 
 #[account]
@@ -283,7 +332,7 @@ pub struct Deposit {
     pub user_pubkey: Pubkey,
     pub status: DepositStatus,
     pub rejected_once: bool,
-    pub amount_recorded_lamports: u64,
+    pub allocated_lamports: u64,
 }
 
 impl Deposit {
@@ -295,6 +344,16 @@ impl Deposit {
 #[account]
 pub struct SpawnPool {
     pub thread_id: String,
+}
+
+#[account]
+pub struct UserVault {
+    pub user_pubkey: Pubkey,
+    pub refundable_lamports: u64,
+}
+
+impl UserVault {
+    pub const SIZE: usize = 32 + 8;
 }
 
 impl SpawnPool {
