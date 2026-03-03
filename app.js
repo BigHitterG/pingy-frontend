@@ -210,6 +210,13 @@ const $ = (id) => document.getElementById(id);
       showToast(details);
     }
 
+    function isWalletTxRejected(err){
+      const code = Number(err?.code);
+      if(code === 4001) return true;
+      const msg = String(err?.message || err || "");
+      return /reject|denied|declin/i.test(msg);
+    }
+
     function explorerTxUrl(signature){
       return `https://explorer.solana.com/tx/${signature}?cluster=devnet`;
     }
@@ -1942,7 +1949,7 @@ if(connectBtn){
       if(e.key === "Enter"){ e.preventDefault(); runExploreSearch(); }
     });
 
-    function createCoinFromForm(){
+    async function createCoinFromForm(){
       if(!connectedWallet) return showToast("connect wallet first.");
       const name = ($("newName").value||"").trim();
       const ticker = ($("newTicker").value||"").trim().toUpperCase();
@@ -1967,8 +1974,29 @@ if(connectBtn){
       const TICKER_RE = /^[A-Z0-9]{1,10}$/;
       if(!TICKER_RE.test(ticker)) return alert("ticker must be 1–10 chars, A–Z and 0–9 only (no spaces).");
       if(commitStr && (Number.isNaN(commit) || commit <= 0)) return alert("commit must be a valid SOL amount.");
+      const commitLamports = Math.floor(commit * LAMPORTS_PER_SOL);
+      if(commit > 0 && commitLamports <= 0) return alert("commit must be at least 1 lamport.");
 
       const id = "r" + Math.random().toString(16).slice(2,6);
+
+      if(shouldUseOnchain()){
+        try {
+          await initializeThreadTx(id);
+        } catch (e){
+          reportTxError(e, "initialize_thread transaction failed");
+          return;
+        }
+
+        if(commitLamports > 0){
+          try {
+            await pingDepositTx(id, commitLamports);
+          } catch(e){
+            if(isWalletTxRejected(e)) showToast("Commit cancelled — you can ping in later.");
+            else reportTxError(e, "ping_deposit transaction failed on create");
+          }
+        }
+      }
+
       const r = mkRoom(id, name, ticker, desc);
       r.creator_wallet = connectedWallet;
       r.approval = { [connectedWallet]: "approved" };
@@ -1979,11 +2007,6 @@ if(connectBtn){
       if(newImgData) r.image = newImgData;
       state.rooms.unshift(r);
       state.chat[id] = [{ ts:"—", wallet:"SYSTEM", text:"coin created. waiting for spawn." }];
-
-      if(commit > 0){
-        applySpawnCommit(r, connectedWallet, commit);
-        state.chat[id].push({ ts: nowStamp(), wallet: "SYSTEM", text:`@${shortWallet(connectedWallet)} pinged ${commit.toFixed(3)} SOL (approved)` });
-      }
 
       $("newName").value = "";
       $("newTicker").value = "";
@@ -1999,6 +2022,13 @@ if(connectBtn){
       toggleCreateCoin(false);
       renderHome();
       openRoom(id);
+
+      if(shouldUseOnchain()){
+        await fetchRoomOnchainSnapshot(id);
+        await refreshConnectedWalletEscrowLine(id);
+        await fetchUserVaultSnapshot();
+        if(activeRoomId === id) renderRoom(id);
+      }
     }
     $("createCoinBtn").addEventListener("click", createCoinFromForm);
 
