@@ -2179,12 +2179,21 @@ if(connectBtn){
     }
     $("shareCopy").addEventListener("click", () => copyToClipboard($("shareOut").value||""));
     let pingersOpen = false;
+    function updatePingersToggleLabel(roomId){
+      const toggle = $("pingersToggle");
+      if(!toggle) return;
+      const tri = pingersOpen ? "▾" : "▸";
+      const r = roomById(roomId || activeRoomId);
+      const snapshot = r ? getRoomEscrowSnapshot(r) : null;
+      const pendingCount = Number(snapshot?.pendingWallets?.length || 0);
+      const pendingSuffix = pendingCount > 0 ? ` (${pendingCount} pending)` : "";
+      toggle.textContent = `pingers ${tri}${pendingSuffix}`;
+    }
     const pingersToggle = $("pingersToggle");
     if(pingersToggle){
       pingersToggle.addEventListener("click", () => {
         pingersOpen = !pingersOpen;
-        const tri = pingersOpen ? "▾" : "▸";
-        pingersToggle.textContent = `pingers ${tri}`;
+        updatePingersToggleLabel(activeRoomId);
         const content = $("pingersContent");
         if(content) content.style.display = pingersOpen ? "block" : "none";
       });
@@ -2212,9 +2221,6 @@ if(connectBtn){
           else if(isPending(r, wallet)) extras += `<span class="k">PENDING</span>`;
 
           const thread = state.onchain?.[roomId] || {};
-          const threadAdminPubkey = thread.admin_pubkey || thread.admin;
-          const walletPubkey = connectedWallet;
-          const isAdmin = !!threadAdminPubkey && !!walletPubkey && toBase58String(threadAdminPubkey) === toBase58String(walletPubkey);
           if(thread.byWallet?.[wallet]){
             console.log("[pingy] deposit status runtime", {
               wallet,
@@ -2222,15 +2228,6 @@ if(connectBtn){
               rawStatusType: typeof thread.byWallet[wallet].status,
               normalizedStatus: statusToString(thread.byWallet[wallet].status),
             });
-          }
-          const pendingStatus = normalizeDepositStatus(thread.byWallet?.[wallet]?.status || walletStatus(r, wallet)) === "pending";
-          if(isAdmin && pendingStatus){
-            extras += ` <button class="btn subtle small" data-approve="${escapeText(wallet)}">approve</button>`;
-            extras += ` <button class="btn subtle small" data-deny="${escapeText(wallet)}">deny</button>`;
-          }
-          if(connectedWallet && isCreator(r, connectedWallet) && isApproved(r, wallet) && !isCreator(r, wallet)){
-            const isAp = !!(r.approverWallets && r.approverWallets[wallet]);
-            extras += ` <button class="btn subtle small" data-toggle-approver="${escapeText(wallet)}">${isAp ? "remove approver" : "make approver"}</button>`;
           }
         }
 
@@ -2247,12 +2244,6 @@ if(connectBtn){
         `;
 
         row.querySelector(".copyBtn").addEventListener("click", () => copyToClipboard(m.wallet));
-        const approveBtn = row.querySelector("[data-approve]");
-        const denyBtn = row.querySelector("[data-deny]");
-        const toggleBtn = row.querySelector("[data-toggle-approver]");
-        if(approveBtn) approveBtn.addEventListener("click", () => approveWallet(roomId, m.wallet));
-        if(denyBtn) denyBtn.addEventListener("click", () => denyWallet(roomId, m.wallet));
-        if(toggleBtn) toggleBtn.addEventListener("click", () => toggleApproverWallet(roomId, m.wallet));
 
         box.appendChild(row);
       });
@@ -2313,7 +2304,7 @@ if(connectBtn){
       renderHome();
     }
 
-    function toggleApproverWallet(roomId, wallet){
+    async function toggleApproverWallet(roomId, wallet){
       const r = roomById(roomId);
       if(!r || !wallet) return;
       if(!isCreator(r, connectedWallet)) return;
@@ -2326,6 +2317,7 @@ if(connectBtn){
         r.approverWallets[wallet] = true;
         addSystemEvent(roomId, `@${shortWallet(wallet)} is now an approver`);
       }
+      await refreshRoomOnchainSnapshot(roomId, { force: true });
       renderRoom(roomId);
       renderHome();
     }
@@ -2374,10 +2366,78 @@ if(connectBtn){
       $("shareBtn").onclick = () => openShareModal(roomId);
 
       const snapshot = getRoomEscrowSnapshot(r);
+      const pending = (snapshot.pendingWallets || []).slice();
       const pingers = (snapshot.approvedWallets || []).slice();
       const approvers = (snapshot.approverWallets || []).filter((w) => isApprover(r, w));
+      const thread = state.onchain?.[roomId] || {};
+      const threadAdminPubkey = thread.admin_pubkey || thread.admin;
+      const walletPubkey = connectedWallet;
+      const isAdmin = !!threadAdminPubkey && !!walletPubkey && toBase58String(threadAdminPubkey) === toBase58String(walletPubkey);
+
+      const pendingList = $("pendingList");
       const pingersList = $("pingersList");
       const approversList = $("approversList");
+
+      const makeWalletRow = (wallet, amountSol, actions = []) => {
+        const row = document.createElement("div");
+        row.className = "row";
+        row.style.marginTop = "4px";
+        row.style.justifyContent = "space-between";
+        row.style.alignItems = "center";
+
+        const left = document.createElement("div");
+        left.className = "tiny";
+        left.textContent = `@${shortWallet(wallet)} • ${Number(amountSol || 0).toFixed(3)} SOL`;
+
+        const right = document.createElement("div");
+        right.className = "row";
+        right.style.gap = "6px";
+
+        actions.forEach((action) => {
+          const btn = document.createElement("button");
+          btn.className = "btn subtle small";
+          btn.textContent = action.label;
+          if(action.disabled){
+            btn.disabled = true;
+            btn.title = action.title || "coming soon";
+          } else {
+            btn.addEventListener("click", action.onClick);
+          }
+          right.appendChild(btn);
+        });
+
+        row.appendChild(left);
+        if(actions.length > 0) row.appendChild(right);
+        return row;
+      };
+
+      if(pendingList){
+        pendingList.innerHTML = "";
+        if(!isAdmin){
+          const e = document.createElement("span");
+          e.className = "muted tiny";
+          e.textContent = "admin only";
+          pendingList.appendChild(e);
+        } else if(pending.length === 0){
+          const e = document.createElement("span");
+          e.className = "muted tiny";
+          e.textContent = "none";
+          pendingList.appendChild(e);
+        } else {
+          pending.forEach((w) => {
+            const row = makeWalletRow(
+              w,
+              snapshot.byWallet?.[w]?.escrow_sol || 0,
+              [
+                { label: "approve", onClick: () => approveWallet(roomId, w) },
+                { label: "deny", onClick: () => denyWallet(roomId, w) }
+              ]
+            );
+            pendingList.appendChild(row);
+          });
+        }
+      }
+
       if(pingersList){
         pingersList.innerHTML = "";
         if(pingers.length === 0){
@@ -2387,13 +2447,13 @@ if(connectBtn){
           pingersList.appendChild(e);
         } else {
           pingers.forEach((w) => {
-            const tag = document.createElement("span");
-            tag.className = "k";
-            tag.textContent = shortWallet(w);
-            pingersList.appendChild(tag);
+            const actions = [];
+            if(isAdmin && !isCreator(r, w)) actions.push({ label: "deny", onClick: () => denyWallet(roomId, w) });
+            pingersList.appendChild(makeWalletRow(w, snapshot.byWallet?.[w]?.escrow_sol || 0, actions));
           });
         }
       }
+
       if(approversList){
         approversList.innerHTML = "";
         if(approvers.length === 0){
@@ -2403,13 +2463,24 @@ if(connectBtn){
           approversList.appendChild(e);
         } else {
           approvers.forEach((w) => {
-            const tag = document.createElement("span");
-            tag.className = "k";
-            tag.textContent = shortWallet(w);
-            approversList.appendChild(tag);
+            const actions = [];
+            if(isCreator(r, connectedWallet) && !isCreator(r, w)){
+              actions.push({ label: "remove", onClick: () => toggleApproverWallet(roomId, w) });
+            }
+            approversList.appendChild(makeWalletRow(w, snapshot.byWallet?.[w]?.escrow_sol || 0, actions));
           });
         }
+        if(isCreator(r, connectedWallet)){
+          const soon = document.createElement("button");
+          soon.className = "btn subtle small";
+          soon.textContent = "add approver (coming soon)";
+          soon.disabled = true;
+          soon.style.marginTop = "6px";
+          approversList.appendChild(soon);
+        }
       }
+
+      updatePingersToggleLabel(roomId);
 
       // room image (if provided)
       const imgEl = $("roomImg");
