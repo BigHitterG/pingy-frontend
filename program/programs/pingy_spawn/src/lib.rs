@@ -322,7 +322,7 @@ pub struct Thread {
 
 impl Thread {
     pub const MAX_THREAD_ID_LEN: usize = 64;
-    pub const MAX_PARTICIPANTS: usize = 1024;
+    pub const MAX_PARTICIPANTS: usize = 100;
     pub const LEN: usize = 4 + Self::MAX_THREAD_ID_LEN + 32 + 1 + 4 + (Self::MAX_PARTICIPANTS * 32);
 }
 
