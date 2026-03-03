@@ -881,6 +881,7 @@ const $ = (id) => document.getElementById(id);
           { pubkey: adminPk, isSigner: true, isWritable: true },
           { pubkey: threadPda, isSigner: false, isWritable: false },
           { pubkey: depositPda, isSigner: false, isWritable: true },
+          { pubkey: userPk, isSigner: false, isWritable: true },
           { pubkey: userVaultPda, isSigner: false, isWritable: true },
         ],
         data,
