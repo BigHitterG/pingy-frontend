@@ -466,7 +466,8 @@ const $ = (id) => document.getElementById(id);
       },
       onchain: {},
       onchainMeta: {},
-      userVault: null
+      userVault: null,
+      walletPubkey: null
     };
 
     const ONCHAIN_REFRESH_MS = 7000;
@@ -1310,9 +1311,27 @@ const $ = (id) => document.getElementById(id);
       if(profileView.classList.contains("on")) renderProfilePage();
     }
 
-    function clearConnectedWallet(){
-      connectedWallet = null;
+    function setConnectedWallet(nextWallet){
+      connectedWallet = nextWallet || null;
+      state.walletPubkey = connectedWallet;
+    }
+
+    function clearWalletScopedCaches(){
       state.userVault = null;
+      state.onchain = {};
+      state.onchainMeta = {};
+    }
+
+    async function refreshRoomFromChain(){
+      const tasks = state.rooms.map((room) => refreshRoomOnchainSnapshot(room.id, { force: true }));
+      if(connectedWallet) tasks.push(fetchUserVaultSnapshot());
+      await Promise.allSettled(tasks);
+      if(activeRoomId && connectedWallet) await refreshConnectedWalletEscrowLine(activeRoomId);
+    }
+
+    function clearConnectedWallet(){
+      setConnectedWallet(null);
+      clearWalletScopedCaches();
       refreshWalletViews();
       renderRefundUi();
       updateEarningsUI();
@@ -1321,16 +1340,26 @@ const $ = (id) => document.getElementById(id);
     function bindWalletListeners(provider){
       if(walletListenersBound || !provider || typeof provider.on !== "function") return;
       provider.on("accountChanged", async (pubkey) => {
+        console.log("[wallet] accountChanged", pubkey?.toBase58?.() || null);
         if(!pubkey){
           clearConnectedWallet();
           return;
         }
-        connectedWallet = pubkey.toString();
-        await fetchUserVaultSnapshot();
+        setConnectedWallet(pubkey.toBase58());
+        clearWalletScopedCaches();
+        await refreshRoomFromChain();
+        refreshWalletViews();
+        renderRefundUi();
+      });
+      provider.on("connect", async () => {
+        console.log("[wallet] connect", provider.publicKey?.toBase58?.() || null);
+        setConnectedWallet(provider.publicKey?.toBase58?.() || null);
+        await refreshRoomFromChain();
         refreshWalletViews();
         renderRefundUi();
       });
       provider.on("disconnect", () => {
+        console.log("[wallet] disconnect");
         clearConnectedWallet();
       });
       walletListenersBound = true;
@@ -1392,7 +1421,7 @@ async function connectMock(){
     const nextWallet = resp && resp.publicKey ? resp.publicKey.toString() : null;
     if(!nextWallet) return;
 
-    connectedWallet = nextWallet;
+    setConnectedWallet(nextWallet);
     console.log("[pingy] provider.publicKey after connect:", provider?.publicKey?.toString?.() || provider?.publicKey);
     toast.classList.remove("on");
 
@@ -1400,7 +1429,7 @@ async function connectMock(){
     if(!profile.namesByWallet[connectedWallet]) profile.namesByWallet[connectedWallet] = "big_hitter";
     saveProfileLocal();
 
-    await fetchUserVaultSnapshot();
+    await refreshRoomFromChain();
     refreshWalletViews();
     renderRefundUi();
   } catch(err){
@@ -2183,7 +2212,7 @@ if(connectBtn){
 
           const thread = state.onchain?.[roomId] || {};
           const threadAdminPubkey = thread.admin_pubkey || thread.admin;
-          const walletPubkey = window.solana?.publicKey || connectedWallet;
+          const walletPubkey = state.walletPubkey;
           const isAdmin = !!threadAdminPubkey && !!walletPubkey && toBase58String(threadAdminPubkey) === toBase58String(walletPubkey);
           if(thread.byWallet?.[wallet]){
             console.log("[pingy] deposit status runtime", {
@@ -2722,8 +2751,8 @@ if(connectBtn){
       try{
         const resp = await providerConnect(provider, { onlyIfTrusted: true });
         if(resp && resp.publicKey){
-          connectedWallet = resp.publicKey.toString();
-          await fetchUserVaultSnapshot();
+          setConnectedWallet(resp.publicKey.toBase58());
+          await refreshRoomFromChain();
     refreshWalletViews();
     renderRefundUi();
         }
