@@ -912,15 +912,20 @@ const $ = (id) => document.getElementById(id);
       o = o2;
       const spawnState = bytes[o];
       o += 1;
-      const [count, o3] = readU32LE(bytes, o);
+      const [pendingCount, o3] = readU32LE(bytes, o);
       o = o3;
-      const participants = [];
-      for(let i=0;i<count;i++){
-        const [pk, next] = readPubkey(bytes, o);
-        o = next;
-        participants.push(pk.toBase58());
-      }
-      return { threadId, admin: adminPubkey.toBase58(), admin_pubkey: adminPubkey, spawnState, participants };
+      const [approvedCount, o4] = readU32LE(bytes, o);
+      o = o4;
+      const totalAllocatedLamports = new DataView(bytes.buffer, bytes.byteOffset + o, 8).getBigUint64(0, true);
+      return {
+        threadId,
+        admin: adminPubkey.toBase58(),
+        admin_pubkey: adminPubkey,
+        spawnState,
+        pending_count: pendingCount,
+        approved_count: approvedCount,
+        total_allocated_lamports: Number(totalAllocatedLamports || 0n),
+      };
     }
 
     function decodeDepositAccount(data){
@@ -973,23 +978,26 @@ const $ = (id) => document.getElementById(id);
       const byWallet = {};
       const approvedWallets = [];
       const pendingWallets = [];
+      const depositAccounts = await connection.getProgramAccounts(PROGRAM_ID, {
+        commitment: "confirmed",
+        filters: [{ dataSize: 8 + 4 + 64 + 32 + 1 + 1 + 8 }]
+      });
 
-      for(const participant of thread.participants){
-        const [depositPda] = await deriveDepositPda(roomId, new PublicKey(participant));
-        const depositInfo = await connection.getAccountInfo(depositPda, "confirmed");
-        if(!depositInfo || !depositInfo.data || depositInfo.data.length < 8) continue;
-        const deposit = decodeDepositAccount(depositInfo.data);
-        if(!deposit) continue;
+      for(const acct of depositAccounts){
+        if(!acct?.account?.data || acct.account.data.length < 8) continue;
+        const deposit = decodeDepositAccount(acct.account.data);
+        if(!deposit || deposit.threadId !== roomId) continue;
+        const wallet = deposit.user;
         const escrowSol = Math.max(0, Number(deposit.allocated_lamports || 0) / 1_000_000_000);
 
-        byWallet[participant] = {
+        byWallet[wallet] = {
           status: deposit.status,
           escrow_sol: escrowSol,
-          deposit_pda: depositPda.toBase58()
+          deposit_pda: acct.pubkey.toBase58()
         };
 
-        if(deposit.status === "approved") approvedWallets.push(participant);
-        if(deposit.status === "pending") pendingWallets.push(participant);
+        if(deposit.status === "approved") approvedWallets.push(wallet);
+        if(deposit.status === "pending") pendingWallets.push(wallet);
       }
 
       const snapshot = {
@@ -997,7 +1005,7 @@ const $ = (id) => document.getElementById(id);
         threadPda: threadPda.toBase58(),
         admin: thread.admin,
         admin_pubkey: thread.admin_pubkey,
-        participants: thread.participants,
+        participants: Object.keys(byWallet),
         approverWallets: thread.admin ? [thread.admin] : [],
         byWallet,
         approvedWallets,

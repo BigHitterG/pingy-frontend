@@ -109,7 +109,9 @@
           {"name":"threadId","type":"string"},
           {"name":"adminPubkey","type":"pubkey"},
           {"name":"spawnState","type":{"defined":{"name":"spawnState"}}},
-          {"name":"participants","type":{"vec":"pubkey"}}
+          {"name":"pendingCount","type":"u32"},
+          {"name":"approvedCount","type":"u32"},
+          {"name":"totalAllocatedLamports","type":"u64"}
         ]
       }
     },

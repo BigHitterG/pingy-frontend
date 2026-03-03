@@ -14,7 +14,9 @@ pub mod pingy_spawn {
         thread.thread_id = thread_id.clone();
         thread.admin_pubkey = ctx.accounts.admin.key();
         thread.spawn_state = SpawnState::Open;
-        thread.participants = Vec::new();
+        thread.pending_count = 0;
+        thread.approved_count = 0;
+        thread.total_allocated_lamports = 0;
 
         let spawn_pool = &mut ctx.accounts.spawn_pool;
         spawn_pool.thread_id = thread_id;
@@ -32,6 +34,7 @@ pub mod pingy_spawn {
         let thread = &mut ctx.accounts.thread;
         require!(thread.thread_id == thread_id, PingyError::ThreadMismatch);
 
+        let mut is_new_deposit = false;
         {
             let deposit = &mut ctx.accounts.deposit;
 
@@ -40,6 +43,7 @@ pub mod pingy_spawn {
             }
 
             if deposit.thread_id.is_empty() {
+                is_new_deposit = true;
                 deposit.thread_id = thread_id;
                 deposit.user_pubkey = ctx.accounts.user.key();
                 deposit.status = DepositStatus::Pending;
@@ -77,15 +81,21 @@ pub mod pingy_spawn {
             .allocated_lamports
             .checked_add(amount_lamports)
             .ok_or(PingyError::AmountOverflow)?;
+        thread.total_allocated_lamports = thread
+            .total_allocated_lamports
+            .checked_add(amount_lamports)
+            .ok_or(PingyError::AmountOverflow)?;
 
+        let previous_status = deposit.status;
         if ctx.accounts.user.key() == thread.admin_pubkey {
             deposit.status = DepositStatus::Approved;
         } else if deposit.status != DepositStatus::Approved {
             deposit.status = DepositStatus::Pending;
         }
-
-        if !thread.participants.contains(&ctx.accounts.user.key()) {
-            thread.participants.push(ctx.accounts.user.key());
+        if is_new_deposit {
+            thread.increment_status_count(deposit.status)?;
+        } else {
+            thread.apply_status_transition(previous_status, deposit.status)?;
         }
 
         Ok(())
@@ -106,7 +116,10 @@ pub mod pingy_spawn {
             PingyError::DepositRejectedPermanently
         );
 
+        let previous_status = deposit.status;
         deposit.status = DepositStatus::Approved;
+        let thread = &mut ctx.accounts.thread;
+        thread.apply_status_transition(previous_status, deposit.status)?;
         Ok(())
     }
 
@@ -120,18 +133,33 @@ pub mod pingy_spawn {
 
         let deposit = &mut ctx.accounts.deposit;
         require!(deposit.user_pubkey == user_pubkey, PingyError::UserMismatch);
-        require!(!deposit.rejected_once, PingyError::DepositRejectedPermanently);
+        require!(
+            !deposit.rejected_once,
+            PingyError::DepositRejectedPermanently
+        );
 
         let user_vault = &mut ctx.accounts.user_vault;
-        require!(user_vault.user_pubkey == user_pubkey, PingyError::UserMismatch);
+        require!(
+            user_vault.user_pubkey == user_pubkey,
+            PingyError::UserMismatch
+        );
 
+        let allocated_before = deposit.allocated_lamports;
         user_vault.refundable_lamports = user_vault
             .refundable_lamports
-            .checked_add(deposit.allocated_lamports)
+            .checked_add(allocated_before)
             .ok_or(PingyError::AmountOverflow)?;
         deposit.allocated_lamports = 0;
+        let previous_status = deposit.status;
         deposit.status = DepositStatus::Rejected;
         deposit.rejected_once = true;
+
+        let thread = &mut ctx.accounts.thread;
+        thread.total_allocated_lamports = thread
+            .total_allocated_lamports
+            .checked_sub(allocated_before)
+            .ok_or(PingyError::AccountingUnderflow)?;
+        thread.apply_status_transition(previous_status, deposit.status)?;
 
         Ok(())
     }
@@ -147,12 +175,21 @@ pub mod pingy_spawn {
         let user_vault = &mut ctx.accounts.user_vault;
         require!(user_vault.user_pubkey == user_key, PingyError::UserMismatch);
 
+        let allocated_before = deposit.allocated_lamports;
         user_vault.refundable_lamports = user_vault
             .refundable_lamports
-            .checked_add(deposit.allocated_lamports)
+            .checked_add(allocated_before)
             .ok_or(PingyError::AmountOverflow)?;
         deposit.allocated_lamports = 0;
+        let previous_status = deposit.status;
         deposit.status = DepositStatus::Withdrawn;
+
+        let thread = &mut ctx.accounts.thread;
+        thread.total_allocated_lamports = thread
+            .total_allocated_lamports
+            .checked_sub(allocated_before)
+            .ok_or(PingyError::AccountingUnderflow)?;
+        thread.apply_status_transition(previous_status, deposit.status)?;
 
         Ok(())
     }
@@ -171,7 +208,11 @@ pub mod pingy_spawn {
         require!(payout > 0, PingyError::NothingToRefund);
 
         **vault_info.try_borrow_mut_lamports()? -= payout;
-        **ctx.accounts.user.to_account_info().try_borrow_mut_lamports()? += payout;
+        **ctx
+            .accounts
+            .user
+            .to_account_info()
+            .try_borrow_mut_lamports()? += payout;
 
         user_vault.refundable_lamports = user_vault.refundable_lamports.saturating_sub(payout);
 
@@ -317,13 +358,65 @@ pub struct Thread {
     pub thread_id: String,
     pub admin_pubkey: Pubkey,
     pub spawn_state: SpawnState,
-    pub participants: Vec<Pubkey>,
+    pub pending_count: u32,
+    pub approved_count: u32,
+    pub total_allocated_lamports: u64,
 }
 
 impl Thread {
     pub const MAX_THREAD_ID_LEN: usize = 64;
-    pub const MAX_PARTICIPANTS: usize = 100;
-    pub const LEN: usize = 4 + Self::MAX_THREAD_ID_LEN + 32 + 1 + 4 + (Self::MAX_PARTICIPANTS * 32);
+    pub const LEN: usize = 4 + Self::MAX_THREAD_ID_LEN + 32 + 1 + 4 + 4 + 8;
+
+    fn increment_status_count(&mut self, status: DepositStatus) -> Result<()> {
+        match status {
+            DepositStatus::Pending => {
+                self.pending_count = self
+                    .pending_count
+                    .checked_add(1)
+                    .ok_or(PingyError::AmountOverflow)?;
+            }
+            DepositStatus::Approved => {
+                self.approved_count = self
+                    .approved_count
+                    .checked_add(1)
+                    .ok_or(PingyError::AmountOverflow)?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn decrement_status_count(&mut self, status: DepositStatus) -> Result<()> {
+        match status {
+            DepositStatus::Pending => {
+                self.pending_count = self
+                    .pending_count
+                    .checked_sub(1)
+                    .ok_or(PingyError::AccountingUnderflow)?;
+            }
+            DepositStatus::Approved => {
+                self.approved_count = self
+                    .approved_count
+                    .checked_sub(1)
+                    .ok_or(PingyError::AccountingUnderflow)?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn apply_status_transition(
+        &mut self,
+        previous_status: DepositStatus,
+        next_status: DepositStatus,
+    ) -> Result<()> {
+        if previous_status == next_status {
+            return Ok(());
+        }
+        self.decrement_status_count(previous_status)?;
+        self.increment_status_count(next_status)?;
+        Ok(())
+    }
 }
 
 #[account]
@@ -391,4 +484,6 @@ pub enum PingyError {
     DepositRejectedPermanently,
     #[msg("Nothing to refund")]
     NothingToRefund,
+    #[msg("Accounting underflow")]
+    AccountingUnderflow,
 }
