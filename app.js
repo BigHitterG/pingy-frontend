@@ -80,6 +80,7 @@ const $ = (id) => document.getElementById(id);
     const MC_SPAWN = 6600;
     const MC_BONDED = 66000;
     const SPAWN_FEE_BPS = 100;
+    const POST_SPAWN_TRADING_FEE_BPS = 100;
     const BPS_DENOM = 10_000;
 
 
@@ -2583,13 +2584,13 @@ if(connectBtn){
         statePill.textContent = "BONDING";
         phaseBar.style.width = Math.round(bondingProgress01(r)*100) + "%";
         const progressLine = $("spawnProgressLine");
-        if(progressLine) progressLine.textContent = `spawn fee paid: ${Number(r.spawn_fee_paid_sol || 0).toFixed(3)} SOL`;
+        if(progressLine) progressLine.textContent = `spawn fee paid: ${Number(r.spawn_fee_paid_sol || 0).toFixed(3)} SOL • trading fee: ${POST_SPAWN_TRADING_FEE_BPS / 100}% (displayed only; enforcement depends on trade routing)`;
       } else {
         phaseLabel.textContent = "BONDED";
         statePill.textContent = "BONDED";
         phaseBar.style.width = "100%";
         const progressLine = $("spawnProgressLine");
-        if(progressLine) progressLine.textContent = `spawn fee paid: ${Number(r.spawn_fee_paid_sol || 0).toFixed(3)} SOL`;
+        if(progressLine) progressLine.textContent = `spawn fee paid: ${Number(r.spawn_fee_paid_sol || 0).toFixed(3)} SOL • trading fee: ${POST_SPAWN_TRADING_FEE_BPS / 100}% (displayed only; enforcement depends on trade routing)`;
       }
 
       const me =
