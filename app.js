@@ -96,7 +96,11 @@ const $ = (id) => document.getElementById(id);
     let toast;
     let toastText;
     let toastTimer = null;
+    let onchainBanner;
+    let onchainBannerText;
     let onchainEnabled = true;
+    const onchainReasons = [];
+    let traceCounter = 0;
 
     function showToast(msg){
       if(!toast || !toastText) return alert(msg || "connect wallet first.");
@@ -106,24 +110,51 @@ const $ = (id) => document.getElementById(id);
       toastTimer = setTimeout(() => toast.classList.remove("on"), 2400);
     }
 
+    function traceStep(label, details, toastMsg){
+      traceCounter += 1;
+      const line = `[ping-trace ${String(traceCounter).padStart(3, "0")}] ${label}`;
+      if(details !== undefined){
+        console.log(line, details);
+      } else {
+        console.log(line);
+      }
+      if(toastMsg) showToast(toastMsg);
+    }
+
+    function updateOnchainBanner(){
+      if(!onchainBanner || !onchainBannerText) return;
+      const suffix = onchainReasons.length ? ` (${onchainReasons.join("; ")})` : "";
+      onchainBannerText.textContent = `on-chain status: ${onchainEnabled ? "ENABLED" : "DISABLED"}${suffix}`;
+      onchainBanner.style.borderColor = onchainEnabled ? "#204a2c" : "#5a2a2a";
+    }
+
     function reportFatal(err){
       surfaceFatalMessage("[pingy] init failed", err);
     }
 
     function disableOnchainFeatures(reason){
       onchainEnabled = false;
+      if(reason && !onchainReasons.includes(reason)) onchainReasons.push(reason);
       console.warn("[pingy] on-chain disabled:", reason);
+      updateOnchainBanner();
       showToast(reason + " — using mock escrow");
       // DO NOT disable ping/unping confirm buttons.
     }
 
     function shouldUseOnchain(){
-      return !!onchainEnabled && !!connectedWallet;
+      const ok = !!onchainEnabled && !!connectedWallet;
+      if(!ok){
+        const reason = !onchainEnabled ? (onchainReasons[0] || "on-chain disabled") : "wallet not connected";
+        traceStep("shouldUseOnchain=false", { onchainEnabled, connectedWallet: !!connectedWallet, reason });
+      }
+      return ok;
     }
 
     async function validateOnchainConfig(){
+      traceStep("validateOnchainConfig:start", { programId: PROGRAM_ID.toBase58(), rpc: DEVNET_RPC });
       if(PROGRAM_ID.toBase58() === "11111111111111111111111111111111"){
         disableOnchainFeatures("On-chain disabled: PROGRAM_ID misconfigured");
+        traceStep("validateOnchainConfig:failed", { reason: "default program id" }, "on-chain disabled: program id misconfigured");
         return;
       }
       try {
@@ -131,11 +162,18 @@ const $ = (id) => document.getElementById(id);
         console.log("[pingy] program account:", info);
         if(!info || !info.executable){
           disableOnchainFeatures("On-chain disabled: PROGRAM_ID misconfigured");
+          traceStep("validateOnchainConfig:failed", { reason: "program account not executable" }, "on-chain disabled: program account invalid");
+          return;
         }
       } catch (err){
         console.error("[pingy] program account check failed", err);
         disableOnchainFeatures("On-chain disabled: PROGRAM_ID misconfigured");
+        traceStep("validateOnchainConfig:failed", { reason: String(err?.message || err) }, "on-chain disabled: rpc program check failed");
+        return;
       }
+      onchainEnabled = true;
+      traceStep("validateOnchainConfig:ok", { onchainEnabled: true });
+      updateOnchainBanner();
     }
 
     function getErrorLogs(err){
@@ -541,6 +579,7 @@ const $ = (id) => document.getElementById(id);
         txInstructionProgramIds: tx.instructions.map((i) => i.programId?.toBase58?.()),
       });
 
+      traceStep("tx:simulate:start", { ixCount: instructions.length });
       try {
         const sim = await connection.simulateTransaction(tx, { sigVerify: false, commitment: "processed" });
         console.log("[pingy] tx simulation err:", sim?.value?.err);
@@ -565,21 +604,36 @@ const $ = (id) => document.getElementById(id);
         hasSignAndSendTransaction: typeof provider.signAndSendTransaction,
       });
 
-      let signedTx;
-      try {
-        signedTx = await provider.signTransaction(tx);
-      } catch(e){
-        console.error("signTransaction error", e);
-        showToast("signTransaction: " + String(e?.message || e));
-        throw e;
-      }
-      if(!signedTx) throw new Error("Missing signed transaction");
-
       let sig;
-      try {
-        sig = await connection.sendRawTransaction(signedTx.serialize(), { skipPreflight:false });
-      } catch(e){ showToast("sendRawTransaction: " + (e?.message||e)); throw e; }
+      if(typeof provider.signAndSendTransaction === "function"){
+        traceStep("tx:signAndSendTransaction", { via: "provider.signAndSendTransaction" }, "tx step: opening phantom with signAndSend...");
+        try {
+          const sendRes = await provider.signAndSendTransaction(tx, { skipPreflight: false });
+          sig = typeof sendRes === "string" ? sendRes : sendRes?.signature;
+          traceStep("tx:signAndSendTransaction:ok", { signature: sig });
+        } catch (e){
+          traceStep("tx:signAndSendTransaction:failed", { error: String(e?.message || e) }, "tx step: signAndSend failed, trying fallback...");
+        }
+      }
+
+      if(!sig){
+        traceStep("tx:fallback-signTransaction", { via: "provider.signTransaction + sendRawTransaction" }, "tx step: opening phantom with fallback signer...");
+        let signedTx;
+        try {
+          signedTx = await provider.signTransaction(tx);
+        } catch(e){
+          console.error("signTransaction error", e);
+          showToast("signTransaction: " + String(e?.message || e));
+          throw e;
+        }
+        if(!signedTx) throw new Error("Missing signed transaction");
+
+        try {
+          sig = await connection.sendRawTransaction(signedTx.serialize(), { skipPreflight:false });
+        } catch(e){ showToast("sendRawTransaction: " + (e?.message||e)); throw e; }
+      }
       if(!sig) throw new Error("Missing transaction signature");
+      traceStep("tx:submitted", { signature: sig }, "tx submitted; waiting for confirmation...");
 
       let txLogs = [];
       const fetchTxLogs = async () => {
@@ -592,6 +646,7 @@ const $ = (id) => document.getElementById(id);
         }
       };
 
+      traceStep("tx:confirm:start", { signature: sig });
       try {
         const confirmRes = await connection.confirmTransaction({ signature:sig, blockhash, lastValidBlockHeight }, "confirmed");
         if(confirmRes?.value?.err){
@@ -612,7 +667,7 @@ const $ = (id) => document.getElementById(id);
         throw e;
       }
 
-      showToast("tx confirmed: " + sig);
+      traceStep("tx:confirm:ok", { signature: sig }, "tx confirmed: " + sig);
       return sig;
     }
 
@@ -1101,6 +1156,9 @@ const $ = (id) => document.getElementById(id);
 
       toast = $("toast");
       toastText = $("toastText");
+      onchainBanner = $("onchainBanner");
+      onchainBannerText = $("onchainBannerText");
+      updateOnchainBanner();
 
       loadProfileLocal();
 
@@ -1152,6 +1210,23 @@ const $ = (id) => document.getElementById(id);
         clearConnectedWallet();
       });
       walletListenersBound = true;
+    }
+
+    async function runWalletSmokeTest(){
+      if(!connectedWallet) return showToast("connect wallet first.");
+      const walletPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
+      traceStep("wallet-smoke-test:start", { wallet: connectedWallet }, "smoke test: requesting phantom popup...");
+      try {
+        const sig = await sendProgramInstruction(SystemProgram.transfer({
+          fromPubkey: walletPk,
+          toPubkey: walletPk,
+          lamports: 1,
+        }));
+        traceStep("wallet-smoke-test:ok", { signature: sig }, "smoke test confirmed");
+      } catch (err){
+        traceStep("wallet-smoke-test:failed", { error: String(err?.message || err) }, "smoke test failed");
+        reportTxError(err, "wallet smoke test failed");
+      }
     }
 
     // Connect wallet (Phantom)
@@ -2219,6 +2294,7 @@ if(connectBtn){
     }
     $("pingBtn").addEventListener("click", () => openPingModal(activeRoomId));
     $("unpingBtn").addEventListener("click", () => openUnpingModal(activeRoomId));
+    $("pingWalletSmokeTest").addEventListener("click", runWalletSmokeTest);
 
     function nudgeChange(r, delta){
       r.change_pct = Number(r.change_pct || 0) + delta;
@@ -2227,6 +2303,7 @@ if(connectBtn){
 
     $("pingConfirm").addEventListener("click", async () => {
       const rid = modalRoomId || activeRoomId;
+      traceStep("pingConfirm:clicked", { rid, connectedWallet: connectedWallet || null }, "ping trace: confirm clicked");
       const r = roomById(rid);
       if(!r) return;
       const s = ($("pingAmount").value||"").trim();
