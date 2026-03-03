@@ -2255,9 +2255,9 @@ if(connectBtn){
         let extras = "";
         if(!isSys && r){
           const wallet = m.wallet;
-          if(isApprover(r, wallet)) extras += `<span class="k">APPROVER</span>`;
-          else if(isApproved(r, wallet)) extras += `<span class="k">PINGER</span>`;
-          else if(isPending(r, wallet)) extras += `<span class="k">PENDING</span>`;
+          if(isApprover(r, wallet)) extras += `<span class="k">approver</span>`;
+          else if(isApproved(r, wallet)) extras += `<span class="k">pinger</span>`;
+          else if(isPending(r, wallet)) extras += `<span class="k">pending approval</span>`;
 
           const thread = state.onchain?.[roomId] || {};
           if(thread.byWallet?.[wallet]){
