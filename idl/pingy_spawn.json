@@ -1,5 +1,5 @@
 {
-  "address": "Pingy1111111111111111111111111111111111111",
+  "address": "11111111111111111111111111111111",
   "metadata": {
     "name": "pingy_spawn",
     "version": "0.1.0",
@@ -9,7 +9,7 @@
   "instructions": [
     {
       "name": "initializeThread",
-      "discriminator": [0,0,0,0,0,0,0,1],
+      "discriminator": [207,78,91,185,87,244,142,11],
       "accounts": [
         {"name":"admin","writable":true,"signer":true},
         {"name":"thread","writable":true},
@@ -20,11 +20,12 @@
     },
     {
       "name": "pingDeposit",
-      "discriminator": [0,0,0,0,0,0,0,2],
+      "discriminator": [129,34,249,83,46,6,30,88],
       "accounts": [
         {"name":"user","writable":true,"signer":true},
         {"name":"thread","writable":true},
         {"name":"deposit","writable":true},
+        {"name":"userVault","writable":true},
         {"name":"systemProgram","address":"11111111111111111111111111111111"}
       ],
       "args": [
@@ -34,7 +35,7 @@
     },
     {
       "name": "approveUser",
-      "discriminator": [0,0,0,0,0,0,0,3],
+      "discriminator": [62,2,57,73,112,114,126,68],
       "accounts": [
         {"name":"admin","writable":true,"signer":true},
         {"name":"thread"},
@@ -47,12 +48,12 @@
     },
     {
       "name": "rejectAndRefund",
-      "discriminator": [0,0,0,0,0,0,0,4],
+      "discriminator": [129,30,228,60,177,153,19,135],
       "accounts": [
         {"name":"admin","writable":true,"signer":true},
         {"name":"thread"},
         {"name":"deposit","writable":true},
-        {"name":"user","writable":true}
+        {"name":"userVault","writable":true}
       ],
       "args": [
         {"name":"threadId","type":"string"},
@@ -61,27 +62,42 @@
     },
     {
       "name": "unpingWithdraw",
-      "discriminator": [0,0,0,0,0,0,0,5],
+      "discriminator": [2,97,69,159,243,164,81,58],
       "accounts": [
         {"name":"user","writable":true,"signer":true},
         {"name":"thread"},
-        {"name":"deposit","writable":true}
+        {"name":"deposit","writable":true},
+        {"name":"userVault","writable":true}
       ],
       "args": [{"name":"threadId","type":"string"}]
+    },
+    {
+      "name": "refundAll",
+      "discriminator": [174,87,222,126,23,59,189,155],
+      "accounts": [
+        {"name":"user","writable":true,"signer":true},
+        {"name":"userVault","writable":true},
+        {"name":"systemProgram","address":"11111111111111111111111111111111"}
+      ],
+      "args": []
     }
   ],
   "accounts": [
     {
       "name": "thread",
-      "discriminator": [0,0,0,0,0,0,1,0]
+      "discriminator": [186,27,154,111,51,36,159,90]
     },
     {
       "name": "deposit",
-      "discriminator": [0,0,0,0,0,0,1,1]
+      "discriminator": [148,146,121,66,207,173,21,227]
     },
     {
       "name": "spawnPool",
-      "discriminator": [0,0,0,0,0,0,1,2]
+      "discriminator": [133,177,14,173,8,251,202,73]
+    },
+    {
+      "name": "userVault",
+      "discriminator": [23,76,96,159,210,10,5,22]
     }
   ],
   "types": [
@@ -106,7 +122,7 @@
           {"name":"userPubkey","type":"pubkey"},
           {"name":"status","type":{"defined":{"name":"depositStatus"}}},
           {"name":"rejectedOnce","type":"bool"},
-          {"name":"amountRecordedLamports","type":"u64"}
+          {"name":"allocatedLamports","type":"u64"}
         ]
       }
     },
@@ -116,6 +132,16 @@
         "kind": "struct",
         "fields": [
           {"name":"threadId","type":"string"}
+        ]
+      }
+    },
+    {
+      "name": "userVault",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {"name":"userPubkey","type":"pubkey"},
+          {"name":"refundableLamports","type":"u64"}
         ]
       }
     },
