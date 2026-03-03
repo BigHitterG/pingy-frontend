@@ -24,6 +24,9 @@
         <button class="btn subtle" id="homeBtn" style="display:none;">home</button>
       </div>
     </div>
+    <div class="panel" id="onchainBanner" style="margin-bottom:10px; padding:8px 10px;">
+      <div class="muted tiny" id="onchainBannerText">on-chain status: checking…</div>
+    </div>
 
     <!-- HOME VIEW -->
     <div class="view on" id="homeView">
@@ -307,6 +310,7 @@
         </div>
 
         <div class="row" style="justify-content:flex-end;">
+          <button class="btn subtle" id="pingWalletSmokeTest">wallet smoke test (1 lamport)</button>
           <button class="btn" id="pingConfirm">ping</button>
         </div>
       </div>
