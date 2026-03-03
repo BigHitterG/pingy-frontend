@@ -912,7 +912,7 @@ const $ = (id) => document.getElementById(id);
         o = next;
         participants.push(pk.toBase58());
       }
-      return { threadId, admin: adminPubkey.toBase58(), spawnState, participants };
+      return { threadId, admin: adminPubkey.toBase58(), admin_pubkey: adminPubkey, spawnState, participants };
     }
 
     function decodeDepositAccount(data){
@@ -988,6 +988,7 @@ const $ = (id) => document.getElementById(id);
         roomId,
         threadPda: threadPda.toBase58(),
         admin: thread.admin,
+        admin_pubkey: thread.admin_pubkey,
         participants: thread.participants,
         approverWallets: thread.admin ? [thread.admin] : [],
         byWallet,
@@ -1139,6 +1140,10 @@ const $ = (id) => document.getElementById(id);
 
     function myEscrow(roomId){
       if(!connectedWallet) return 0;
+      const snapshot = state.onchain?.[roomId];
+      if(snapshot?.byWallet?.[connectedWallet]){
+        return Math.max(0, Number(snapshot.byWallet[connectedWallet].escrow_sol || 0));
+      }
       const r = roomById(roomId);
       const p = r.positions[connectedWallet] || {escrow_sol:0, bond_sol:0, spawn_tokens:0};
       return Number(p.escrow_sol||0);
@@ -1161,6 +1166,13 @@ const $ = (id) => document.getElementById(id);
         const lamports = await fetchConnectedWalletDepositLamports(roomId);
         if(activeRoomId !== roomId) return;
         const escrowSol = Number(lamports || 0) / LAMPORTS_PER_SOL;
+        const snapshot = state.onchain?.[roomId] || {};
+        snapshot.byWallet = snapshot.byWallet || {};
+        snapshot.byWallet[connectedWallet] = {
+          ...(snapshot.byWallet[connectedWallet] || {}),
+          escrow_sol: escrowSol,
+        };
+        state.onchain[roomId] = snapshot;
         meLine.textContent = `you: ${escrowSol.toFixed(3)} SOL escrow`;
       } catch(err){
         console.warn("[pingy] failed to refresh connected wallet deposit", err);
@@ -1532,8 +1544,20 @@ if(connectBtn){
     }
 
     function isCreator(r, wallet){ return !!wallet && wallet === r.creator_wallet; }
+    function statusToString(status){
+      if(typeof status === "string") return status;
+      if(typeof status === "number") return String(status);
+      if(status && typeof status === "object"){
+        if(typeof status.value === "string") return status.value;
+        if(typeof status.kind === "string") return status.kind;
+        const keys = Object.keys(status);
+        if(keys.length === 1) return keys[0];
+      }
+      return String(status || "");
+    }
+
     function normalizeDepositStatus(status){
-      const raw = String(status || "").toLowerCase();
+      const raw = statusToString(status).toLowerCase();
       if(raw === "rejected") return "denied";
       return raw;
     }
@@ -2157,10 +2181,20 @@ if(connectBtn){
           else if(isApproved(r, wallet)) extras += `<span class="k">PINGER</span>`;
           else if(isPending(r, wallet)) extras += `<span class="k">PENDING</span>`;
 
-          const connectedWalletBase58 = toBase58String(connectedWallet);
-          const threadAdminBase58 = toBase58String(state.onchain?.[roomId]?.admin || r.creator_wallet);
-          const isThreadAdmin = !!connectedWalletBase58 && !!threadAdminBase58 && connectedWalletBase58 === threadAdminBase58;
-          if(isThreadAdmin && isPending(r, wallet)){
+          const thread = state.onchain?.[roomId] || {};
+          const threadAdminPubkey = thread.admin_pubkey || thread.admin;
+          const walletPubkey = window.solana?.publicKey || connectedWallet;
+          const isAdmin = !!threadAdminPubkey && !!walletPubkey && toBase58String(threadAdminPubkey) === toBase58String(walletPubkey);
+          if(thread.byWallet?.[wallet]){
+            console.log("[pingy] deposit status runtime", {
+              wallet,
+              rawStatus: thread.byWallet[wallet].status,
+              rawStatusType: typeof thread.byWallet[wallet].status,
+              normalizedStatus: statusToString(thread.byWallet[wallet].status),
+            });
+          }
+          const pendingStatus = normalizeDepositStatus(thread.byWallet?.[wallet]?.status || walletStatus(r, wallet)) === "pending";
+          if(isAdmin && pendingStatus){
             extras += ` <button class="btn subtle small" data-approve="${escapeText(wallet)}">approve</button>`;
             extras += ` <button class="btn subtle small" data-deny="${escapeText(wallet)}">deny</button>`;
           }
@@ -2440,7 +2474,7 @@ if(connectBtn){
       if(!r) return;
       if(r.state !== "SPAWNING") return alert("refunds are only available before spawn.");
       modalRoomId = rid;
-      $("unpingAmount").value = "";
+      $("unpingAmount").value = "full withdraw";
       $("unpingRoomLine").textContent = `coin: ${r.name}  $${r.ticker}`;
       openModal($("unpingBack"));
     }
@@ -2570,14 +2604,10 @@ if(connectBtn){
       const rid = modalRoomId || activeRoomId;
       const r = roomById(rid);
       if(!r) return;
-      const s = ($("unpingAmount").value||"").trim();
-      const sol = Number(s);
-      if(!s || Number.isNaN(sol) || sol <= 0) return alert("enter a valid SOL amount.");
-
       if(r.state === "SPAWNING"){
-        const cur = myEscrow(rid);
+        const curLamports = await fetchConnectedWalletDepositLamports(rid);
+        const cur = Number(curLamports || 0) / LAMPORTS_PER_SOL;
         if(cur <= 0) return alert("you have no escrow to unping.");
-        if(sol > cur) return alert("cannot unping more than your escrow.");
         if(shouldUseOnchain()){
           try{
             await unpingWithdrawTx(rid);
@@ -2585,12 +2615,13 @@ if(connectBtn){
             reportTxError(e, "unping transaction failed");
             return;
           }
+          showToast("unping submitted. click refund to transfer escrow from user vault.");
         } else {
-          applySpawnUncommit(r, connectedWallet, sol);
+          applySpawnUncommit(r, connectedWallet, cur);
         }
 
         state.chat[r.id] = state.chat[r.id] || [];
-        state.chat[r.id].push({ ts: nowStamp(), wallet: connectedWallet, text:`unpinged ${sol.toFixed(3)} SOL (escrow).` });
+        state.chat[r.id].push({ ts: nowStamp(), wallet: connectedWallet, text:`unpinged ${cur.toFixed(3)} SOL (full escrow withdrawal). click refund to claim.` });
 
       } else {
         return alert("refunds are disabled after spawn.");
