@@ -3,6 +3,9 @@ use anchor_lang::system_program;
 
 declare_id!("FSvYheeHSLjU6UKqka5AnMeaPwsQBrLm8dCL4VtFpf5R");
 
+pub const SPAWN_FEE_BPS: u64 = 100;
+pub const BPS_DENOM: u64 = 10_000;
+
 #[program]
 pub mod pingy_spawn {
     use super::*;
@@ -20,6 +23,11 @@ pub mod pingy_spawn {
 
         let spawn_pool = &mut ctx.accounts.spawn_pool;
         spawn_pool.thread_id = thread_id;
+
+        let fee_vault = &mut ctx.accounts.fee_vault;
+        if !fee_vault.initialized {
+            fee_vault.initialized = true;
+        }
 
         Ok(())
     }
@@ -97,6 +105,57 @@ pub mod pingy_spawn {
         } else {
             thread.apply_status_transition(previous_status, deposit.status)?;
         }
+
+        Ok(())
+    }
+
+
+    pub fn execute_spawn(
+        ctx: Context<ExecuteSpawn>,
+        thread_id: String,
+        total_to_use: u64,
+    ) -> Result<()> {
+        require!(total_to_use > 0, PingyError::InvalidAmount);
+
+        let thread = &mut ctx.accounts.thread;
+        require!(thread.thread_id == thread_id, PingyError::ThreadMismatch);
+        require!(thread.spawn_state == SpawnState::Open, PingyError::SpawnAlreadyClosed);
+
+        let fee = total_to_use
+            .checked_mul(SPAWN_FEE_BPS)
+            .ok_or(PingyError::AmountOverflow)?
+            .checked_div(BPS_DENOM)
+            .ok_or(PingyError::AmountOverflow)?;
+        let net = total_to_use
+            .checked_sub(fee)
+            .ok_or(PingyError::AccountingUnderflow)?;
+
+        let fee_transfer_ctx = CpiContext::new(
+            ctx.accounts.system_program.to_account_info(),
+            system_program::Transfer {
+                from: ctx.accounts.admin.to_account_info(),
+                to: ctx.accounts.fee_vault.to_account_info(),
+            },
+        );
+        system_program::transfer(fee_transfer_ctx, fee)?;
+
+        let net_transfer_ctx = CpiContext::new(
+            ctx.accounts.system_program.to_account_info(),
+            system_program::Transfer {
+                from: ctx.accounts.admin.to_account_info(),
+                to: ctx.accounts.spawn_pool.to_account_info(),
+            },
+        );
+        system_program::transfer(net_transfer_ctx, net)?;
+
+        thread.spawn_state = SpawnState::Closed;
+
+        emit!(SpawnExecuted {
+            thread_id,
+            total_to_use,
+            fee,
+            net,
+        });
 
         Ok(())
     }
@@ -241,6 +300,14 @@ pub struct InitializeThread<'info> {
         bump
     )]
     pub spawn_pool: Account<'info, SpawnPool>,
+    #[account(
+        init_if_needed,
+        payer = admin,
+        space = 8 + FeeVault::SIZE,
+        seeds = [b"fee_vault"],
+        bump
+    )]
+    pub fee_vault: Account<'info, FeeVault>,
     pub system_program: Program<'info, System>,
 }
 
@@ -343,6 +410,32 @@ pub struct UserWithdraw<'info> {
         bump
     )]
     pub user_vault: Account<'info, UserVault>,
+}
+
+#[derive(Accounts)]
+#[instruction(thread_id: String)]
+pub struct ExecuteSpawn<'info> {
+    #[account(mut, address = thread.admin_pubkey)]
+    pub admin: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [b"thread", thread_id.as_bytes()],
+        bump
+    )]
+    pub thread: Account<'info, Thread>,
+    #[account(
+        mut,
+        seeds = [b"spawn_pool", thread_id.as_bytes()],
+        bump
+    )]
+    pub spawn_pool: Account<'info, SpawnPool>,
+    #[account(
+        mut,
+        seeds = [b"fee_vault"],
+        bump
+    )]
+    pub fee_vault: Account<'info, FeeVault>,
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
@@ -450,8 +543,25 @@ pub struct UserVault {
     pub refundable_lamports: u64,
 }
 
+#[account]
+pub struct FeeVault {
+    pub initialized: bool,
+}
+
 impl UserVault {
     pub const SIZE: usize = 32 + 8;
+}
+
+impl FeeVault {
+    pub const SIZE: usize = 1;
+}
+
+#[event]
+pub struct SpawnExecuted {
+    pub thread_id: String,
+    pub total_to_use: u64,
+    pub fee: u64,
+    pub net: u64,
 }
 
 impl SpawnPool {
@@ -491,4 +601,6 @@ pub enum PingyError {
     NothingToRefund,
     #[msg("Accounting underflow")]
     AccountingUnderflow,
+    #[msg("Spawn already closed")]
+    SpawnAlreadyClosed,
 }

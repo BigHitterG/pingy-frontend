@@ -9,95 +9,348 @@
   "instructions": [
     {
       "name": "initializeThread",
-      "discriminator": [207,78,91,185,87,244,142,11],
-      "accounts": [
-        {"name":"admin","writable":true,"signer":true},
-        {"name":"thread","writable":true},
-        {"name":"spawnPool","writable":true},
-        {"name":"systemProgram","address":"11111111111111111111111111111111"}
+      "discriminator": [
+        207,
+        78,
+        91,
+        185,
+        87,
+        244,
+        142,
+        11
       ],
-      "args": [{"name":"threadId","type":"string"}]
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "thread",
+          "writable": true
+        },
+        {
+          "name": "spawnPool",
+          "writable": true
+        },
+        {
+          "name": "feeVault",
+          "writable": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "threadId",
+          "type": "string"
+        }
+      ]
     },
     {
       "name": "pingDeposit",
-      "discriminator": [129,34,249,83,46,6,30,88],
+      "discriminator": [
+        129,
+        34,
+        249,
+        83,
+        46,
+        6,
+        30,
+        88
+      ],
       "accounts": [
-        {"name":"user","writable":true,"signer":true},
-        {"name":"thread","writable":true},
-        {"name":"deposit","writable":true},
-        {"name":"userVault","writable":true},
-        {"name":"systemProgram","address":"11111111111111111111111111111111"}
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "thread",
+          "writable": true
+        },
+        {
+          "name": "deposit",
+          "writable": true
+        },
+        {
+          "name": "userVault",
+          "writable": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
       ],
       "args": [
-        {"name":"threadId","type":"string"},
-        {"name":"amountLamports","type":"u64"}
+        {
+          "name": "threadId",
+          "type": "string"
+        },
+        {
+          "name": "amountLamports",
+          "type": "u64"
+        }
       ]
     },
     {
       "name": "approveUser",
-      "discriminator": [62,2,57,73,112,114,126,68],
+      "discriminator": [
+        62,
+        2,
+        57,
+        73,
+        112,
+        114,
+        126,
+        68
+      ],
       "accounts": [
-        {"name":"admin","writable":true,"signer":true},
-        {"name":"thread"},
-        {"name":"deposit","writable":true}
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "thread"
+        },
+        {
+          "name": "deposit",
+          "writable": true
+        }
       ],
       "args": [
-        {"name":"threadId","type":"string"},
-        {"name":"userPubkey","type":"pubkey"}
+        {
+          "name": "threadId",
+          "type": "string"
+        },
+        {
+          "name": "userPubkey",
+          "type": "pubkey"
+        }
       ]
     },
     {
       "name": "rejectAndRefund",
-      "discriminator": [129,30,228,60,177,153,19,135],
+      "discriminator": [
+        129,
+        30,
+        228,
+        60,
+        177,
+        153,
+        19,
+        135
+      ],
       "accounts": [
-        {"name":"admin","writable":true,"signer":true},
-        {"name":"thread"},
-        {"name":"deposit","writable":true},
-        {"name":"userVault","writable":true}
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "thread"
+        },
+        {
+          "name": "deposit",
+          "writable": true
+        },
+        {
+          "name": "userVault",
+          "writable": true
+        }
       ],
       "args": [
-        {"name":"threadId","type":"string"},
-        {"name":"userPubkey","type":"pubkey"}
+        {
+          "name": "threadId",
+          "type": "string"
+        },
+        {
+          "name": "userPubkey",
+          "type": "pubkey"
+        }
       ]
     },
     {
       "name": "unpingWithdraw",
-      "discriminator": [2,97,69,159,243,164,81,58],
-      "accounts": [
-        {"name":"user","writable":true,"signer":true},
-        {"name":"thread"},
-        {"name":"deposit","writable":true},
-        {"name":"userVault","writable":true}
+      "discriminator": [
+        2,
+        97,
+        69,
+        159,
+        243,
+        164,
+        81,
+        58
       ],
-      "args": [{"name":"threadId","type":"string"}]
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "thread"
+        },
+        {
+          "name": "deposit",
+          "writable": true
+        },
+        {
+          "name": "userVault",
+          "writable": true
+        }
+      ],
+      "args": [
+        {
+          "name": "threadId",
+          "type": "string"
+        }
+      ]
     },
     {
       "name": "refundAll",
-      "discriminator": [174,87,222,126,23,59,189,155],
+      "discriminator": [
+        174,
+        87,
+        222,
+        126,
+        23,
+        59,
+        189,
+        155
+      ],
       "accounts": [
-        {"name":"user","writable":true,"signer":true},
-        {"name":"userVault","writable":true},
-        {"name":"systemProgram","address":"11111111111111111111111111111111"}
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "userVault",
+          "writable": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
       ],
       "args": []
+    },
+    {
+      "name": "executeSpawn",
+      "discriminator": [
+        109,
+        250,
+        119,
+        74,
+        96,
+        234,
+        223,
+        177
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "thread",
+          "writable": true
+        },
+        {
+          "name": "spawnPool",
+          "writable": true
+        },
+        {
+          "name": "feeVault",
+          "writable": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "threadId",
+          "type": "string"
+        },
+        {
+          "name": "totalToUse",
+          "type": "u64"
+        }
+      ]
     }
   ],
   "accounts": [
     {
       "name": "thread",
-      "discriminator": [186,27,154,111,51,36,159,90]
+      "discriminator": [
+        186,
+        27,
+        154,
+        111,
+        51,
+        36,
+        159,
+        90
+      ]
     },
     {
       "name": "deposit",
-      "discriminator": [148,146,121,66,207,173,21,227]
+      "discriminator": [
+        148,
+        146,
+        121,
+        66,
+        207,
+        173,
+        21,
+        227
+      ]
     },
     {
       "name": "spawnPool",
-      "discriminator": [133,177,14,173,8,251,202,73]
+      "discriminator": [
+        133,
+        177,
+        14,
+        173,
+        8,
+        251,
+        202,
+        73
+      ]
     },
     {
       "name": "userVault",
-      "discriminator": [23,76,96,159,210,10,5,22]
+      "discriminator": [
+        23,
+        76,
+        96,
+        159,
+        210,
+        10,
+        5,
+        22
+      ]
+    },
+    {
+      "name": "feeVault",
+      "discriminator": [
+        192,
+        178,
+        69,
+        232,
+        58,
+        149,
+        157,
+        132
+      ]
     }
   ],
   "types": [
@@ -106,12 +359,34 @@
       "type": {
         "kind": "struct",
         "fields": [
-          {"name":"threadId","type":"string"},
-          {"name":"adminPubkey","type":"pubkey"},
-          {"name":"spawnState","type":{"defined":{"name":"spawnState"}}},
-          {"name":"pendingCount","type":"u32"},
-          {"name":"approvedCount","type":"u32"},
-          {"name":"totalAllocatedLamports","type":"u64"}
+          {
+            "name": "threadId",
+            "type": "string"
+          },
+          {
+            "name": "adminPubkey",
+            "type": "pubkey"
+          },
+          {
+            "name": "spawnState",
+            "type": {
+              "defined": {
+                "name": "spawnState"
+              }
+            }
+          },
+          {
+            "name": "pendingCount",
+            "type": "u32"
+          },
+          {
+            "name": "approvedCount",
+            "type": "u32"
+          },
+          {
+            "name": "totalAllocatedLamports",
+            "type": "u64"
+          }
         ]
       }
     },
@@ -120,11 +395,30 @@
       "type": {
         "kind": "struct",
         "fields": [
-          {"name":"threadId","type":"string"},
-          {"name":"userPubkey","type":"pubkey"},
-          {"name":"status","type":{"defined":{"name":"depositStatus"}}},
-          {"name":"rejectedOnce","type":"bool"},
-          {"name":"allocatedLamports","type":"u64"}
+          {
+            "name": "threadId",
+            "type": "string"
+          },
+          {
+            "name": "userPubkey",
+            "type": "pubkey"
+          },
+          {
+            "name": "status",
+            "type": {
+              "defined": {
+                "name": "depositStatus"
+              }
+            }
+          },
+          {
+            "name": "rejectedOnce",
+            "type": "bool"
+          },
+          {
+            "name": "allocatedLamports",
+            "type": "u64"
+          }
         ]
       }
     },
@@ -133,7 +427,10 @@
       "type": {
         "kind": "struct",
         "fields": [
-          {"name":"threadId","type":"string"}
+          {
+            "name": "threadId",
+            "type": "string"
+          }
         ]
       }
     },
@@ -142,8 +439,14 @@
       "type": {
         "kind": "struct",
         "fields": [
-          {"name":"userPubkey","type":"pubkey"},
-          {"name":"refundableLamports","type":"u64"}
+          {
+            "name": "userPubkey",
+            "type": "pubkey"
+          },
+          {
+            "name": "refundableLamports",
+            "type": "u64"
+          }
         ]
       }
     },
@@ -151,7 +454,14 @@
       "name": "spawnState",
       "type": {
         "kind": "enum",
-        "variants": [{"name":"open"},{"name":"closed"}]
+        "variants": [
+          {
+            "name": "open"
+          },
+          {
+            "name": "closed"
+          }
+        ]
       }
     },
     {
@@ -159,12 +469,59 @@
       "type": {
         "kind": "enum",
         "variants": [
-          {"name":"pending"},
-          {"name":"approved"},
-          {"name":"rejected"},
-          {"name":"withdrawn"}
+          {
+            "name": "pending"
+          },
+          {
+            "name": "approved"
+          },
+          {
+            "name": "rejected"
+          },
+          {
+            "name": "withdrawn"
+          }
         ]
       }
+    },
+    {
+      "name": "feeVault",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "initialized",
+            "type": "bool"
+          }
+        ]
+      }
+    }
+  ],
+  "events": [
+    {
+      "name": "spawnExecuted",
+      "fields": [
+        {
+          "name": "threadId",
+          "type": "string",
+          "index": false
+        },
+        {
+          "name": "totalToUse",
+          "type": "u64",
+          "index": false
+        },
+        {
+          "name": "fee",
+          "type": "u64",
+          "index": false
+        },
+        {
+          "name": "net",
+          "type": "u64",
+          "index": false
+        }
+      ]
     }
   ]
 }
