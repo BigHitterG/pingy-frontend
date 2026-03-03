@@ -1418,6 +1418,7 @@ async function connectMock(){
 
   try{
     const resp = await providerConnect(provider);
+    bindWalletListeners(provider);
     const nextWallet = resp && resp.publicKey ? resp.publicKey.toString() : null;
     if(!nextWallet) return;
 
@@ -2212,7 +2213,7 @@ if(connectBtn){
 
           const thread = state.onchain?.[roomId] || {};
           const threadAdminPubkey = thread.admin_pubkey || thread.admin;
-          const walletPubkey = state.walletPubkey;
+          const walletPubkey = connectedWallet;
           const isAdmin = !!threadAdminPubkey && !!walletPubkey && toBase58String(threadAdminPubkey) === toBase58String(walletPubkey);
           if(thread.byWallet?.[wallet]){
             console.log("[pingy] deposit status runtime", {
@@ -2287,7 +2288,8 @@ if(connectBtn){
       }
 
       addSystemEvent(roomId, `@${shortWallet(wallet)} approved — now a PINGER`);
-      await fetchRoomOnchainSnapshot(roomId);
+      await refreshRoomOnchainSnapshot(roomId, { force: true });
+      await refreshConnectedWalletEscrowLine(roomId);
       renderRoom(roomId);
       renderHome();
     }
@@ -2305,7 +2307,8 @@ if(connectBtn){
       }
 
       addSystemEvent(roomId, `@${shortWallet(wallet)} denied — escrow refunded`);
-      await fetchRoomOnchainSnapshot(roomId);
+      await refreshRoomOnchainSnapshot(roomId, { force: true });
+      await refreshConnectedWalletEscrowLine(roomId);
       renderRoom(roomId);
       renderHome();
     }
