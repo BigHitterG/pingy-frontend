@@ -470,6 +470,7 @@ const $ = (id) => document.getElementById(id);
     };
 
     const ONCHAIN_REFRESH_MS = 7000;
+    const LAMPORTS_PER_SOL = 1_000_000_000;
 
 
     function readU32LE(bytes, offset){
@@ -487,6 +488,17 @@ const $ = (id) => document.getElementById(id);
     function readPubkey(bytes, offset){
       const keyBytes = bytes.slice(offset, offset + 32);
       return [new PublicKey(keyBytes), offset + 32];
+    }
+
+    function toBase58String(value){
+      if(!value) return "";
+      if(typeof value === "string"){
+        try { return new PublicKey(value).toBase58(); }
+        catch(_e){ return ""; }
+      }
+      if(value?.toBase58) return value.toBase58();
+      try { return new PublicKey(value).toBase58(); }
+      catch(_e){ return ""; }
     }
 
     function encodeStringArg(v){
@@ -989,6 +1001,16 @@ const $ = (id) => document.getElementById(id);
       return snapshot;
     }
 
+    async function fetchConnectedWalletDepositLamports(roomId){
+      if(!roomId || !connectedWallet) return 0;
+      const walletPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
+      const [depositPda] = await deriveDepositPda(roomId, walletPk);
+      const depositInfo = await connection.getAccountInfo(depositPda, "confirmed");
+      if(!depositInfo || !depositInfo.data || depositInfo.data.length < 8) return 0;
+      const deposit = decodeDepositAccount(depositInfo.data);
+      return Number(deposit?.allocated_lamports || 0);
+    }
+
 
     async function fetchUserVaultSnapshot(){
       if(!connectedWallet) {
@@ -1126,6 +1148,23 @@ const $ = (id) => document.getElementById(id);
       const r = roomById(roomId);
       const p = r.positions[connectedWallet] || {escrow_sol:0, bond_sol:0, spawn_tokens:0};
       return Number(p.bond_sol||0);
+    }
+
+
+    async function refreshConnectedWalletEscrowLine(roomId){
+      if(!connectedWallet || !roomId || activeRoomId !== roomId) return;
+      const meLine = $("meLine");
+      if(!meLine) return;
+      const r = roomById(roomId);
+      if(!r || r.state !== "SPAWNING") return;
+      try {
+        const lamports = await fetchConnectedWalletDepositLamports(roomId);
+        if(activeRoomId !== roomId) return;
+        const escrowSol = Number(lamports || 0) / LAMPORTS_PER_SOL;
+        meLine.textContent = `you: ${escrowSol.toFixed(3)} SOL escrow`;
+      } catch(err){
+        console.warn("[pingy] failed to refresh connected wallet deposit", err);
+      }
     }
 
     function committedUsd(r){
@@ -2118,7 +2157,10 @@ if(connectBtn){
           else if(isApproved(r, wallet)) extras += `<span class="k">PINGER</span>`;
           else if(isPending(r, wallet)) extras += `<span class="k">PENDING</span>`;
 
-          if(connectedWallet && isApprover(r, connectedWallet) && isPending(r, wallet)){
+          const connectedWalletBase58 = toBase58String(connectedWallet);
+          const threadAdminBase58 = toBase58String(state.onchain?.[roomId]?.admin || r.creator_wallet);
+          const isThreadAdmin = !!connectedWalletBase58 && !!threadAdminBase58 && connectedWalletBase58 === threadAdminBase58;
+          if(isThreadAdmin && isPending(r, wallet)){
             extras += ` <button class="btn subtle small" data-approve="${escapeText(wallet)}">approve</button>`;
             extras += ` <button class="btn subtle small" data-deny="${escapeText(wallet)}">deny</button>`;
           }
@@ -2368,6 +2410,7 @@ if(connectBtn){
           ? `you: ${myEscrow(roomId).toFixed(3)} SOL escrow`
           : `you: ${myBond(roomId).toFixed(3)} SOL position`;
       $("meLine").textContent = connectedWallet ? me : "connect wallet";
+      if(connectedWallet && r.state === "SPAWNING") refreshConnectedWalletEscrowLine(roomId);
 
       $("pingBtn").disabled = !connectedWallet || !!(connectedWallet && r.blockedWallets && r.blockedWallets[connectedWallet]);
       $("unpingBtn").disabled = !connectedWallet || r.state !== "SPAWNING";
