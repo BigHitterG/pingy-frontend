@@ -114,7 +114,8 @@
           "signer": true
         },
         {
-          "name": "thread"
+          "name": "thread",
+          "writable": true
         },
         {
           "name": "deposit",
@@ -151,7 +152,8 @@
           "signer": true
         },
         {
-          "name": "thread"
+          "name": "thread",
+          "writable": true
         },
         {
           "name": "deposit",
@@ -204,7 +206,8 @@
           "signer": true
         },
         {
-          "name": "thread"
+          "name": "thread",
+          "writable": true
         },
         {
           "name": "deposit",

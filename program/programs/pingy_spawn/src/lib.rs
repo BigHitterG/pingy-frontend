@@ -360,6 +360,7 @@ pub struct ApproveUser<'info> {
     #[account(mut, address = thread.admin_pubkey)]
     pub admin: Signer<'info>,
     #[account(
+        mut,
         seeds = [b"thread", thread_id.as_bytes()],
         bump
     )]
@@ -378,6 +379,7 @@ pub struct AdminRefund<'info> {
     #[account(mut, address = thread.admin_pubkey)]
     pub admin: Signer<'info>,
     #[account(
+        mut,
         seeds = [b"thread", thread_id.as_bytes()],
         bump
     )]
@@ -415,6 +417,7 @@ pub struct UserWithdraw<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
     #[account(
+        mut,
         seeds = [b"thread", thread_id.as_bytes()],
         bump
     )]
