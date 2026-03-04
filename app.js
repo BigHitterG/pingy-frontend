@@ -857,7 +857,7 @@ const $ = (id) => document.getElementById(id);
         programId: PROGRAM_ID,
         keys: [
           { pubkey: walletPk, isSigner: true, isWritable: true },
-          { pubkey: threadPda, isSigner: false, isWritable: false },
+          { pubkey: threadPda, isSigner: false, isWritable: true },
           { pubkey: depositPda, isSigner: false, isWritable: true },
           { pubkey: userVaultPda, isSigner: false, isWritable: true },
         ],
@@ -880,7 +880,7 @@ const $ = (id) => document.getElementById(id);
         programId: PROGRAM_ID,
         keys: [
           { pubkey: adminPk, isSigner: true, isWritable: true },
-          { pubkey: threadPda, isSigner: false, isWritable: false },
+          { pubkey: threadPda, isSigner: false, isWritable: true },
           { pubkey: depositPda, isSigner: false, isWritable: true },
         ],
         data,
@@ -904,7 +904,7 @@ const $ = (id) => document.getElementById(id);
         programId: PROGRAM_ID,
         keys: [
           { pubkey: adminPk, isSigner: true, isWritable: true },
-          { pubkey: threadPda, isSigner: false, isWritable: false },
+          { pubkey: threadPda, isSigner: false, isWritable: true },
           { pubkey: depositPda, isSigner: false, isWritable: true },
           { pubkey: userPk, isSigner: false, isWritable: true },
           { pubkey: userVaultPda, isSigner: false, isWritable: true },
