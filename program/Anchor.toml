@@ -6,4 +6,4 @@ cluster = "Devnet"
 wallet = "~/.config/solana/id.json"
 
 [programs.devnet]
-pingy_spawn = "Pingy1111111111111111111111111111111111111"
+pingy_spawn = "FSvYheeHSLjU6UKqka5AnMeaPwsQBrLm8dCL4VtFpf5R"
