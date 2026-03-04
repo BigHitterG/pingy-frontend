@@ -909,14 +909,29 @@ const $ = (id) => document.getElementById(id);
       const [threadEscrowPda] = await deriveThreadEscrowPda(rid);
       const [depositPda] = await deriveDepositPda(rid, walletPk);
       const data = concatBytes(await anchorDiscriminator("unping_withdraw"), encodeStringArg(rid));
+      const keys = [
+        { pubkey: walletPk, isSigner: true, isWritable: true },
+        { pubkey: threadPda, isSigner: false, isWritable: true },
+        { pubkey: threadEscrowPda, isSigner: false, isWritable: true },
+        { pubkey: depositPda, isSigner: false, isWritable: true },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      ];
+      console.log("[ping-debug] unping_withdraw ix", {
+        programId: PROGRAM_ID.toBase58(),
+        threadPda: threadPda.toBase58(),
+        threadEscrowPda: threadEscrowPda.toBase58(),
+        depositPda: depositPda.toBase58(),
+        discriminatorBytes: Array.from(data.slice(0, 8)),
+        idlAccountOrder: ["user", "thread", "threadEscrow", "deposit", "systemProgram"],
+        keys: keys.map((k) => ({
+          pubkey: k.pubkey.toBase58(),
+          isSigner: k.isSigner,
+          isWritable: k.isWritable,
+        })),
+      });
       return sendProgramInstruction(new TransactionInstruction({
         programId: PROGRAM_ID,
-        keys: [
-          { pubkey: walletPk, isSigner: true, isWritable: true },
-          { pubkey: threadPda, isSigner: false, isWritable: true },
-          { pubkey: threadEscrowPda, isSigner: false, isWritable: true },
-          { pubkey: depositPda, isSigner: false, isWritable: true },
-        ],
+        keys,
         data,
       }));
     }
