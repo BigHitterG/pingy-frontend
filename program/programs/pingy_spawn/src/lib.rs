@@ -109,24 +109,36 @@ pub mod pingy_spawn {
         Ok(())
     }
 
-
+    /// Executes spawn using lamports supplied by the admin signer.
+    ///
+    /// Current behavior is intentionally a placeholder: this instruction does
+    /// not sweep approved user deposits into `spawn_pool`. It only splits the
+    /// admin-funded amount into fee + net.
+    ///
+    /// If/when spawn should be funded from pooled deposits, we need an explicit
+    /// on-chain aggregation flow (e.g. per-user settlement instructions or a
+    /// merkle/proof-based claim model), because the thread account no longer
+    /// stores a participants vector to iterate over on chain.
     pub fn execute_spawn(
         ctx: Context<ExecuteSpawn>,
         thread_id: String,
-        total_to_use: u64,
+        admin_funded_total_to_use: u64,
     ) -> Result<()> {
-        require!(total_to_use > 0, PingyError::InvalidAmount);
+        require!(admin_funded_total_to_use > 0, PingyError::InvalidAmount);
 
         let thread = &mut ctx.accounts.thread;
         require!(thread.thread_id == thread_id, PingyError::ThreadMismatch);
-        require!(thread.spawn_state == SpawnState::Open, PingyError::SpawnAlreadyClosed);
+        require!(
+            thread.spawn_state == SpawnState::Open,
+            PingyError::SpawnAlreadyClosed
+        );
 
-        let fee = total_to_use
+        let fee = admin_funded_total_to_use
             .checked_mul(SPAWN_FEE_BPS)
             .ok_or(PingyError::AmountOverflow)?
             .checked_div(BPS_DENOM)
             .ok_or(PingyError::AmountOverflow)?;
-        let net = total_to_use
+        let net = admin_funded_total_to_use
             .checked_sub(fee)
             .ok_or(PingyError::AccountingUnderflow)?;
 
@@ -152,7 +164,7 @@ pub mod pingy_spawn {
 
         emit!(SpawnExecuted {
             thread_id,
-            total_to_use,
+            total_to_use: admin_funded_total_to_use,
             fee,
             net,
         });
@@ -503,11 +515,7 @@ impl Thread {
         Ok(())
     }
 
-    fn apply_status_transition(
-        &mut self,
-        old: DepositStatus,
-        new: DepositStatus,
-    ) -> Result<()> {
+    fn apply_status_transition(&mut self, old: DepositStatus, new: DepositStatus) -> Result<()> {
         if old == new {
             return Ok(());
         }
