@@ -50,6 +50,12 @@
               </div>
               <div class="muted">description</div>
               <textarea id="newDesc" placeholder="what is this coin about?" maxlength="200"></textarea>
+              <div class="muted" style="margin-top:8px;">launch preset</div>
+              <select id="newPreset">
+                <option value="fast">Fast</option>
+                <option value="balanced" selected>Balanced</option>
+                <option value="high_quality">High Quality</option>
+              </select>
               <div class="muted" style="margin-top:8px;">coin image</div>
               <input id="newImg" type="file" accept="image/*" />
               <div class="imgPrev" id="newImgPreview" style="margin-top:6px;"><span class="muted">no image</span></div>
@@ -311,7 +317,7 @@
             <input id="pingAmount" placeholder="e.g. 0.10" inputmode="decimal" style="max-width:220px;" />
           </div>
           <div class="muted" style="margin-top:8px;">first ping may include a small Solana network/storage cost. you can fully unping before spawn to withdraw your escrow (minus network fees).</div>
-          <div class="muted" style="margin-top:8px;">mock: progress updates automatically</div>
+          <div class="muted" id="pingAllocationHint" style="margin-top:8px;">This will allocate up to 0.000 SOL, remainder stays refundable.</div>
         </div>
 
         <div class="row" style="justify-content:flex-end;">
