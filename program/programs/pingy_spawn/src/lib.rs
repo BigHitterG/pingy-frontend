@@ -232,6 +232,11 @@ pub mod pingy_spawn {
         require!(deposit.user_pubkey == user_key, PingyError::UserMismatch);
 
         let allocated_before = deposit.allocated_lamports;
+        transfer_from_user_vault_to_user(
+            &ctx.accounts.user_vault,
+            &ctx.accounts.user,
+            allocated_before,
+        )?;
         let previous_status = deposit.status;
         let thread = &mut ctx.accounts.thread;
         thread.total_allocated_lamports = thread
@@ -258,6 +263,11 @@ pub mod pingy_spawn {
         );
 
         let allocated_before = deposit.allocated_lamports;
+        transfer_from_user_vault_to_user(
+            &ctx.accounts.user_vault,
+            &ctx.accounts.user,
+            allocated_before,
+        )?;
         let previous_status = deposit.status;
         let thread = &mut ctx.accounts.thread;
         thread.total_allocated_lamports = thread
@@ -295,6 +305,22 @@ pub mod pingy_spawn {
 
         Ok(())
     }
+}
+
+fn transfer_from_user_vault_to_user(
+    user_vault: &Account<UserVault>,
+    user: &Signer,
+    amount: u64,
+) -> Result<()> {
+    let min_balance = Rent::get()?.minimum_balance(8 + UserVault::SIZE);
+    let vault_info = user_vault.to_account_info();
+    let available = vault_info.lamports().saturating_sub(min_balance);
+    require!(available >= amount, PingyError::InsufficientVaultBalance);
+
+    **vault_info.try_borrow_mut_lamports()? -= amount;
+    **user.to_account_info().try_borrow_mut_lamports()? += amount;
+
+    Ok(())
 }
 
 #[derive(Accounts)]
@@ -417,6 +443,13 @@ pub struct UserWithdraw<'info> {
         bump
     )]
     pub thread: Account<'info, Thread>,
+    #[account(
+        mut,
+        seeds = [b"vault", user.key().as_ref()],
+        bump,
+        constraint = user_vault.user_pubkey == user.key() @ PingyError::UserMismatch
+    )]
+    pub user_vault: Account<'info, UserVault>,
     #[account(
         mut,
         seeds = [b"deposit", thread_id.as_bytes(), user.key().as_ref()],
@@ -626,4 +659,6 @@ pub enum PingyError {
     UserBanned,
     #[msg("Deposit is not rejected")]
     DepositNotRejected,
+    #[msg("User vault has insufficient available lamports")]
+    InsufficientVaultBalance,
 }
