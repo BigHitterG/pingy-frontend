@@ -222,6 +222,11 @@ const $ = (id) => document.getElementById(id);
       return /reject|denied|declin/i.test(msg);
     }
 
+    function shouldFallbackToSignTransaction(err){
+      const msg = String(err?.message || err || "");
+      return /not\s+implemented|not\s+supported|signAndSendTransaction\s+is\s+not\s+a\s+function/i.test(msg);
+    }
+
     function isUserBannedError(err){
       const logs = getErrorLogs(err).join(" ");
       const msg = String(err?.message || err || "");
@@ -700,7 +705,12 @@ const $ = (id) => document.getElementById(id);
             traceStep("tx:signAndSendTransaction:rejected", { error: String(e?.message || e) }, "tx step: wallet request rejected by user.");
             throw e;
           }
-          traceStep("tx:signAndSendTransaction:failed", { error: String(e?.message || e) }, "tx step: signAndSend failed, trying fallback...");
+          if(shouldFallbackToSignTransaction(e)){
+            traceStep("tx:signAndSendTransaction:failed", { error: String(e?.message || e) }, "tx step: signAndSend unsupported, trying fallback...");
+          } else {
+            traceStep("tx:signAndSendTransaction:failed", { error: String(e?.message || e) }, "tx step: signAndSend failed; skipping fallback to avoid duplicate wallet prompts.");
+            throw e;
+          }
         }
       }
 
@@ -784,8 +794,8 @@ const $ = (id) => document.getElementById(id);
       const keys = [
         { pubkey: walletPk, isSigner: true, isWritable: true },
         { pubkey: threadPda, isSigner: false, isWritable: true },
-        { pubkey: depositPda, isSigner: false, isWritable: true },
         { pubkey: threadEscrowPda, isSigner: false, isWritable: true },
+        { pubkey: depositPda, isSigner: false, isWritable: true },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       ];
       if(banInfo) keys.push({ pubkey: banPda, isSigner: false, isWritable: false });
@@ -843,8 +853,8 @@ const $ = (id) => document.getElementById(id);
       const pingKeys = [
         { pubkey: walletPk, isSigner: true, isWritable: true },
         { pubkey: threadPda, isSigner: false, isWritable: true },
-        { pubkey: depositPda, isSigner: false, isWritable: true },
         { pubkey: threadEscrowPda, isSigner: false, isWritable: true },
+        { pubkey: depositPda, isSigner: false, isWritable: true },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       ];
       if(banInfo) pingKeys.push({ pubkey: banPda, isSigner: false, isWritable: false });
