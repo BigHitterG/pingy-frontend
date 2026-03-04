@@ -863,6 +863,23 @@ const $ = (id) => document.getElementById(id);
       }));
     }
 
+    async function withdrawRejectedTx(roomId){
+      const rid = String(roomId || "");
+      const walletPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
+      const [threadPda] = await deriveThreadPda(rid);
+      const [depositPda] = await deriveDepositPda(rid, walletPk);
+      const data = concatBytes(await anchorDiscriminator("withdraw_rejected"), encodeStringArg(rid));
+      return sendProgramInstruction(new TransactionInstruction({
+        programId: PROGRAM_ID,
+        keys: [
+          { pubkey: walletPk, isSigner: true, isWritable: true },
+          { pubkey: threadPda, isSigner: false, isWritable: true },
+          { pubkey: depositPda, isSigner: false, isWritable: true },
+        ],
+        data,
+      }));
+    }
+
     async function approveUserTx(roomId, userWallet){
       const rid = String(roomId || "");
       const adminPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
@@ -885,7 +902,7 @@ const $ = (id) => document.getElementById(id);
       }));
     }
 
-    async function rejectAndRefundTx(roomId, userWallet){
+    async function denyUserTx(roomId, userWallet){
       const rid = String(roomId || "");
       const adminPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
       const userPk = parsePublicKeyStrict(userWallet, "rejected user wallet");
@@ -903,7 +920,6 @@ const $ = (id) => document.getElementById(id);
           { pubkey: adminPk, isSigner: true, isWritable: true },
           { pubkey: threadPda, isSigner: false, isWritable: true },
           { pubkey: depositPda, isSigner: false, isWritable: true },
-          { pubkey: userPk, isSigner: false, isWritable: true },
           { pubkey: banPda, isSigner: false, isWritable: true },
           { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
         ],
@@ -2362,13 +2378,13 @@ if(connectBtn){
       if(!r || !wallet) return;
       if(!isApprover(r, connectedWallet)) return;
       try{
-        await rejectAndRefundTx(roomId, wallet);
+        await denyUserTx(roomId, wallet);
       } catch(e){
         reportTxError(e, "deny transaction failed");
         return;
       }
 
-      addSystemEvent(roomId, `@${shortWallet(wallet)} denied — funds returned to wallet.`);
+      addSystemEvent(roomId, `@${shortWallet(wallet)} denied — user can now withdraw escrow.`);
       await refreshRoomOnchainSnapshot(roomId, { force: true });
       await refreshConnectedWalletEscrowLine(roomId);
       renderRoom(roomId);
@@ -2785,21 +2801,23 @@ if(connectBtn){
       if(r.state === "SPAWNING"){
         const curLamports = await fetchConnectedWalletDepositLamports(rid);
         const cur = Number(curLamports || 0) / LAMPORTS_PER_SOL;
-        if(cur <= 0) return alert("you have no escrow to unping.");
+        if(cur <= 0) return alert("you have no escrow to withdraw.");
+        const denied = isDenied(r, connectedWallet);
         if(shouldUseOnchain()){
           try{
-            await unpingWithdrawTx(rid);
+            if(denied) await withdrawRejectedTx(rid);
+            else await unpingWithdrawTx(rid);
           } catch(e){
-            reportTxError(e, "unping transaction failed");
+            reportTxError(e, denied ? "withdraw_rejected transaction failed" : "unping transaction failed");
             return;
           }
-          showToast("Unping complete — funds returned to wallet.");
+          showToast("Withdraw complete — funds returned to wallet.");
         } else {
           applySpawnUncommit(r, connectedWallet, cur);
         }
 
         state.chat[r.id] = state.chat[r.id] || [];
-        state.chat[r.id].push({ ts: nowStamp(), wallet: connectedWallet, text:`unpinged ${cur.toFixed(3)} SOL (full escrow withdrawal, returned to wallet).` });
+        state.chat[r.id].push({ ts: nowStamp(), wallet: connectedWallet, text:`withdrew ${cur.toFixed(3)} SOL (full escrow withdrawal, returned to wallet).` });
 
       } else {
         return alert("refunds are disabled after spawn.");
