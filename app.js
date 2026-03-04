@@ -7,7 +7,7 @@ import {
   deriveSpawnPoolPda,
   deriveFeeVaultPda,
   deriveDepositPda,
-  deriveThreadEscrowPda,
+  deriveEscrowPda,
   deriveBanPda,
   fetchProgramAccounts,
   PublicKey,
@@ -50,7 +50,7 @@ const $ = (id) => document.getElementById(id);
       deriveSpawnPoolPda,
       deriveFeeVaultPda,
       deriveDepositPda,
-      deriveThreadEscrowPda,
+      deriveEscrowPda,
       deriveBanPda,
       fetchProgramAccounts,
     };
@@ -193,6 +193,12 @@ const $ = (id) => document.getElementById(id);
       ];
     }
 
+    function extractProgramLogLine(err){
+      const logs = getErrorLogs(err);
+      const programLines = logs.filter((line) => /Program log:|Program .* failed|AnchorError/i.test(String(line || "")));
+      return programLines.length ? String(programLines[programLines.length - 1]) : "";
+    }
+
     function summarizeTxError(err){
       const message = String(err?.message || err || "transaction failed");
       const snippet = message.slice(0, 160);
@@ -211,7 +217,8 @@ const $ = (id) => document.getElementById(id);
       const logs = getErrorLogs(err);
       console.error(logs);
       if(contextLabel) console.error(`[pingy] ${contextLabel}`);
-      const details = [String(err?.message || summarizeTxError(err)), ...logs].join(" | ").slice(0, 600);
+      const lastProgramLine = extractProgramLogLine(err);
+      const details = [String(err?.message || summarizeTxError(err)), lastProgramLine, ...logs].filter(Boolean).join(" | ").slice(0, 700);
       showToast(details);
     }
 
@@ -519,7 +526,7 @@ const $ = (id) => document.getElementById(id);
       },
       onchain: {},
       onchainMeta: {},
-      userVault: null,
+      userEscrow: null,
       walletPubkey: null
     };
 
@@ -782,7 +789,7 @@ const $ = (id) => document.getElementById(id);
       const walletPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
       const [threadPda] = await deriveThreadPda(rid);
       const [depositPda] = await deriveDepositPda(rid, walletPk);
-      const [threadEscrowPda] = await deriveThreadEscrowPda(rid);
+      const [threadEscrowPda] = await deriveEscrowPda(rid);
       const [banPda] = await deriveBanPda(rid, walletPk);
       const banInfo = await connection.getAccountInfo(banPda, "confirmed");
       const discriminator = await anchorDiscriminator("ping_deposit");
@@ -794,8 +801,8 @@ const $ = (id) => document.getElementById(id);
       const keys = [
         { pubkey: walletPk, isSigner: true, isWritable: true },
         { pubkey: threadPda, isSigner: false, isWritable: true },
-        { pubkey: threadEscrowPda, isSigner: false, isWritable: true },
         { pubkey: depositPda, isSigner: false, isWritable: true },
+        { pubkey: threadEscrowPda, isSigner: false, isWritable: true },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       ];
       if(banInfo) keys.push({ pubkey: banPda, isSigner: false, isWritable: false });
@@ -806,7 +813,7 @@ const $ = (id) => document.getElementById(id);
               threadEscrowPda: threadEscrowPda.toBase58(),
         discriminatorBytes: Array.from(discriminator),
         dataLength: data.length,
-        idlAccountOrder: ["user", "thread", "threadEscrow", "deposit", "systemProgram"],
+        idlAccountOrder: ["user", "thread", "deposit", "threadEscrow", "systemProgram"],
         keys: keys.map((k) => ({
           pubkey: k.pubkey.toBase58(),
           isSigner: k.isSigner,
@@ -830,7 +837,7 @@ const $ = (id) => document.getElementById(id);
       const [threadPda] = await deriveThreadPda(rid);
       const [spawnPoolPda] = await deriveSpawnPoolPda(rid);
       const [depositPda] = await deriveDepositPda(rid, walletPk);
-      const [threadEscrowPda] = await deriveThreadEscrowPda(rid);
+      const [threadEscrowPda] = await deriveEscrowPda(rid);
       const [banPda] = await deriveBanPda(rid, walletPk);
       const banInfo = await connection.getAccountInfo(banPda, "confirmed");
 
@@ -853,8 +860,8 @@ const $ = (id) => document.getElementById(id);
       const pingKeys = [
         { pubkey: walletPk, isSigner: true, isWritable: true },
         { pubkey: threadPda, isSigner: false, isWritable: true },
-        { pubkey: threadEscrowPda, isSigner: false, isWritable: true },
         { pubkey: depositPda, isSigner: false, isWritable: true },
+        { pubkey: threadEscrowPda, isSigner: false, isWritable: true },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       ];
       if(banInfo) pingKeys.push({ pubkey: banPda, isSigner: false, isWritable: false });
@@ -884,7 +891,7 @@ const $ = (id) => document.getElementById(id);
         { pubkey: adminPk, isSigner: true, isWritable: true },
         { pubkey: threadPda, isSigner: false, isWritable: true },
         { pubkey: spawnPoolPda, isSigner: false, isWritable: true },
-        { pubkey: (await deriveThreadEscrowPda(rid))[0], isSigner: false, isWritable: true },
+        { pubkey: (await deriveEscrowPda(rid))[0], isSigner: false, isWritable: true },
         { pubkey: (await deriveFeeVaultPda())[0], isSigner: false, isWritable: true },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       ];
@@ -906,15 +913,14 @@ const $ = (id) => document.getElementById(id);
       const rid = String(roomId || "");
       const walletPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
       const [threadPda] = await deriveThreadPda(rid);
-      const [threadEscrowPda] = await deriveThreadEscrowPda(rid);
+      const [threadEscrowPda] = await deriveEscrowPda(rid);
       const [depositPda] = await deriveDepositPda(rid, walletPk);
       const data = concatBytes(await anchorDiscriminator("unping_withdraw"), encodeStringArg(rid));
       const keys = [
         { pubkey: walletPk, isSigner: true, isWritable: true },
         { pubkey: threadPda, isSigner: false, isWritable: true },
-        { pubkey: threadEscrowPda, isSigner: false, isWritable: true },
         { pubkey: depositPda, isSigner: false, isWritable: true },
-        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        { pubkey: threadEscrowPda, isSigner: false, isWritable: true },
       ];
       console.log("[ping-debug] unping_withdraw ix", {
         programId: PROGRAM_ID.toBase58(),
@@ -922,7 +928,7 @@ const $ = (id) => document.getElementById(id);
         threadEscrowPda: threadEscrowPda.toBase58(),
         depositPda: depositPda.toBase58(),
         discriminatorBytes: Array.from(data.slice(0, 8)),
-        idlAccountOrder: ["user", "thread", "threadEscrow", "deposit", "systemProgram"],
+        idlAccountOrder: ["user", "thread", "deposit", "threadEscrow"],
         keys: keys.map((k) => ({
           pubkey: k.pubkey.toBase58(),
           isSigner: k.isSigner,
@@ -1097,24 +1103,24 @@ const $ = (id) => document.getElementById(id);
 
     async function fetchConnectedWalletDepositSnapshot(){
       if(!connectedWallet || !activeRoomId) {
-        state.userVault = null;
+        state.userEscrow = null;
         return null;
       }
       const walletPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
       const [depositPda] = await deriveDepositPda(activeRoomId, walletPk);
       const info = await connection.getAccountInfo(depositPda, "confirmed");
       if(!info || !info.data || info.data.length < 8){
-        state.userVault = { refundable_lamports: 0, allocated_lamports: 0, deposit_pda: depositPda.toBase58() };
-        return state.userVault;
+        state.userEscrow = { refundable_lamports: 0, allocated_lamports: 0, deposit_pda: depositPda.toBase58() };
+        return state.userEscrow;
       }
       const deposit = decodeDepositAccount(info.data);
-      state.userVault = {
+      state.userEscrow = {
         refundable_lamports: Number(deposit?.refundable_lamports || 0),
         allocated_lamports: Number(deposit?.allocated_lamports || 0),
         withdrawable_lamports: Number((deposit?.refundable_lamports || 0) + (deposit?.allocated_lamports || 0)),
         deposit_pda: depositPda.toBase58(),
       };
-      return state.userVault;
+      return state.userEscrow;
     }
 
     function refreshRoomOnchainSnapshot(roomId, opts = {}){
@@ -1407,7 +1413,7 @@ const $ = (id) => document.getElementById(id);
     }
 
     function clearWalletScopedCaches(){
-      state.userVault = null;
+      state.userEscrow = null;
       state.onchain = {};
       state.onchainMeta = {};
     }
@@ -1540,7 +1546,7 @@ async function disconnectMock(){
     catch(e){ /* no-op */ }
   }
   clearConnectedWallet();
-  state.userVault = null;
+  state.userEscrow = null;
   showToast("disconnected.");
 }
 
@@ -2743,7 +2749,7 @@ if(connectBtn){
           const walletPk = new PublicKey(connectedWallet);
           const [threadPda] = await deriveThreadPda(rid);
           const [depositPda] = await deriveDepositPda(rid, walletPk);
-          const [threadEscrowPda] = await deriveThreadEscrowPda(rid);
+          const [threadEscrowPda] = await deriveEscrowPda(rid);
           const [spawnPoolPda] = await deriveSpawnPoolPda(rid);
           const threadInfo = await connection.getAccountInfo(threadPda, "confirmed");
 
