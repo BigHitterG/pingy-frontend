@@ -245,7 +245,8 @@ pub mod pingy_spawn {
         deposit.allocated_lamports = 0;
         deposit.status = DepositStatus::Rejected;
         deposit.rejected_once = true;
-        ctx.accounts.ban.bump = ctx.bumps.ban;
+        let ban_bump = ctx.bumps.ban;
+        ctx.accounts.ban.bump = ban_bump;
 
         thread.apply_status_transition(previous_status, deposit.status)?;
 
