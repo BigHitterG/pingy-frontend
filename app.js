@@ -8,6 +8,7 @@ import {
   deriveFeeVaultPda,
   deriveDepositPda,
   deriveUserVaultPda,
+  deriveBanPda,
   fetchProgramAccounts,
   PublicKey,
   SystemProgram,
@@ -50,6 +51,7 @@ const $ = (id) => document.getElementById(id);
       deriveFeeVaultPda,
       deriveDepositPda,
       deriveUserVaultPda,
+      deriveBanPda,
       fetchProgramAccounts,
     };
 
@@ -220,6 +222,13 @@ const $ = (id) => document.getElementById(id);
       if(code === 4001) return true;
       const msg = String(err?.message || err || "");
       return /reject|denied|declin/i.test(msg);
+    }
+
+    function isUserBannedError(err){
+      const logs = getErrorLogs(err).join(" ");
+      const msg = String(err?.message || err || "");
+      const combined = `${msg} ${logs}`;
+      return /UserBanned|User is banned from this thread/i.test(combined);
     }
 
     function explorerTxUrl(signature){
@@ -721,6 +730,8 @@ const $ = (id) => document.getElementById(id);
       const [threadPda] = await deriveThreadPda(rid);
       const [depositPda] = await deriveDepositPda(rid, walletPk);
       const [userVaultPda] = await deriveUserVaultPda(walletPk);
+      const [banPda] = await deriveBanPda(rid, walletPk);
+      const banInfo = await connection.getAccountInfo(banPda, "confirmed");
       const discriminator = await anchorDiscriminator("ping_deposit");
       const data = concatBytes(
         discriminator,
@@ -734,6 +745,7 @@ const $ = (id) => document.getElementById(id);
         { pubkey: userVaultPda, isSigner: false, isWritable: true },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       ];
+      if(banInfo) keys.push({ pubkey: banPda, isSigner: false, isWritable: false });
       console.log("[ping-debug] ping_deposit ix", {
         programId: PROGRAM_ID.toBase58(),
         threadPda: threadPda.toBase58(),
@@ -766,6 +778,8 @@ const $ = (id) => document.getElementById(id);
       const [spawnPoolPda] = await deriveSpawnPoolPda(rid);
       const [depositPda] = await deriveDepositPda(rid, walletPk);
       const [userVaultPda] = await deriveUserVaultPda(walletPk);
+      const [banPda] = await deriveBanPda(rid, walletPk);
+      const banInfo = await connection.getAccountInfo(banPda, "confirmed");
 
       const instructions = [];
       if(includeThreadInit){
@@ -782,15 +796,18 @@ const $ = (id) => document.getElementById(id);
         }));
       }
 
+      const pingKeys = [
+        { pubkey: walletPk, isSigner: true, isWritable: true },
+        { pubkey: threadPda, isSigner: false, isWritable: true },
+        { pubkey: depositPda, isSigner: false, isWritable: true },
+        { pubkey: userVaultPda, isSigner: false, isWritable: true },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      ];
+      if(banInfo) pingKeys.push({ pubkey: banPda, isSigner: false, isWritable: false });
+
       instructions.push(new TransactionInstruction({
         programId: PROGRAM_ID,
-        keys: [
-          { pubkey: walletPk, isSigner: true, isWritable: true },
-          { pubkey: threadPda, isSigner: false, isWritable: true },
-          { pubkey: depositPda, isSigner: false, isWritable: true },
-          { pubkey: userVaultPda, isSigner: false, isWritable: true },
-          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-        ],
+        keys: pingKeys,
         data: concatBytes(
           await anchorDiscriminator("ping_deposit"),
           encodeStringArg(rid),
@@ -877,6 +894,7 @@ const $ = (id) => document.getElementById(id);
       const [threadPda] = await deriveThreadPda(rid);
       const [depositPda] = await deriveDepositPda(rid, userPk);
       const [userVaultPda] = await deriveUserVaultPda(userPk);
+      const [banPda] = await deriveBanPda(rid, userPk);
       const data = concatBytes(
         await anchorDiscriminator("reject_and_refund"),
         encodeStringArg(rid),
@@ -890,6 +908,8 @@ const $ = (id) => document.getElementById(id);
           { pubkey: depositPda, isSigner: false, isWritable: true },
           { pubkey: userPk, isSigner: false, isWritable: true },
           { pubkey: userVaultPda, isSigner: false, isWritable: true },
+          { pubkey: banPda, isSigner: false, isWritable: true },
+          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
         ],
         data,
       }));
@@ -2016,6 +2036,7 @@ if(connectBtn){
             await pingDepositTx(id, commitLamports);
           } catch(e){
             if(isWalletTxRejected(e)) showToast("Commit cancelled — you can ping in later.");
+            else if(isUserBannedError(e)) showToast("You were rejected from this coin and can’t re-enter.");
             else reportTxError(e, "ping_deposit transaction failed on create");
           }
         }
@@ -2708,7 +2729,11 @@ if(connectBtn){
               vault: explorerAddressUrl(userVaultPda.toBase58()),
             });
           } catch(e){
-            reportTxError(e, "ping deposit transaction failed");
+            if(isUserBannedError(e)){
+              showToast("You were rejected from this coin and can’t re-enter.");
+            } else {
+              reportTxError(e, "ping deposit transaction failed");
+            }
             console.error("[ping-debug] context", {
               connectedWallet,
               DEVNET_RPC,
