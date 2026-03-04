@@ -400,12 +400,12 @@ pub struct AdminRefund<'info> {
     pub thread: Account<'info, Thread>,
     #[account(
         mut,
-        close = user,
         seeds = [b"deposit", thread_id.as_bytes(), user_pubkey.as_ref()],
-        bump
+        bump,
+        close = user
     )]
     pub deposit: Account<'info, Deposit>,
-    /// CHECK: recipient for closing deposit PDA; constrained by user_pubkey
+    /// CHECK: recipient of closed deposit rent; validated by address constraint
     #[account(mut, address = user_pubkey)]
     pub user: UncheckedAccount<'info>,
     #[account(
@@ -437,9 +437,9 @@ pub struct UserWithdraw<'info> {
     pub thread: Account<'info, Thread>,
     #[account(
         mut,
-        close = user,
         seeds = [b"deposit", thread_id.as_bytes(), user.key().as_ref()],
-        bump
+        bump,
+        close = user
     )]
     pub deposit: Account<'info, Deposit>,
     #[account(
