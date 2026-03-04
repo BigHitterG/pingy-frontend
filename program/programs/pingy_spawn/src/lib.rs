@@ -210,17 +210,8 @@ pub mod pingy_spawn {
 
         let deposit = &mut ctx.accounts.deposit;
         require!(deposit.user_pubkey == user_pubkey, PingyError::UserMismatch);
-        let user_vault = &mut ctx.accounts.user_vault;
-        require!(
-            user_vault.user_pubkey == user_pubkey,
-            PingyError::UserMismatch
-        );
 
         let allocated_before = deposit.allocated_lamports;
-        user_vault.refundable_lamports = user_vault
-            .refundable_lamports
-            .checked_add(allocated_before)
-            .ok_or(PingyError::AmountOverflow)?;
         let previous_status = deposit.status;
         let thread = &mut ctx.accounts.thread;
         thread.total_allocated_lamports = thread
@@ -229,6 +220,7 @@ pub mod pingy_spawn {
             .ok_or(PingyError::AccountingUnderflow)?;
         deposit.allocated_lamports = 0;
         deposit.status = DepositStatus::Rejected;
+        deposit.rejected_once = true;
         let ban_bump = ctx.bumps.ban;
         ctx.accounts.ban.bump = ban_bump;
 
@@ -387,12 +379,6 @@ pub struct AdminRefund<'info> {
     /// CHECK: recipient of closed deposit rent; validated by address constraint
     #[account(mut, address = user_pubkey)]
     pub user: UncheckedAccount<'info>,
-    #[account(
-        mut,
-        seeds = [b"vault", user_pubkey.as_ref()],
-        bump
-    )]
-    pub user_vault: Account<'info, UserVault>,
     #[account(
         init_if_needed,
         payer = admin,
