@@ -1,0 +1,24 @@
+<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="256" height="256" rx="40" fill="transparent"/>
+  <g stroke="#0E121B" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M44 152C44 185.137 82.0599 212 128 212C173.94 212 212 185.137 212 152V145H44V152Z" fill="#F4F6FA"/>
+    <path d="M44 145C44 139.477 48.4772 135 54 135H202C207.523 135 212 139.477 212 145V152H44V145Z" fill="#F4F6FA"/>
+    <path d="M48 153C48 182.823 83.8172 207 128 207V153H48Z" fill="#FF66B4"/>
+    <path d="M208 153C208 182.823 172.183 207 128 207V153H208Z" fill="#74C9FF"/>
+    <path d="M106 96L128 126"/>
+    <path d="M150 96L128 126"/>
+    <path d="M128 86V124"/>
+  </g>
+  <g transform="translate(77 44)">
+    <rect x="0" y="0" width="38" height="18" rx="9" transform="rotate(-32 0 0)" fill="#FF66B4" stroke="#0E121B" stroke-width="4"/>
+    <rect x="10" y="16" width="38" height="18" rx="9" transform="rotate(-32 10 16)" fill="#F8FAFC" stroke="#0E121B" stroke-width="4"/>
+  </g>
+  <g transform="translate(149 42)">
+    <rect x="0" y="0" width="38" height="18" rx="9" transform="rotate(32 0 0)" fill="#74C9FF" stroke="#0E121B" stroke-width="4"/>
+    <rect x="14" y="15" width="38" height="18" rx="9" transform="rotate(32 14 15)" fill="#F8FAFC" stroke="#0E121B" stroke-width="4"/>
+  </g>
+  <g transform="translate(112 58)">
+    <rect x="0" y="0" width="32" height="16" rx="8" fill="#FF66B4" stroke="#0E121B" stroke-width="4"/>
+    <rect x="0" y="16" width="32" height="16" rx="8" fill="#F8FAFC" stroke="#0E121B" stroke-width="4"/>
+  </g>
+</svg>
