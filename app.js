@@ -414,6 +414,14 @@ const $ = (id) => document.getElementById(id);
       return null;
     }
 
+    function presetWalletCapLamports(presetKey){
+      const preset = PRESETS[String(presetKey || "").toLowerCase()] || PRESETS.balanced;
+      const targetLamports = Math.floor(Number(preset.targetSol || 0) * LAMPORTS_PER_SOL);
+      const shareBps = Number(preset.maxWalletShareBps || 0);
+      if(targetLamports <= 0 || shareBps <= 0) return 0;
+      return Math.floor((targetLamports * shareBps) / BPS_DENOM);
+    }
+
     function applySpawnCommit(r, wallet, solIn){
       const pos = ensurePos(r, wallet);
       const sol = Math.max(0, Number(solIn||0));
@@ -2091,6 +2099,10 @@ if(connectBtn){
       if(commit > 0 && commitLamports <= 0) return alert("commit must be at least 1 lamport.");
 
       const preset = selectedPreset();
+      const presetCapLamports = presetWalletCapLamports(preset.key);
+      if(commitLamports > presetCapLamports){
+        return alert(`commit exceeds ${preset.label} cap (${(presetCapLamports / LAMPORTS_PER_SOL).toFixed(3)} SOL max).`);
+      }
       const id = "r" + Math.random().toString(16).slice(2,6);
 
       if(shouldUseOnchain()){
@@ -2726,12 +2738,11 @@ if(connectBtn){
     function computeMaxPingLamports(room, userDeposit = {}){
       const targetLamports = Number(room?.onchain?.spawn_target_lamports || 0);
       const totalAllocatedLamports = Number(room?.onchain?.total_allocated_lamports || 0);
-      const maxWalletShareBps = Number(room?.onchain?.max_wallet_share_bps || 0);
+      const presetCapLamports = presetWalletCapLamports(room?.launch_preset);
       const userAllocatedLamports = Number(userDeposit?.allocated_lamports || 0);
-      if(targetLamports <= 0 || maxWalletShareBps <= 0) return 0;
+      if(targetLamports <= 0 || presetCapLamports <= 0) return 0;
       const need = Math.max(0, targetLamports - totalAllocatedLamports);
-      const walletCap = Math.floor((targetLamports * maxWalletShareBps) / BPS_DENOM);
-      const walletRemaining = Math.max(0, walletCap - userAllocatedLamports);
+      const walletRemaining = Math.max(0, presetCapLamports - userAllocatedLamports);
       return Math.max(0, Math.min(need, walletRemaining));
     }
 
