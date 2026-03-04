@@ -164,6 +164,14 @@
         {
           "name": "userVault",
           "writable": true
+        },
+        {
+          "name": "ban",
+          "writable": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
         }
       ],
       "args": [
@@ -355,6 +363,19 @@
         157,
         132
       ]
+    },
+    {
+      "name": "ban",
+      "discriminator": [
+        179,
+        156,
+        71,
+        13,
+        108,
+        245,
+        135,
+        4
+      ]
     }
   ],
   "types": [
@@ -499,6 +520,18 @@
           }
         ]
       }
+    },
+    {
+      "name": "ban",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
     }
   ],
   "events": [
@@ -526,6 +559,58 @@
           "index": false
         }
       ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "InvalidThreadId",
+      "msg": "Invalid thread id"
+    },
+    {
+      "code": 6001,
+      "name": "InvalidAmount",
+      "msg": "Invalid amount"
+    },
+    {
+      "code": 6002,
+      "name": "ThreadMismatch",
+      "msg": "Thread id mismatch"
+    },
+    {
+      "code": 6003,
+      "name": "UserMismatch",
+      "msg": "User mismatch"
+    },
+    {
+      "code": 6004,
+      "name": "AmountOverflow",
+      "msg": "Amount overflow"
+    },
+    {
+      "code": 6005,
+      "name": "DepositRejectedPermanently",
+      "msg": "Deposit has been rejected permanently"
+    },
+    {
+      "code": 6006,
+      "name": "NothingToRefund",
+      "msg": "Nothing to refund"
+    },
+    {
+      "code": 6007,
+      "name": "AccountingUnderflow",
+      "msg": "Accounting underflow"
+    },
+    {
+      "code": 6008,
+      "name": "SpawnAlreadyClosed",
+      "msg": "Spawn already closed"
+    },
+    {
+      "code": 6009,
+      "name": "UserBanned",
+      "msg": "User is banned from this thread"
     }
   ]
 }

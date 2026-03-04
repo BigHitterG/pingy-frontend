@@ -39,6 +39,22 @@ pub mod pingy_spawn {
     ) -> Result<()> {
         require!(amount_lamports > 0, PingyError::InvalidAmount);
 
+        let (ban_pda, _ban_bump) = Pubkey::find_program_address(
+            &[
+                b"ban",
+                thread_id.as_bytes(),
+                ctx.accounts.user.key().as_ref(),
+            ],
+            ctx.program_id,
+        );
+        if ctx
+            .remaining_accounts
+            .iter()
+            .any(|account_info| account_info.key() == ban_pda)
+        {
+            return err!(PingyError::UserBanned);
+        }
+
         let thread = &mut ctx.accounts.thread;
         require!(thread.thread_id == thread_id, PingyError::ThreadMismatch);
 
@@ -229,6 +245,7 @@ pub mod pingy_spawn {
         deposit.allocated_lamports = 0;
         deposit.status = DepositStatus::Rejected;
         deposit.rejected_once = true;
+        ctx.accounts.ban.bump = ctx.bumps.ban;
 
         thread.apply_status_transition(previous_status, deposit.status)?;
 
@@ -396,6 +413,15 @@ pub struct AdminRefund<'info> {
         bump
     )]
     pub user_vault: Account<'info, UserVault>,
+    #[account(
+        init_if_needed,
+        payer = admin,
+        space = 8 + Ban::LEN,
+        seeds = [b"ban", thread_id.as_bytes(), user_pubkey.as_ref()],
+        bump
+    )]
+    pub ban: Account<'info, Ban>,
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
@@ -555,12 +581,21 @@ pub struct FeeVault {
     pub initialized: bool,
 }
 
+#[account]
+pub struct Ban {
+    pub bump: u8,
+}
+
 impl UserVault {
     pub const SIZE: usize = 32 + 8;
 }
 
 impl FeeVault {
     pub const SIZE: usize = 1;
+}
+
+impl Ban {
+    pub const LEN: usize = 1;
 }
 
 #[event]
@@ -610,4 +645,6 @@ pub enum PingyError {
     AccountingUnderflow,
     #[msg("Spawn already closed")]
     SpawnAlreadyClosed,
+    #[msg("User is banned from this thread")]
+    UserBanned,
 }
