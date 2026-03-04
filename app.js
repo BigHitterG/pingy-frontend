@@ -924,6 +924,7 @@ const $ = (id) => document.getElementById(id);
       o = o3;
       const [approvedCount, o4] = readU32LE(bytes, o);
       o = o4;
+      // Thread account layout no longer includes a participants vector.
       const totalAllocatedLamports = new DataView(bytes.buffer, bytes.byteOffset + o, 8).getBigUint64(0, true);
       return {
         threadId,
@@ -1013,7 +1014,6 @@ const $ = (id) => document.getElementById(id);
         threadPda: threadPda.toBase58(),
         admin: thread.admin,
         admin_pubkey: thread.admin_pubkey,
-        participants: Object.keys(byWallet),
         approverWallets: thread.admin ? [thread.admin] : [],
         byWallet,
         approvedWallets,
