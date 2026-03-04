@@ -99,8 +99,6 @@ const $ = (id) => document.getElementById(id);
     let walletCopyItem;
     let walletDisconnectItem;
     let connectBtn;
-    let refundLine;
-    let refundBtn;
 
     let toast;
     let toastText;
@@ -863,23 +861,6 @@ const $ = (id) => document.getElementById(id);
       }));
     }
 
-    async function withdrawRejectedTx(roomId){
-      const rid = String(roomId || "");
-      const walletPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
-      const [threadPda] = await deriveThreadPda(rid);
-      const [depositPda] = await deriveDepositPda(rid, walletPk);
-      const data = concatBytes(await anchorDiscriminator("withdraw_rejected"), encodeStringArg(rid));
-      return sendProgramInstruction(new TransactionInstruction({
-        programId: PROGRAM_ID,
-        keys: [
-          { pubkey: walletPk, isSigner: true, isWritable: true },
-          { pubkey: threadPda, isSigner: false, isWritable: true },
-          { pubkey: depositPda, isSigner: false, isWritable: true },
-        ],
-        data,
-      }));
-    }
-
     async function approveUserTx(roomId, userWallet){
       const rid = String(roomId || "");
       const adminPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
@@ -897,46 +878,6 @@ const $ = (id) => document.getElementById(id);
           { pubkey: adminPk, isSigner: true, isWritable: true },
           { pubkey: threadPda, isSigner: false, isWritable: true },
           { pubkey: depositPda, isSigner: false, isWritable: true },
-        ],
-        data,
-      }));
-    }
-
-    async function denyUserTx(roomId, userWallet){
-      const rid = String(roomId || "");
-      const adminPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
-      const userPk = parsePublicKeyStrict(userWallet, "rejected user wallet");
-      const [threadPda] = await deriveThreadPda(rid);
-      const [depositPda] = await deriveDepositPda(rid, userPk);
-      const [banPda] = await deriveBanPda(rid, userPk);
-      const data = concatBytes(
-        await anchorDiscriminator("reject_and_refund"),
-        encodeStringArg(rid),
-        userPk.toBytes()
-      );
-      return sendProgramInstruction(new TransactionInstruction({
-        programId: PROGRAM_ID,
-        keys: [
-          { pubkey: adminPk, isSigner: true, isWritable: true },
-          { pubkey: threadPda, isSigner: false, isWritable: true },
-          { pubkey: depositPda, isSigner: false, isWritable: true },
-          { pubkey: banPda, isSigner: false, isWritable: true },
-          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-        ],
-        data,
-      }));
-    }
-
-    async function refundAllTx(){
-      const userPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
-      const [userVaultPda] = await deriveUserVaultPda(userPk);
-      const data = await anchorDiscriminator("refund_all");
-      return sendProgramInstruction(new TransactionInstruction({
-        programId: PROGRAM_ID,
-        keys: [
-          { pubkey: userPk, isSigner: true, isWritable: true },
-          { pubkey: userVaultPda, isSigner: false, isWritable: true },
-          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
         ],
         data,
       }));
@@ -1331,8 +1272,6 @@ const $ = (id) => document.getElementById(id);
       walletCopyItem = $("walletCopyItem");
       walletDisconnectItem = $("walletDisconnectItem");
       connectBtn = $("connectBtn");
-      refundLine = $("refundLine");
-      refundBtn = $("refundBtn");
 
       toast = $("toast");
       toastText = $("toastText");
@@ -1392,7 +1331,6 @@ const $ = (id) => document.getElementById(id);
       setConnectedWallet(null);
       clearWalletScopedCaches();
       refreshWalletViews();
-      renderRefundUi();
       updateEarningsUI();
     }
 
@@ -1408,14 +1346,12 @@ const $ = (id) => document.getElementById(id);
         clearWalletScopedCaches();
         await refreshRoomFromChain();
         refreshWalletViews();
-        renderRefundUi();
       });
       provider.on("connect", async () => {
         console.log("[wallet] connect", provider.publicKey?.toBase58?.() || null);
         setConnectedWallet(provider.publicKey?.toBase58?.() || null);
         await refreshRoomFromChain();
         refreshWalletViews();
-        renderRefundUi();
       });
       provider.on("disconnect", () => {
         console.log("[wallet] disconnect");
@@ -1491,7 +1427,6 @@ async function connectMock(){
 
     await refreshRoomFromChain();
     refreshWalletViews();
-    renderRefundUi();
   } catch(err){
     console.error("[pingy] connect error:", err);
     const code = Number(err && err.code);
@@ -1514,7 +1449,6 @@ async function disconnectMock(){
   }
   clearConnectedWallet();
   state.userVault = null;
-  renderRefundUi();
   showToast("disconnected.");
 }
 
@@ -1659,6 +1593,7 @@ if(connectBtn){
     function walletStatus(r, wallet){
       if(!wallet) return "";
       const snapshot = getRoomEscrowSnapshot(r);
+      if(r.blockedWallets && r.blockedWallets[wallet]) return "denied";
       const status = snapshot.byWallet?.[wallet]?.status;
       if(status) return status;
       if(isCreator(r, wallet)) return "approved";
@@ -1685,7 +1620,8 @@ if(connectBtn){
 
         for(const wallet of Object.keys(onchain.byWallet)){
           const row = onchain.byWallet[wallet] || {};
-          const status = normalizeDepositStatus(row.status);
+          const blocked = !!(r.blockedWallets && r.blockedWallets[wallet]);
+          const status = blocked ? "denied" : normalizeDepositStatus(row.status);
           const rawEscrowSol = Math.max(0, Number(row.escrow_sol || 0));
           const escrowSol = isCountedDepositStatus(status) ? rawEscrowSol : 0;
 
@@ -2048,7 +1984,7 @@ if(connectBtn){
             await pingDepositTx(id, commitLamports);
           } catch(e){
             if(isWalletTxRejected(e)) showToast("Commit cancelled — you can ping in later.");
-            else if(isUserBannedError(e)) showToast("You were rejected from this coin and can’t re-enter.");
+            else if(isUserBannedError(e)) showToast("You were denied from this coin and can’t re-enter.");
             else reportTxError(e, "ping_deposit transaction failed on create");
           }
         }
@@ -2345,10 +2281,11 @@ if(connectBtn){
     }
 
     function setComposerState(r){
-      const enabled = !!connectedWallet;
+      const denied = !!(connectedWallet && r && r.blockedWallets && r.blockedWallets[connectedWallet]);
+      const enabled = !!connectedWallet && !denied;
       $("msgInput").disabled = !enabled;
       $("sendBtn").disabled = !enabled;
-      $("msgInput").placeholder = enabled ? "message" : "connect wallet";
+      $("msgInput").placeholder = denied ? "denied — chat is read-only" : (enabled ? "message" : "connect wallet");
     }
 
 
@@ -2373,19 +2310,16 @@ if(connectBtn){
     }
 
     async function denyWallet(roomId, wallet){
-      if(!onchainEnabled) return showToast("On-chain disabled: PROGRAM_ID misconfigured");
       const r = roomById(roomId);
       if(!r || !wallet) return;
       if(!isApprover(r, connectedWallet)) return;
-      try{
-        await denyUserTx(roomId, wallet);
-      } catch(e){
-        reportTxError(e, "deny transaction failed");
-        return;
-      }
-
-      addSystemEvent(roomId, `@${shortWallet(wallet)} denied — user can now withdraw escrow.`);
-      await refreshRoomOnchainSnapshot(roomId, { force: true });
+      if(isApproved(r, wallet)) return showToast("approved pingers are permanent");
+      if(r.blockedWallets && r.blockedWallets[wallet]) return;
+      r.blockedWallets = r.blockedWallets || {};
+      r.blockedWallets[wallet] = true;
+      r.approval = r.approval || {};
+      r.approval[wallet] = "denied";
+      addSystemEvent(roomId, `@${shortWallet(wallet)} denied — wallet is now blocked from ping + chat.`);
       await refreshConnectedWalletEscrowLine(roomId);
       renderRoom(roomId);
       renderHome();
@@ -2407,14 +2341,6 @@ if(connectBtn){
       await refreshRoomOnchainSnapshot(roomId, { force: true });
       renderRoom(roomId);
       renderHome();
-    }
-
-    function renderRefundUi(){
-      if(!refundLine || !refundBtn) return;
-      const refundableLamports = Number(state.userVault?.refundable_lamports || 0);
-      const refundableSol = refundableLamports / 1_000_000_000;
-      refundLine.textContent = `Refundable: ${refundableSol.toFixed(4)} SOL`;
-      refundBtn.disabled = !connectedWallet || refundableLamports <= 0;
     }
 
     function renderRoom(roomId){
@@ -2535,7 +2461,6 @@ if(connectBtn){
         } else {
           pingers.forEach((w) => {
             const actions = [];
-            if(isAdmin && !isCreator(r, w)) actions.push({ label: "deny", onClick: () => denyWallet(roomId, w) });
             pingersList.appendChild(makeWalletRow(w, snapshot.byWallet?.[w]?.escrow_sol || 0, actions));
           });
         }
@@ -2641,7 +2566,6 @@ if(connectBtn){
 
       setComposerState(r);
       renderChat(roomId);
-      renderRefundUi();
     }
 
     // Ping / Unping flow
@@ -2662,7 +2586,7 @@ if(connectBtn){
       const rid = roomId || activeRoomId;
       const r = roomById(rid);
       if(!r) return;
-      if(r.state !== "SPAWNING") return alert("refunds are only available before spawn.");
+      if(r.state !== "SPAWNING") return alert("unping is only available before spawn.");
       modalRoomId = rid;
       $("unpingAmount").value = "full withdraw";
       $("unpingRoomLine").textContent = `coin: ${r.name}  $${r.ticker}`;
@@ -2671,20 +2595,6 @@ if(connectBtn){
     $("pingBtn").addEventListener("click", () => openPingModal(activeRoomId));
     $("unpingBtn").addEventListener("click", () => openUnpingModal(activeRoomId));
     $("pingWalletSmokeTest").addEventListener("click", runWalletSmokeTest);
-    if(refundBtn){
-      refundBtn.addEventListener("click", async () => {
-        if(!connectedWallet) return showToast("connect wallet first.");
-        try {
-          await refundAllTx();
-          await fetchUserVaultSnapshot();
-          renderRefundUi();
-          showToast("refund claimed");
-        } catch (e){
-          reportTxError(e, "refund_all transaction failed");
-        }
-      });
-    }
-
     function nudgeChange(r, delta){
       r.change_pct = Number(r.change_pct || 0) + delta;
       r.change_pct = Math.max(-99, Math.min(999, r.change_pct));
@@ -2742,7 +2652,7 @@ if(connectBtn){
             });
           } catch(e){
             if(isUserBannedError(e)){
-              showToast("You were rejected from this coin and can’t re-enter.");
+              showToast("You were denied from this coin and can’t re-enter.");
             } else {
               reportTxError(e, "ping deposit transaction failed");
             }
@@ -2802,13 +2712,11 @@ if(connectBtn){
         const curLamports = await fetchConnectedWalletDepositLamports(rid);
         const cur = Number(curLamports || 0) / LAMPORTS_PER_SOL;
         if(cur <= 0) return alert("you have no escrow to withdraw.");
-        const denied = isDenied(r, connectedWallet);
         if(shouldUseOnchain()){
           try{
-            if(denied) await withdrawRejectedTx(rid);
-            else await unpingWithdrawTx(rid);
+            await unpingWithdrawTx(rid);
           } catch(e){
-            reportTxError(e, denied ? "withdraw_rejected transaction failed" : "unping transaction failed");
+            reportTxError(e, "unping transaction failed");
             return;
           }
           showToast("Withdraw complete — funds returned to wallet.");
@@ -2820,7 +2728,7 @@ if(connectBtn){
         state.chat[r.id].push({ ts: nowStamp(), wallet: connectedWallet, text:`withdrew ${cur.toFixed(3)} SOL (full escrow withdrawal, returned to wallet).` });
 
       } else {
-        return alert("refunds are disabled after spawn.");
+        return alert("unping is disabled after spawn.");
       }
 
       closeModal($("unpingBack"));
@@ -2837,7 +2745,7 @@ if(connectBtn){
       if(!connectedWallet) return showToast("connect wallet first.");
       if(!activeRoomId) return;
       const r = roomById(activeRoomId);
-      if(!canPost(r)) return alert("ping to post.");
+      if(!canPost(r)) return alert(isDenied(r, connectedWallet) ? "you were denied from chat for this coin." : "ping to post.");
 
       const txt = ($("msgInput").value || "").trim();
       if(!txt) return;
@@ -2921,7 +2829,6 @@ if(connectBtn){
           setConnectedWallet(resp.publicKey.toBase58());
           await refreshRoomFromChain();
     refreshWalletViews();
-    renderRefundUi();
         }
       } catch(e){
         // ignore untrusted/no-session restore failures

@@ -26,10 +26,7 @@
     </div>
     <div class="panel" id="onchainBanner" style="margin-bottom:10px; padding:8px 10px;">
       <div class="muted tiny" id="onchainBannerText">on-chain status: checking…</div>
-      <div class="row" style="margin-top:6px; gap:8px; align-items:center;">
-        <div class="muted tiny" id="refundLine">Refundable: 0.0000 SOL</div>
-        <button class="btn subtle small" id="refundBtn" disabled>Refund</button>
-      </div>
+      <div class="muted tiny" style="margin-top:6px;">denials are off-chain: denied wallets cannot ping or chat, but can still unping before spawn.</div>
     </div>
 
     <!-- HOME VIEW -->
@@ -76,7 +73,7 @@
                 <div class="muted" style="min-width:120px;">SOL</div>
                 <input id="newCommit" placeholder="e.g. 0.50" inputmode="decimal" style="max-width:220px;" />
               </div>
-              <div class="muted" style="margin-top:8px;">first ping may include a small Solana network/storage cost. if you fully unping or are rejected before spawn, it’s returned with your deposit (minus network fees).</div>
+              <div class="muted" style="margin-top:8px;">first ping may include a small Solana network/storage cost. you can fully unping before spawn to withdraw your escrow (minus network fees).</div>
             </div>
 
             <div class="row" style="justify-content:flex-end;">
@@ -313,7 +310,7 @@
             <div class="muted" style="min-width:120px;">SOL</div>
             <input id="pingAmount" placeholder="e.g. 0.10" inputmode="decimal" style="max-width:220px;" />
           </div>
-          <div class="muted" style="margin-top:8px;">first ping may include a small Solana network/storage cost. if you fully unping or are rejected before spawn, it’s returned with your deposit (minus network fees).</div>
+          <div class="muted" style="margin-top:8px;">first ping may include a small Solana network/storage cost. you can fully unping before spawn to withdraw your escrow (minus network fees).</div>
           <div class="muted" style="margin-top:8px;">mock: progress updates automatically</div>
         </div>
 
