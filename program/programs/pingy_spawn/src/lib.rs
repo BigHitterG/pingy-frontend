@@ -62,17 +62,12 @@ pub mod pingy_spawn {
         {
             let deposit = &mut ctx.accounts.deposit;
 
-            if deposit.rejected_once {
-                return err!(PingyError::DepositRejectedPermanently);
-            }
-
             if deposit.thread_id.is_empty() {
                 is_new_deposit = true;
                 deposit.thread_id = thread_id;
                 deposit.user_pubkey = ctx.accounts.user.key();
                 deposit.status = DepositStatus::Pending;
                 deposit.allocated_lamports = 0;
-                deposit.rejected_once = false;
             }
 
             require!(
@@ -198,11 +193,6 @@ pub mod pingy_spawn {
 
         let deposit = &mut ctx.accounts.deposit;
         require!(deposit.user_pubkey == user_pubkey, PingyError::UserMismatch);
-        require!(
-            !deposit.rejected_once,
-            PingyError::DepositRejectedPermanently
-        );
-
         let previous_status = deposit.status;
         deposit.status = DepositStatus::Approved;
         let thread = &mut ctx.accounts.thread;
@@ -220,11 +210,6 @@ pub mod pingy_spawn {
 
         let deposit = &mut ctx.accounts.deposit;
         require!(deposit.user_pubkey == user_pubkey, PingyError::UserMismatch);
-        require!(
-            !deposit.rejected_once,
-            PingyError::DepositRejectedPermanently
-        );
-
         let user_vault = &mut ctx.accounts.user_vault;
         require!(
             user_vault.user_pubkey == user_pubkey,
@@ -244,7 +229,6 @@ pub mod pingy_spawn {
             .ok_or(PingyError::AccountingUnderflow)?;
         deposit.allocated_lamports = 0;
         deposit.status = DepositStatus::Rejected;
-        deposit.rejected_once = true;
         let ban_bump = ctx.bumps.ban;
         ctx.accounts.ban.bump = ban_bump;
 
