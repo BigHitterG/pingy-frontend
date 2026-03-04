@@ -851,7 +851,6 @@ const $ = (id) => document.getElementById(id);
       const walletPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
       const [threadPda] = await deriveThreadPda(rid);
       const [depositPda] = await deriveDepositPda(rid, walletPk);
-      const [userVaultPda] = await deriveUserVaultPda(walletPk);
       const data = concatBytes(await anchorDiscriminator("unping_withdraw"), encodeStringArg(rid));
       return sendProgramInstruction(new TransactionInstruction({
         programId: PROGRAM_ID,
@@ -859,7 +858,6 @@ const $ = (id) => document.getElementById(id);
           { pubkey: walletPk, isSigner: true, isWritable: true },
           { pubkey: threadPda, isSigner: false, isWritable: true },
           { pubkey: depositPda, isSigner: false, isWritable: true },
-          { pubkey: userVaultPda, isSigner: false, isWritable: true },
         ],
         data,
       }));
@@ -2797,13 +2795,13 @@ if(connectBtn){
             reportTxError(e, "unping transaction failed");
             return;
           }
-          showToast("unping submitted. click refund to transfer escrow from user vault.");
+          showToast("Unping complete — funds returned to wallet.");
         } else {
           applySpawnUncommit(r, connectedWallet, cur);
         }
 
         state.chat[r.id] = state.chat[r.id] || [];
-        state.chat[r.id].push({ ts: nowStamp(), wallet: connectedWallet, text:`unpinged ${cur.toFixed(3)} SOL (full escrow withdrawal). click refund to claim.` });
+        state.chat[r.id].push({ ts: nowStamp(), wallet: connectedWallet, text:`unpinged ${cur.toFixed(3)} SOL (full escrow withdrawal, returned to wallet).` });
 
       } else {
         return alert("refunds are disabled after spawn.");
