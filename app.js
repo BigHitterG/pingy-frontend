@@ -848,6 +848,7 @@ const $ = (id) => document.getElementById(id);
       const rid = String(roomId || "");
       const walletPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
       const [threadPda] = await deriveThreadPda(rid);
+      const [userVaultPda] = await deriveUserVaultPda(walletPk);
       const [depositPda] = await deriveDepositPda(rid, walletPk);
       const data = concatBytes(await anchorDiscriminator("unping_withdraw"), encodeStringArg(rid));
       return sendProgramInstruction(new TransactionInstruction({
@@ -855,6 +856,7 @@ const $ = (id) => document.getElementById(id);
         keys: [
           { pubkey: walletPk, isSigner: true, isWritable: true },
           { pubkey: threadPda, isSigner: false, isWritable: true },
+          { pubkey: userVaultPda, isSigner: false, isWritable: true },
           { pubkey: depositPda, isSigner: false, isWritable: true },
         ],
         data,
