@@ -211,19 +211,13 @@ pub mod pingy_spawn {
         let deposit = &mut ctx.accounts.deposit;
         require!(deposit.user_pubkey == user_pubkey, PingyError::UserMismatch);
 
-        let allocated_before = deposit.allocated_lamports;
         let previous_status = deposit.status;
-        let thread = &mut ctx.accounts.thread;
-        thread.total_allocated_lamports = thread
-            .total_allocated_lamports
-            .checked_sub(allocated_before)
-            .ok_or(PingyError::AccountingUnderflow)?;
-        deposit.allocated_lamports = 0;
         deposit.status = DepositStatus::Rejected;
         deposit.rejected_once = true;
         let ban_bump = ctx.bumps.ban;
         ctx.accounts.ban.bump = ban_bump;
 
+        let thread = &mut ctx.accounts.thread;
         thread.apply_status_transition(previous_status, deposit.status)?;
 
         Ok(())
@@ -236,6 +230,32 @@ pub mod pingy_spawn {
         let user_key = ctx.accounts.user.key();
         let deposit = &mut ctx.accounts.deposit;
         require!(deposit.user_pubkey == user_key, PingyError::UserMismatch);
+
+        let allocated_before = deposit.allocated_lamports;
+        let previous_status = deposit.status;
+        let thread = &mut ctx.accounts.thread;
+        thread.total_allocated_lamports = thread
+            .total_allocated_lamports
+            .checked_sub(allocated_before)
+            .ok_or(PingyError::AccountingUnderflow)?;
+        deposit.allocated_lamports = 0;
+        deposit.status = DepositStatus::Withdrawn;
+        thread.apply_status_transition(previous_status, deposit.status)?;
+
+        Ok(())
+    }
+
+    pub fn withdraw_rejected(ctx: Context<UserWithdraw>, thread_id: String) -> Result<()> {
+        let thread = &ctx.accounts.thread;
+        require!(thread.thread_id == thread_id, PingyError::ThreadMismatch);
+
+        let user_key = ctx.accounts.user.key();
+        let deposit = &mut ctx.accounts.deposit;
+        require!(deposit.user_pubkey == user_key, PingyError::UserMismatch);
+        require!(
+            deposit.status == DepositStatus::Rejected,
+            PingyError::DepositNotRejected
+        );
 
         let allocated_before = deposit.allocated_lamports;
         let previous_status = deposit.status;
@@ -372,13 +392,9 @@ pub struct AdminRefund<'info> {
     #[account(
         mut,
         seeds = [b"deposit", thread_id.as_bytes(), user_pubkey.as_ref()],
-        bump,
-        close = user
+        bump
     )]
     pub deposit: Account<'info, Deposit>,
-    /// CHECK: recipient of closed deposit rent; validated by address constraint
-    #[account(mut, address = user_pubkey)]
-    pub user: UncheckedAccount<'info>,
     #[account(
         init_if_needed,
         payer = admin,
@@ -608,4 +624,6 @@ pub enum PingyError {
     SpawnAlreadyClosed,
     #[msg("User is banned from this thread")]
     UserBanned,
+    #[msg("Deposit is not rejected")]
+    DepositNotRejected,
 }
