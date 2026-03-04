@@ -220,16 +220,16 @@ pub mod pingy_spawn {
             .refundable_lamports
             .checked_add(allocated_before)
             .ok_or(PingyError::AmountOverflow)?;
-        deposit.allocated_lamports = 0;
         let previous_status = deposit.status;
-        deposit.status = DepositStatus::Rejected;
-        deposit.rejected_once = true;
-
         let thread = &mut ctx.accounts.thread;
         thread.total_allocated_lamports = thread
             .total_allocated_lamports
             .checked_sub(allocated_before)
             .ok_or(PingyError::AccountingUnderflow)?;
+        deposit.allocated_lamports = 0;
+        deposit.status = DepositStatus::Rejected;
+        deposit.rejected_once = true;
+
         thread.apply_status_transition(previous_status, deposit.status)?;
 
         Ok(())
@@ -251,15 +251,14 @@ pub mod pingy_spawn {
             .refundable_lamports
             .checked_add(allocated_before)
             .ok_or(PingyError::AmountOverflow)?;
-        deposit.allocated_lamports = 0;
         let previous_status = deposit.status;
-        deposit.status = DepositStatus::Withdrawn;
-
         let thread = &mut ctx.accounts.thread;
         thread.total_allocated_lamports = thread
             .total_allocated_lamports
             .checked_sub(allocated_before)
             .ok_or(PingyError::AccountingUnderflow)?;
+        deposit.allocated_lamports = 0;
+        deposit.status = DepositStatus::Withdrawn;
         thread.apply_status_transition(previous_status, deposit.status)?;
 
         Ok(())
