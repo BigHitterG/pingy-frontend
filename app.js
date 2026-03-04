@@ -7,7 +7,7 @@ import {
   deriveSpawnPoolPda,
   deriveFeeVaultPda,
   deriveDepositPda,
-  deriveEscrowPda,
+  deriveThreadEscrowPda,
   deriveBanPda,
   fetchProgramAccounts,
   PublicKey,
@@ -50,7 +50,7 @@ const $ = (id) => document.getElementById(id);
       deriveSpawnPoolPda,
       deriveFeeVaultPda,
       deriveDepositPda,
-      deriveEscrowPda,
+      deriveThreadEscrowPda,
       deriveBanPda,
       fetchProgramAccounts,
     };
@@ -348,39 +348,54 @@ const $ = (id) => document.getElementById(id);
       return r.positions[wallet];
     }
 
-    const LAUNCH_PRESETS = {
-      fast: { key: "fast", label: "Fast", minApprovedWallets: 10, spawnTargetSol: 3, maxWalletShareBps: 1000 },
-      balanced: { key: "balanced", label: "Balanced", minApprovedWallets: 20, spawnTargetSol: 5, maxWalletShareBps: 700 },
-      high_quality: { key: "high_quality", label: "High Quality", minApprovedWallets: 30, spawnTargetSol: 8, maxWalletShareBps: 500 },
+    const PRESETS = {
+      fast: { key: "fast", label: "Fast", minWallets: 10, targetSol: 3, maxWalletShareBps: 1000 },
+      balanced: { key: "balanced", label: "Balanced", minWallets: 20, targetSol: 5, maxWalletShareBps: 700 },
+      high_quality: { key: "high_quality", label: "High Quality", minWallets: 30, targetSol: 8, maxWalletShareBps: 500 },
     };
 
     function selectedPreset(){
       const key = ($("newPreset")?.value || "balanced").toLowerCase();
-      return LAUNCH_PRESETS[key] || LAUNCH_PRESETS.balanced;
+      return PRESETS[key] || PRESETS.balanced;
+    }
+
+    function updatePresetCapHint(){
+      const hint = $("presetCapHint");
+      if(!hint) return;
+      const preset = selectedPreset();
+      const pct = Number(preset.maxWalletShareBps || 0) / 100;
+      hint.textContent = `Cap per wallet: ${pct}%`;
     }
 
     function roomPreset(room){
       const r = room || {};
       const key = String(r.launch_preset || "balanced").toLowerCase();
-      const base = LAUNCH_PRESETS[key] || LAUNCH_PRESETS.balanced;
+      const base = PRESETS[key] || PRESETS.balanced;
       return {
         ...base,
-        minApprovedWallets: Number(r.min_approved_wallets || base.minApprovedWallets),
-        spawnTargetSol: Number(r.spawn_target_sol || base.spawnTargetSol),
+        minWallets: Number(r.min_approved_wallets || base.minWallets),
+        targetSol: Number(r.spawn_target_sol || base.targetSol),
         maxWalletShareBps: Number(r.max_wallet_share_bps || base.maxWalletShareBps),
       };
     }
 
-    // Deterministic mock: SOL cost to buy first 10% of supply from the bonding curve.
     function spawnTargetSol(room){
-      if(room) return Number(roomPreset(room).spawnTargetSol || 0);
-      return Number(selectedPreset().spawnTargetSol || 0);
+      const lamports = room?.onchain?.spawn_target_lamports;
+      if(typeof lamports === "number") return lamports / LAMPORTS_PER_SOL;
+      if(room){
+        const fallback = Number(roomPreset(room).targetSol || 0);
+        return fallback > 0 ? fallback : null;
+      }
+      return Number(selectedPreset().targetSol || 0);
     }
 
     function minApprovedWalletsRequired(room){
-      return Number(roomPreset(room).minApprovedWallets || 0);
+      const onchainMin = room?.onchain?.min_approved_wallets;
+      if(typeof onchainMin === "number") return onchainMin;
+      return Number(roomPreset(room).minWallets || 0);
     }
 
+    // Deterministic mock: SOL cost to buy first 10% of supply from the bonding curve.
     function spawnCostSolForTokens(tokensIn){
       const T = Math.max(0, Number(VPRICE_T || 0));
       if(T <= 0) return 0;
@@ -391,8 +406,12 @@ const $ = (id) => document.getElementById(id);
     }
 
     function walletCapSol(room){
-      const preset = roomPreset(room);
-      return spawnTargetSol(room) * (Number(preset.maxWalletShareBps || 0) / BPS_DENOM);
+      const target = spawnTargetSol(room);
+      const bps = room?.onchain?.max_wallet_share_bps;
+      if(target != null && typeof bps === "number") return target * (bps / BPS_DENOM);
+      const fallbackBps = Number(roomPreset(room).maxWalletShareBps || 0);
+      if(target != null) return target * (fallbackBps / BPS_DENOM);
+      return null;
     }
 
     function applySpawnCommit(r, wallet, solIn){
@@ -527,7 +546,8 @@ const $ = (id) => document.getElementById(id);
       onchain: {},
       onchainMeta: {},
       userEscrow: null,
-      walletPubkey: null
+      walletPubkey: null,
+      maxPingLamports: 0
     };
 
     const ONCHAIN_REFRESH_MS = 7000;
@@ -789,7 +809,7 @@ const $ = (id) => document.getElementById(id);
       const walletPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
       const [threadPda] = await deriveThreadPda(rid);
       const [depositPda] = await deriveDepositPda(rid, walletPk);
-      const [threadEscrowPda] = await deriveEscrowPda(rid);
+      const [threadEscrowPda] = await deriveThreadEscrowPda(rid);
       const [banPda] = await deriveBanPda(rid, walletPk);
       const banInfo = await connection.getAccountInfo(banPda, "confirmed");
       const discriminator = await anchorDiscriminator("ping_deposit");
@@ -837,7 +857,7 @@ const $ = (id) => document.getElementById(id);
       const [threadPda] = await deriveThreadPda(rid);
       const [spawnPoolPda] = await deriveSpawnPoolPda(rid);
       const [depositPda] = await deriveDepositPda(rid, walletPk);
-      const [threadEscrowPda] = await deriveEscrowPda(rid);
+      const [threadEscrowPda] = await deriveThreadEscrowPda(rid);
       const [banPda] = await deriveBanPda(rid, walletPk);
       const banInfo = await connection.getAccountInfo(banPda, "confirmed");
 
@@ -886,12 +906,12 @@ const $ = (id) => document.getElementById(id);
       const [spawnPoolPda] = await deriveSpawnPoolPda(rid);
       const discriminator = await anchorDiscriminator("initialize_thread");
       const preset = selectedPreset();
-      const data = concatBytes(discriminator, encodeStringArg(rid), encodeU32Arg(preset.minApprovedWallets), encodeU64Arg(Math.floor(preset.spawnTargetSol * LAMPORTS_PER_SOL)), encodeU16Arg(preset.maxWalletShareBps));
+      const data = concatBytes(discriminator, encodeStringArg(rid), encodeU32Arg(preset.minWallets), encodeU64Arg(Math.floor(preset.targetSol * LAMPORTS_PER_SOL)), encodeU16Arg(preset.maxWalletShareBps));
       const keys = [
         { pubkey: adminPk, isSigner: true, isWritable: true },
         { pubkey: threadPda, isSigner: false, isWritable: true },
         { pubkey: spawnPoolPda, isSigner: false, isWritable: true },
-        { pubkey: (await deriveEscrowPda(rid))[0], isSigner: false, isWritable: true },
+        { pubkey: (await deriveThreadEscrowPda(rid))[0], isSigner: false, isWritable: true },
         { pubkey: (await deriveFeeVaultPda())[0], isSigner: false, isWritable: true },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       ];
@@ -913,7 +933,7 @@ const $ = (id) => document.getElementById(id);
       const rid = String(roomId || "");
       const walletPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
       const [threadPda] = await deriveThreadPda(rid);
-      const [threadEscrowPda] = await deriveEscrowPda(rid);
+      const [threadEscrowPda] = await deriveThreadEscrowPda(rid);
       const [depositPda] = await deriveDepositPda(rid, walletPk);
       const data = concatBytes(await anchorDiscriminator("unping_withdraw"), encodeStringArg(rid));
       const keys = [
@@ -980,7 +1000,7 @@ const $ = (id) => document.getElementById(id);
       o = o4;
       const totalAllocatedLamports = new DataView(bytes.buffer, bytes.byteOffset + o, 8).getBigUint64(0, true);
       o += 8;
-      const [minApprovedWallets, o5] = readU32LE(bytes, o);
+      const [minWallets, o5] = readU32LE(bytes, o);
       o = o5;
       const spawnTargetLamports = new DataView(bytes.buffer, bytes.byteOffset + o, 8).getBigUint64(0, true);
       o += 8;
@@ -993,7 +1013,7 @@ const $ = (id) => document.getElementById(id);
         pending_count: pendingCount,
         approved_count: approvedCount,
         total_allocated_lamports: Number(totalAllocatedLamports || 0n),
-        min_approved_wallets: Number(minApprovedWallets || 0),
+        min_approved_wallets: Number(minWallets || 0),
         spawn_target_lamports: Number(spawnTargetLamports || 0n),
         max_wallet_share_bps: Number(maxWalletShareBps || 0),
       };
@@ -1167,7 +1187,7 @@ const $ = (id) => document.getElementById(id);
 
     function mkRoom(id, name, ticker, desc, presetKey = "balanced"){
       const creator_wallet = (Math.random().toString(16).slice(2,10) + '111111111111111111111111111111').slice(0,44);
-      const preset = LAUNCH_PRESETS[presetKey] || LAUNCH_PRESETS.balanced;
+      const preset = PRESETS[presetKey] || PRESETS.balanced;
       return {
         id, name, ticker, desc,
         creator_wallet,
@@ -1175,8 +1195,8 @@ const $ = (id) => document.getElementById(id);
         created_at: nowStamp(),
         state: "SPAWNING",          // SPAWNING | BONDING | BONDED
         launch_preset: preset.key,
-        min_approved_wallets: preset.minApprovedWallets,
-        spawn_target_sol: preset.spawnTargetSol,
+        min_approved_wallets: preset.minWallets,
+        spawn_target_sol: preset.targetSol,
         max_wallet_share_bps: preset.maxWalletShareBps,
         spawn_tokens_total: 0,      // virtual tokens sold in the spawn tranche (pre-token)
         spawn_fee_paid_sol: 0,      // actual spawn fee charged only when spawn executes
@@ -1761,8 +1781,11 @@ if(connectBtn){
     }
 
     function countedEscrowSol(r){
+      if(Number(r?.onchain?.spawn_target_lamports || 0) > 0){
+        return Number(r.onchain.total_allocated_lamports || 0) / LAMPORTS_PER_SOL;
+      }
       let total = 0;
-      const capSol = walletCapSol(r);
+      const capSol = Number(walletCapSol(r) || 0);
       const snapshot = getRoomEscrowSnapshot(r);
       for(const w of snapshot.approvedWallets){
         const escrow = Number(snapshot.byWallet[w]?.escrow_sol || 0);
@@ -1785,7 +1808,7 @@ if(connectBtn){
       if(r.state === "SPAWNING"){
         const total = countedEscrowSol(r);
         const target = spawnTargetSol(r);
-        if(total >= target && getRoomEscrowSnapshot(r).approvedWallets.length >= minApprovedWalletsRequired(r)){
+        if(target > 0 && total >= target && getRoomEscrowSnapshot(r).approvedWallets.length >= minApprovedWalletsRequired(r)){
           const pos = r.positions || {};
           const capSol = walletCapSol(r);
           let remainingTokens = SPAWN_TRANCHE_TOKENS;
@@ -2108,7 +2131,10 @@ if(connectBtn){
       $("newTg").value = "";
       $("newWeb").value = "";
       $("newCommit").value = "";
-      if($("newPreset")) $("newPreset").value = "balanced";
+      if($("newPreset")) {
+        $("newPreset").value = "balanced";
+        updatePresetCapHint();
+      }
       $("newImg").value = "";
       newImgData = null;
       setNewImgPreview(null);
@@ -2125,6 +2151,10 @@ if(connectBtn){
       }
     }
     $("createCoinBtn").addEventListener("click", createCoinFromForm);
+    if($("newPreset")){
+      $("newPreset").addEventListener("change", updatePresetCapHint);
+      updatePresetCapHint();
+    }
 
     // NOTE: v22 UI removed "newRoomBtn" on explore; keep handler optional
     const newRoomBtn = $("newRoomBtn");
@@ -2484,6 +2514,7 @@ if(connectBtn){
       const pingers = (snapshot.approvedWallets || []).slice();
       const approvers = (snapshot.approverWallets || []).filter((w) => isApprover(r, w));
       const thread = state.onchain?.[roomId] || {};
+      r.onchain = thread;
       if(thread.spawn_target_lamports) r.spawn_target_sol = Number(thread.spawn_target_lamports || 0) / LAMPORTS_PER_SOL;
       if(thread.min_approved_wallets) r.min_approved_wallets = Number(thread.min_approved_wallets || 0);
       if(thread.max_wallet_share_bps) r.max_wallet_share_bps = Number(thread.max_wallet_share_bps || 0);
@@ -2637,17 +2668,30 @@ if(connectBtn){
         phaseLabel.textContent = "Funding first 10% of curve";
         statePill.textContent = "SPAWNING";
         phaseBar.style.width = Math.round(spawnProgress01(r)*100) + "%";
-        const spawnSnapshot = getRoomEscrowSnapshot(r);
-        const capSol = walletCapSol(r);
-        const counted = spawnSnapshot.approvedWallets.reduce((sum, w) => {
-          const escrow = Number(spawnSnapshot.byWallet[w]?.escrow_sol || 0);
-          return sum + Math.min(escrow, capSol);
-        }, 0);
-        const target = spawnTargetSol(r);
         const progressLine = $("spawnProgressLine");
-        const approvedCount = Number(snapshot.approvedWallets?.length || 0);
-        const minApproved = minApprovedWalletsRequired(r);
-        if(progressLine) progressLine.textContent = `approved counted: ${counted.toFixed(3)}/${target.toFixed(3)} SOL • approved wallets: ${approvedCount}/${minApproved} • max alloc per wallet: ${capSol.toFixed(3)} SOL • Spawn fee: 1% (only charged if coin spawns)`;
+        const target = spawnTargetSol(r);
+        const capSol = walletCapSol(r);
+        const onchain = r.onchain || {};
+        const hasThreadFields = Number(onchain.spawn_target_lamports || 0) > 0;
+        if(progressLine){
+          if(hasThreadFields && target != null && capSol != null){
+            const counted = Number(onchain.total_allocated_lamports || 0) / LAMPORTS_PER_SOL;
+            const approvedCount = Number(onchain.approved_count || 0);
+            const minApproved = Number(onchain.min_approved_wallets || 0);
+            progressLine.textContent = `approved counted: ${counted.toFixed(3)}/${target.toFixed(3)} SOL • approved wallets: ${approvedCount}/${minApproved} • max alloc per wallet: ${capSol.toFixed(3)} SOL • Spawn fee: 1% (only charged if coin spawns)`;
+          } else {
+            const spawnSnapshot = getRoomEscrowSnapshot(r);
+            const legacyCapSol = Number(roomPreset(r).targetSol || 0) * (Number(roomPreset(r).maxWalletShareBps || 0) / BPS_DENOM);
+            const legacyCounted = spawnSnapshot.approvedWallets.reduce((sum, w) => {
+              const escrow = Number(spawnSnapshot.byWallet[w]?.escrow_sol || 0);
+              return sum + Math.min(escrow, legacyCapSol);
+            }, 0);
+            const legacyTarget = Number(roomPreset(r).targetSol || 0);
+            const legacyApprovedCount = Number(spawnSnapshot.approvedWallets?.length || 0);
+            const legacyMinApproved = Number(roomPreset(r).minWallets || 0);
+            progressLine.textContent = `approved counted: ${legacyCounted.toFixed(3)}/${legacyTarget.toFixed(3)} SOL • approved wallets: ${legacyApprovedCount}/${legacyMinApproved} • max alloc per wallet: ${legacyCapSol.toFixed(3)} SOL • legacy thread • Spawn fee: 1% (only charged if coin spawns)`;
+          }
+        }
       } else if(r.state === "BONDING"){
         phaseLabel.textContent = "BONDING";
         statePill.textContent = "BONDING";
@@ -2679,21 +2723,40 @@ if(connectBtn){
     // Ping / Unping flow
     // Use an explicit room id for modals so home-card clicks can't race view changes.
     let modalRoomId = null;
+    function computeMaxPingLamports(room, userDeposit = {}){
+      const targetLamports = Number(room?.onchain?.spawn_target_lamports || 0);
+      const totalAllocatedLamports = Number(room?.onchain?.total_allocated_lamports || 0);
+      const maxWalletShareBps = Number(room?.onchain?.max_wallet_share_bps || 0);
+      const userAllocatedLamports = Number(userDeposit?.allocated_lamports || 0);
+      if(targetLamports <= 0 || maxWalletShareBps <= 0) return 0;
+      const need = Math.max(0, targetLamports - totalAllocatedLamports);
+      const walletCap = Math.floor((targetLamports * maxWalletShareBps) / BPS_DENOM);
+      const walletRemaining = Math.max(0, walletCap - userAllocatedLamports);
+      return Math.max(0, Math.min(need, walletRemaining));
+    }
+
     function updatePingAllocationHint(roomId){
       const hint = $("pingAllocationHint");
       if(!hint) return;
       const r = roomById(roomId || activeRoomId);
       if(!r){
-        hint.textContent = "This will allocate up to 0.000 SOL, remainder stays refundable.";
+        hint.textContent = "Max: 0.000 SOL";
+        state.maxPingLamports = 0;
         return;
       }
-      const snapshot = getRoomEscrowSnapshot(r);
-      const capSol = walletCapSol(r);
-      const targetRemaining = Math.max(0, spawnTargetSol(r) - countedEscrowSol(r));
-      const walletAllocated = Number(snapshot.byWallet?.[connectedWallet || ""]?.allocated_sol || 0);
-      const walletRemaining = Math.max(0, capSol - walletAllocated);
-      const allocMax = Math.max(0, Math.min(walletRemaining, targetRemaining));
-      hint.textContent = `This will allocate up to ${allocMax.toFixed(3)} SOL, remainder stays refundable.`;
+      const pingConfirm = $("pingConfirm");
+      if(r.state !== "SPAWNING"){
+        state.maxPingLamports = 0;
+        hint.textContent = "Max applies during spawning.";
+        if(pingConfirm) pingConfirm.disabled = false;
+        return;
+      }
+      const userDeposit = state.userEscrow || {};
+      const maxLamports = computeMaxPingLamports(r, userDeposit);
+      state.maxPingLamports = maxLamports;
+      const maxSol = maxLamports / LAMPORTS_PER_SOL;
+      hint.textContent = maxLamports > 0 ? `Max: ${maxSol.toFixed(3)} SOL` : "Spawn is full or you're at cap.";
+      if(pingConfirm) pingConfirm.disabled = maxLamports <= 0;
     }
 
     function openPingModal(roomId){
@@ -2701,8 +2764,10 @@ if(connectBtn){
       const rid = roomId || activeRoomId;
       const r = roomById(rid);
       if(!r) return;
+      r.onchain = state.onchain?.[rid] || r.onchain || {};
       modalRoomId = rid;
       $("pingAmount").value = "";
+      state.maxPingLamports = 0;
       $("pingRoomLine").textContent = `coin: ${r.name}  $${r.ticker}`;
       updatePingAllocationHint(rid);
       openModal($("pingBack"));
@@ -2712,6 +2777,7 @@ if(connectBtn){
       const rid = roomId || activeRoomId;
       const r = roomById(rid);
       if(!r) return;
+      r.onchain = state.onchain?.[rid] || r.onchain || {};
       if(r.state !== "SPAWNING") return alert("unping is only available before spawn.");
       modalRoomId = rid;
       $("unpingAmount").value = "full withdraw";
@@ -2720,6 +2786,13 @@ if(connectBtn){
     }
     $("pingBtn").addEventListener("click", () => openPingModal(activeRoomId));
     $("pingAmount").addEventListener("input", () => updatePingAllocationHint(modalRoomId || activeRoomId));
+    $("pingMaxBtn").addEventListener("click", () => {
+      const maxLamports = Number(state.maxPingLamports || 0);
+      const input = $("pingAmount");
+      if(!input) return;
+      input.value = (maxLamports / LAMPORTS_PER_SOL).toFixed(3).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
+      updatePingAllocationHint(modalRoomId || activeRoomId);
+    });
     $("unpingBtn").addEventListener("click", () => openUnpingModal(activeRoomId));
     $("pingWalletSmokeTest").addEventListener("click", runWalletSmokeTest);
     function nudgeChange(r, delta){
@@ -2732,6 +2805,7 @@ if(connectBtn){
       traceStep("pingConfirm:clicked", { rid, connectedWallet: connectedWallet || null }, "ping trace: confirm clicked");
       const r = roomById(rid);
       if(!r) return;
+      r.onchain = state.onchain?.[rid] || r.onchain || {};
       const s = ($("pingAmount").value||"").trim();
       const solAmount = Number(s);
       if(!s || Number.isNaN(solAmount) || solAmount <= 0) return alert("enter a valid SOL amount.");
@@ -2745,11 +2819,16 @@ if(connectBtn){
         if(shouldUseOnchain()){
           const amountLamports = Math.round(solAmount * 1_000_000_000);
           if(!Number.isInteger(amountLamports) || amountLamports <= 0) return alert("enter at least 1 lamport.");
+          const maxAllowedLamports = Number(state.maxPingLamports || computeMaxPingLamports(r, state.userEscrow || {}));
+          if(amountLamports > (maxAllowedLamports + 1)){
+            showToast(`Too much. Max is ${(maxAllowedLamports / LAMPORTS_PER_SOL).toFixed(3)} SOL.`);
+            return;
+          }
           console.log("[ping-debug] amount conversion", { solAmount, amountLamports });
           const walletPk = new PublicKey(connectedWallet);
           const [threadPda] = await deriveThreadPda(rid);
           const [depositPda] = await deriveDepositPda(rid, walletPk);
-          const [threadEscrowPda] = await deriveEscrowPda(rid);
+          const [threadEscrowPda] = await deriveThreadEscrowPda(rid);
           const [spawnPoolPda] = await deriveSpawnPoolPda(rid);
           const threadInfo = await connection.getAccountInfo(threadPda, "confirmed");
 
@@ -2835,6 +2914,7 @@ if(connectBtn){
       const rid = modalRoomId || activeRoomId;
       const r = roomById(rid);
       if(!r) return;
+      r.onchain = state.onchain?.[rid] || r.onchain || {};
       if(r.state === "SPAWNING"){
         const curLamports = await fetchConnectedWalletDepositLamports(rid);
         const cur = Number(curLamports || 0) / LAMPORTS_PER_SOL;
