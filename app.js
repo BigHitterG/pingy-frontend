@@ -891,7 +891,6 @@ const $ = (id) => document.getElementById(id);
       const userPk = parsePublicKeyStrict(userWallet, "rejected user wallet");
       const [threadPda] = await deriveThreadPda(rid);
       const [depositPda] = await deriveDepositPda(rid, userPk);
-      const [userVaultPda] = await deriveUserVaultPda(userPk);
       const [banPda] = await deriveBanPda(rid, userPk);
       const data = concatBytes(
         await anchorDiscriminator("reject_and_refund"),
@@ -905,7 +904,6 @@ const $ = (id) => document.getElementById(id);
           { pubkey: threadPda, isSigner: false, isWritable: true },
           { pubkey: depositPda, isSigner: false, isWritable: true },
           { pubkey: userPk, isSigner: false, isWritable: true },
-          { pubkey: userVaultPda, isSigner: false, isWritable: true },
           { pubkey: banPda, isSigner: false, isWritable: true },
           { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
         ],
@@ -2370,7 +2368,7 @@ if(connectBtn){
         return;
       }
 
-      addSystemEvent(roomId, `@${shortWallet(wallet)} denied — escrow refunded`);
+      addSystemEvent(roomId, `@${shortWallet(wallet)} denied — funds returned to wallet.`);
       await refreshRoomOnchainSnapshot(roomId, { force: true });
       await refreshConnectedWalletEscrowLine(roomId);
       renderRoom(roomId);
