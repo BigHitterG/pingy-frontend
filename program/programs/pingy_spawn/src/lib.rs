@@ -245,14 +245,7 @@ pub mod pingy_spawn {
         let deposit = &mut ctx.accounts.deposit;
         require!(deposit.user_pubkey == user_key, PingyError::UserMismatch);
 
-        let user_vault = &mut ctx.accounts.user_vault;
-        require!(user_vault.user_pubkey == user_key, PingyError::UserMismatch);
-
         let allocated_before = deposit.allocated_lamports;
-        user_vault.refundable_lamports = user_vault
-            .refundable_lamports
-            .checked_add(allocated_before)
-            .ok_or(PingyError::AmountOverflow)?;
         let previous_status = deposit.status;
         let thread = &mut ctx.accounts.thread;
         thread.total_allocated_lamports = thread
@@ -429,12 +422,6 @@ pub struct UserWithdraw<'info> {
         close = user
     )]
     pub deposit: Account<'info, Deposit>,
-    #[account(
-        mut,
-        seeds = [b"vault", user.key().as_ref()],
-        bump
-    )]
-    pub user_vault: Account<'info, UserVault>,
 }
 
 #[derive(Accounts)]
