@@ -7,7 +7,7 @@ import {
   deriveSpawnPoolPda,
   deriveFeeVaultPda,
   deriveDepositPda,
-  deriveUserVaultPda,
+  deriveThreadEscrowPda,
   deriveBanPda,
   fetchProgramAccounts,
   PublicKey,
@@ -50,7 +50,7 @@ const $ = (id) => document.getElementById(id);
       deriveSpawnPoolPda,
       deriveFeeVaultPda,
       deriveDepositPda,
-      deriveUserVaultPda,
+      deriveThreadEscrowPda,
       deriveBanPda,
       fetchProgramAccounts,
     };
@@ -336,9 +336,37 @@ const $ = (id) => document.getElementById(id);
       return r.positions[wallet];
     }
 
+    const LAUNCH_PRESETS = {
+      fast: { key: "fast", label: "Fast", minApprovedWallets: 10, spawnTargetSol: 3, maxWalletShareBps: 1000 },
+      balanced: { key: "balanced", label: "Balanced", minApprovedWallets: 20, spawnTargetSol: 5, maxWalletShareBps: 700 },
+      high_quality: { key: "high_quality", label: "High Quality", minApprovedWallets: 30, spawnTargetSol: 8, maxWalletShareBps: 500 },
+    };
+
+    function selectedPreset(){
+      const key = ($("newPreset")?.value || "balanced").toLowerCase();
+      return LAUNCH_PRESETS[key] || LAUNCH_PRESETS.balanced;
+    }
+
+    function roomPreset(room){
+      const r = room || {};
+      const key = String(r.launch_preset || "balanced").toLowerCase();
+      const base = LAUNCH_PRESETS[key] || LAUNCH_PRESETS.balanced;
+      return {
+        ...base,
+        minApprovedWallets: Number(r.min_approved_wallets || base.minApprovedWallets),
+        spawnTargetSol: Number(r.spawn_target_sol || base.spawnTargetSol),
+        maxWalletShareBps: Number(r.max_wallet_share_bps || base.maxWalletShareBps),
+      };
+    }
+
     // Deterministic mock: SOL cost to buy first 10% of supply from the bonding curve.
-    function spawnTargetSol(){
-      return spawnCostSolForTokens(VPRICE_T);
+    function spawnTargetSol(room){
+      if(room) return Number(roomPreset(room).spawnTargetSol || 0);
+      return Number(selectedPreset().spawnTargetSol || 0);
+    }
+
+    function minApprovedWalletsRequired(room){
+      return Number(roomPreset(room).minApprovedWallets || 0);
     }
 
     function spawnCostSolForTokens(tokensIn){
@@ -351,7 +379,8 @@ const $ = (id) => document.getElementById(id);
     }
 
     function walletCapSol(room){
-      return spawnTargetSol(room) / 20;
+      const preset = roomPreset(room);
+      return spawnTargetSol(room) * (Number(preset.maxWalletShareBps || 0) / BPS_DENOM);
     }
 
     function applySpawnCommit(r, wallet, solIn){
@@ -526,6 +555,18 @@ const $ = (id) => document.getElementById(id);
       const out = new Uint8Array(4 + strBytes.length);
       new DataView(out.buffer).setUint32(0, strBytes.length, true);
       out.set(strBytes, 4);
+      return out;
+    }
+
+    function encodeU32Arg(v){
+      const out = new Uint8Array(4);
+      new DataView(out.buffer).setUint32(0, Number(v || 0), true);
+      return out;
+    }
+
+    function encodeU16Arg(v){
+      const out = new Uint8Array(2);
+      new DataView(out.buffer).setUint16(0, Number(v || 0), true);
       return out;
     }
 
@@ -731,7 +772,7 @@ const $ = (id) => document.getElementById(id);
       const walletPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
       const [threadPda] = await deriveThreadPda(rid);
       const [depositPda] = await deriveDepositPda(rid, walletPk);
-      const [userVaultPda] = await deriveUserVaultPda(walletPk);
+      const [threadEscrowPda] = await deriveThreadEscrowPda(rid);
       const [banPda] = await deriveBanPda(rid, walletPk);
       const banInfo = await connection.getAccountInfo(banPda, "confirmed");
       const discriminator = await anchorDiscriminator("ping_deposit");
@@ -744,7 +785,7 @@ const $ = (id) => document.getElementById(id);
         { pubkey: walletPk, isSigner: true, isWritable: true },
         { pubkey: threadPda, isSigner: false, isWritable: true },
         { pubkey: depositPda, isSigner: false, isWritable: true },
-        { pubkey: userVaultPda, isSigner: false, isWritable: true },
+        { pubkey: threadEscrowPda, isSigner: false, isWritable: true },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       ];
       if(banInfo) keys.push({ pubkey: banPda, isSigner: false, isWritable: false });
@@ -752,10 +793,10 @@ const $ = (id) => document.getElementById(id);
         programId: PROGRAM_ID.toBase58(),
         threadPda: threadPda.toBase58(),
         depositPda: depositPda.toBase58(),
-              userVaultPda: userVaultPda.toBase58(),
+              threadEscrowPda: threadEscrowPda.toBase58(),
         discriminatorBytes: Array.from(discriminator),
         dataLength: data.length,
-        idlAccountOrder: ["user", "thread", "deposit", "userVault", "systemProgram"],
+        idlAccountOrder: ["user", "thread", "threadEscrow", "deposit", "systemProgram"],
         keys: keys.map((k) => ({
           pubkey: k.pubkey.toBase58(),
           isSigner: k.isSigner,
@@ -779,7 +820,7 @@ const $ = (id) => document.getElementById(id);
       const [threadPda] = await deriveThreadPda(rid);
       const [spawnPoolPda] = await deriveSpawnPoolPda(rid);
       const [depositPda] = await deriveDepositPda(rid, walletPk);
-      const [userVaultPda] = await deriveUserVaultPda(walletPk);
+      const [threadEscrowPda] = await deriveThreadEscrowPda(rid);
       const [banPda] = await deriveBanPda(rid, walletPk);
       const banInfo = await connection.getAccountInfo(banPda, "confirmed");
 
@@ -791,10 +832,11 @@ const $ = (id) => document.getElementById(id);
             { pubkey: walletPk, isSigner: true, isWritable: true },
             { pubkey: threadPda, isSigner: false, isWritable: true },
             { pubkey: spawnPoolPda, isSigner: false, isWritable: true },
+            { pubkey: threadEscrowPda, isSigner: false, isWritable: true },
             { pubkey: (await deriveFeeVaultPda())[0], isSigner: false, isWritable: true },
             { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
           ],
-          data: concatBytes(await anchorDiscriminator("initialize_thread"), encodeStringArg(rid)),
+          data: concatBytes(await anchorDiscriminator("initialize_thread"), encodeStringArg(rid), encodeU32Arg(minApprovedWalletsRequired()), encodeU64Arg(Math.floor(spawnTargetSol() * LAMPORTS_PER_SOL)), encodeU16Arg(selectedPreset().maxWalletShareBps)),
         }));
       }
 
@@ -802,7 +844,7 @@ const $ = (id) => document.getElementById(id);
         { pubkey: walletPk, isSigner: true, isWritable: true },
         { pubkey: threadPda, isSigner: false, isWritable: true },
         { pubkey: depositPda, isSigner: false, isWritable: true },
-        { pubkey: userVaultPda, isSigner: false, isWritable: true },
+        { pubkey: threadEscrowPda, isSigner: false, isWritable: true },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       ];
       if(banInfo) pingKeys.push({ pubkey: banPda, isSigner: false, isWritable: false });
@@ -826,11 +868,13 @@ const $ = (id) => document.getElementById(id);
       const [threadPda] = await deriveThreadPda(rid);
       const [spawnPoolPda] = await deriveSpawnPoolPda(rid);
       const discriminator = await anchorDiscriminator("initialize_thread");
-      const data = concatBytes(discriminator, encodeStringArg(rid));
+      const preset = selectedPreset();
+      const data = concatBytes(discriminator, encodeStringArg(rid), encodeU32Arg(preset.minApprovedWallets), encodeU64Arg(Math.floor(preset.spawnTargetSol * LAMPORTS_PER_SOL)), encodeU16Arg(preset.maxWalletShareBps));
       const keys = [
         { pubkey: adminPk, isSigner: true, isWritable: true },
         { pubkey: threadPda, isSigner: false, isWritable: true },
         { pubkey: spawnPoolPda, isSigner: false, isWritable: true },
+        { pubkey: (await deriveThreadEscrowPda(rid))[0], isSigner: false, isWritable: true },
         { pubkey: (await deriveFeeVaultPda())[0], isSigner: false, isWritable: true },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       ];
@@ -838,7 +882,7 @@ const $ = (id) => document.getElementById(id);
         programId: PROGRAM_ID.toBase58(),
         discriminatorBytes: Array.from(discriminator),
         dataLength: data.length,
-        idlAccountOrder: ["admin", "thread", "spawnPool", "feeVault", "systemProgram"],
+        idlAccountOrder: ["admin", "thread", "spawnPool", "threadEscrow", "feeVault", "systemProgram"],
         keys: keys.map((k) => ({ pubkey: k.pubkey.toBase58(), isSigner: k.isSigner, isWritable: k.isWritable })),
       });
       return sendProgramInstruction(new TransactionInstruction({
@@ -852,7 +896,7 @@ const $ = (id) => document.getElementById(id);
       const rid = String(roomId || "");
       const walletPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
       const [threadPda] = await deriveThreadPda(rid);
-      const [userVaultPda] = await deriveUserVaultPda(walletPk);
+      const [threadEscrowPda] = await deriveThreadEscrowPda(rid);
       const [depositPda] = await deriveDepositPda(rid, walletPk);
       const data = concatBytes(await anchorDiscriminator("unping_withdraw"), encodeStringArg(rid));
       return sendProgramInstruction(new TransactionInstruction({
@@ -860,7 +904,7 @@ const $ = (id) => document.getElementById(id);
         keys: [
           { pubkey: walletPk, isSigner: true, isWritable: true },
           { pubkey: threadPda, isSigner: false, isWritable: true },
-          { pubkey: userVaultPda, isSigner: false, isWritable: true },
+          { pubkey: threadEscrowPda, isSigner: false, isWritable: true },
           { pubkey: depositPda, isSigner: false, isWritable: true },
         ],
         data,
@@ -903,8 +947,13 @@ const $ = (id) => document.getElementById(id);
       o = o3;
       const [approvedCount, o4] = readU32LE(bytes, o);
       o = o4;
-      // Thread account layout no longer includes a participants vector.
       const totalAllocatedLamports = new DataView(bytes.buffer, bytes.byteOffset + o, 8).getBigUint64(0, true);
+      o += 8;
+      const [minApprovedWallets, o5] = readU32LE(bytes, o);
+      o = o5;
+      const spawnTargetLamports = new DataView(bytes.buffer, bytes.byteOffset + o, 8).getBigUint64(0, true);
+      o += 8;
+      const maxWalletShareBps = new DataView(bytes.buffer, bytes.byteOffset + o, 2).getUint16(0, true);
       return {
         threadId,
         admin: adminPubkey.toBase58(),
@@ -913,6 +962,9 @@ const $ = (id) => document.getElementById(id);
         pending_count: pendingCount,
         approved_count: approvedCount,
         total_allocated_lamports: Number(totalAllocatedLamports || 0n),
+        min_approved_wallets: Number(minApprovedWallets || 0),
+        spawn_target_lamports: Number(spawnTargetLamports || 0n),
+        max_wallet_share_bps: Number(maxWalletShareBps || 0),
       };
     }
 
@@ -928,29 +980,20 @@ const $ = (id) => document.getElementById(id);
       o += 1;
       const rejectedOnce = !!bytes[o];
       o += 1;
+      const refundableLamports = new DataView(bytes.buffer, bytes.byteOffset + o, 8).getBigUint64(0, true);
+      o += 8;
       const allocatedLamports = new DataView(bytes.buffer, bytes.byteOffset + o, 8).getBigUint64(0, true);
-      const statusMap = ["pending", "approved", "denied", "withdrawn"];
+      const statusMap = ["pending", "approved", "denied", "withdrawn", "converted"];
       return {
         threadId,
         user: userPubkey.toBase58(),
         status: statusMap[statusCode] || "unknown",
         rejectedOnce,
+        refundable_lamports: Number(refundableLamports || 0n),
         allocated_lamports: Number(allocatedLamports || 0n)
       };
     }
 
-    function decodeUserVaultAccount(data){
-      const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
-      if(!bytes?.length || bytes.length < 8) return null;
-      let o = 8;
-      const [userPubkey, o1] = readPubkey(bytes, o);
-      o = o1;
-      const refundableLamports = new DataView(bytes.buffer, bytes.byteOffset + o, 8).getBigUint64(0, true);
-      return {
-        user: userPubkey.toBase58(),
-        refundable_lamports: Number(refundableLamports || 0n),
-      };
-    }
 
     async function fetchRoomOnchainSnapshot(roomId){
       if(!roomId) return null;
@@ -968,7 +1011,7 @@ const $ = (id) => document.getElementById(id);
       const pendingWallets = [];
       const depositAccounts = await connection.getProgramAccounts(PROGRAM_ID, {
         commitment: "confirmed",
-        filters: [{ dataSize: 8 + 4 + 64 + 32 + 1 + 1 + 8 }]
+        filters: [{ dataSize: 8 + 4 + 64 + 32 + 1 + 1 + 8 + 8 }]
       });
 
       for(const acct of depositAccounts){
@@ -976,11 +1019,14 @@ const $ = (id) => document.getElementById(id);
         const deposit = decodeDepositAccount(acct.account.data);
         if(!deposit || deposit.threadId !== roomId) continue;
         const wallet = deposit.user;
-        const escrowSol = Math.max(0, Number(deposit.allocated_lamports || 0) / 1_000_000_000);
+        const refundableSol = Math.max(0, Number(deposit.refundable_lamports || 0) / 1_000_000_000);
+        const allocatedSol = Math.max(0, Number(deposit.allocated_lamports || 0) / 1_000_000_000);
 
         byWallet[wallet] = {
           status: deposit.status,
-          escrow_sol: escrowSol,
+          refundable_sol: refundableSol,
+          allocated_sol: allocatedSol,
+          escrow_sol: allocatedSol,
           deposit_pda: acct.pubkey.toBase58()
         };
 
@@ -996,6 +1042,9 @@ const $ = (id) => document.getElementById(id);
         pending_count: Number(thread.pending_count || 0),
         approved_count: Number(thread.approved_count || 0),
         total_allocated_lamports: Number(thread.total_allocated_lamports || 0),
+        min_approved_wallets: Number(thread.min_approved_wallets || 0),
+        spawn_target_lamports: Number(thread.spawn_target_lamports || 0),
+        max_wallet_share_bps: Number(thread.max_wallet_share_bps || 0),
         approverWallets: thread.admin ? [thread.admin] : [],
         byWallet,
         approvedWallets,
@@ -1019,22 +1068,23 @@ const $ = (id) => document.getElementById(id);
     }
 
 
-    async function fetchUserVaultSnapshot(){
-      if(!connectedWallet) {
+    async function fetchConnectedWalletDepositSnapshot(){
+      if(!connectedWallet || !activeRoomId) {
         state.userVault = null;
         return null;
       }
       const walletPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
-      const [userVaultPda] = await deriveUserVaultPda(walletPk);
-      const info = await connection.getAccountInfo(userVaultPda, "confirmed");
+      const [depositPda] = await deriveDepositPda(activeRoomId, walletPk);
+      const info = await connection.getAccountInfo(depositPda, "confirmed");
       if(!info || !info.data || info.data.length < 8){
-        state.userVault = { refundable_lamports: 0, user_vault_pda: userVaultPda.toBase58() };
+        state.userVault = { refundable_lamports: 0, allocated_lamports: 0, deposit_pda: depositPda.toBase58() };
         return state.userVault;
       }
-      const vault = decodeUserVaultAccount(info.data);
+      const deposit = decodeDepositAccount(info.data);
       state.userVault = {
-        refundable_lamports: Number(vault?.refundable_lamports || 0),
-        user_vault_pda: userVaultPda.toBase58(),
+        refundable_lamports: Number(deposit?.refundable_lamports || 0),
+        allocated_lamports: Number(deposit?.allocated_lamports || 0),
+        deposit_pda: depositPda.toBase58(),
       };
       return state.userVault;
     }
@@ -1081,14 +1131,19 @@ const $ = (id) => document.getElementById(id);
       }
     });
 
-    function mkRoom(id, name, ticker, desc){
+    function mkRoom(id, name, ticker, desc, presetKey = "balanced"){
       const creator_wallet = (Math.random().toString(16).slice(2,10) + '111111111111111111111111111111').slice(0,44);
+      const preset = LAUNCH_PRESETS[presetKey] || LAUNCH_PRESETS.balanced;
       return {
         id, name, ticker, desc,
         creator_wallet,
         socials: { x:'', tg:'', web:'' },
         created_at: nowStamp(),
         state: "SPAWNING",          // SPAWNING | BONDING | BONDED
+        launch_preset: preset.key,
+        min_approved_wallets: preset.minApprovedWallets,
+        spawn_target_sol: preset.spawnTargetSol,
+        max_wallet_share_bps: preset.maxWalletShareBps,
         spawn_tokens_total: 0,      // virtual tokens sold in the spawn tranche (pre-token)
         spawn_fee_paid_sol: 0,      // actual spawn fee charged only when spawn executes
         positions: {},              // wallet -> { escrow_sol, bond_sol, spawn_tokens }
@@ -1328,7 +1383,7 @@ const $ = (id) => document.getElementById(id);
 
     async function refreshRoomFromChain(){
       const tasks = state.rooms.map((room) => refreshRoomOnchainSnapshot(room.id, { force: true }));
-      if(connectedWallet) tasks.push(fetchUserVaultSnapshot());
+      if(connectedWallet) tasks.push(fetchConnectedWalletDepositSnapshot());
       await Promise.allSettled(tasks);
       if(activeRoomId && connectedWallet) await refreshConnectedWalletEscrowLine(activeRoomId);
     }
@@ -1680,7 +1735,7 @@ if(connectBtn){
     }
 
     function spawnProgress01(r){
-      const target = spawnTargetSol();
+      const target = spawnTargetSol(r);
       if(target <= 0) return 0;
       return clamp01(countedEscrowSol(r) / target);
     }
@@ -1692,8 +1747,8 @@ if(connectBtn){
     function maybeAdvance(r){
       if(r.state === "SPAWNING"){
         const total = countedEscrowSol(r);
-        const target = spawnTargetSol();
-        if(total >= target){
+        const target = spawnTargetSol(r);
+        if(total >= target && getRoomEscrowSnapshot(r).approvedWallets.length >= minApprovedWalletsRequired(r)){
           const pos = r.positions || {};
           const capSol = walletCapSol(r);
           let remainingTokens = SPAWN_TRANCHE_TOKENS;
@@ -1975,6 +2030,7 @@ if(connectBtn){
       const commitLamports = Math.floor(commit * LAMPORTS_PER_SOL);
       if(commit > 0 && commitLamports <= 0) return alert("commit must be at least 1 lamport.");
 
+      const preset = selectedPreset();
       const id = "r" + Math.random().toString(16).slice(2,6);
 
       if(shouldUseOnchain()){
@@ -1997,7 +2053,7 @@ if(connectBtn){
         }
       }
 
-      const r = mkRoom(id, name, ticker, desc);
+      const r = mkRoom(id, name, ticker, desc, preset.key);
       r.creator_wallet = connectedWallet;
       r.approval = { [connectedWallet]: "approved" };
       r.approverWallets = r.approverWallets || {};
@@ -2015,6 +2071,7 @@ if(connectBtn){
       $("newTg").value = "";
       $("newWeb").value = "";
       $("newCommit").value = "";
+      if($("newPreset")) $("newPreset").value = "balanced";
       $("newImg").value = "";
       newImgData = null;
       setNewImgPreview(null);
@@ -2026,7 +2083,7 @@ if(connectBtn){
       if(shouldUseOnchain()){
         await fetchRoomOnchainSnapshot(id);
         await refreshConnectedWalletEscrowLine(id);
-        await fetchUserVaultSnapshot();
+        await fetchConnectedWalletDepositSnapshot();
         if(activeRoomId === id) renderRoom(id);
       }
     }
@@ -2390,6 +2447,9 @@ if(connectBtn){
       const pingers = (snapshot.approvedWallets || []).slice();
       const approvers = (snapshot.approverWallets || []).filter((w) => isApprover(r, w));
       const thread = state.onchain?.[roomId] || {};
+      if(thread.spawn_target_lamports) r.spawn_target_sol = Number(thread.spawn_target_lamports || 0) / LAMPORTS_PER_SOL;
+      if(thread.min_approved_wallets) r.min_approved_wallets = Number(thread.min_approved_wallets || 0);
+      if(thread.max_wallet_share_bps) r.max_wallet_share_bps = Number(thread.max_wallet_share_bps || 0);
       const threadAdminPubkey = thread.admin_pubkey || thread.admin;
       const walletPubkey = connectedWallet;
       const isAdmin = !!threadAdminPubkey && !!walletPubkey && toBase58String(threadAdminPubkey) === toBase58String(walletPubkey);
@@ -2398,7 +2458,7 @@ if(connectBtn){
       const pingersList = $("pingersList");
       const approversList = $("approversList");
 
-      const makeWalletRow = (wallet, amountSol, actions = []) => {
+      const makeWalletRow = (wallet, walletRow = {}, actions = []) => {
         const row = document.createElement("div");
         row.className = "row";
         row.style.marginTop = "4px";
@@ -2407,7 +2467,9 @@ if(connectBtn){
 
         const left = document.createElement("div");
         left.className = "tiny";
-        left.textContent = `@${shortWallet(wallet)} • ${Number(amountSol || 0).toFixed(3)} SOL`;
+        const refundable = Number(walletRow.refundable_sol || 0);
+        const allocated = Number(walletRow.allocated_sol || 0);
+        left.textContent = `@${shortWallet(wallet)} • Refundable ${refundable.toFixed(3)} SOL • Allocated ${allocated.toFixed(3)} SOL`;
 
         const right = document.createElement("div");
         right.className = "row";
@@ -2447,7 +2509,7 @@ if(connectBtn){
           pending.forEach((w) => {
             const row = makeWalletRow(
               w,
-              snapshot.byWallet?.[w]?.escrow_sol || 0,
+              snapshot.byWallet?.[w] || {},
               [
                 { label: "approve", onClick: () => approveWallet(roomId, w) },
                 { label: "deny", onClick: () => denyWallet(roomId, w) }
@@ -2468,7 +2530,7 @@ if(connectBtn){
         } else {
           pingers.forEach((w) => {
             const actions = [];
-            pingersList.appendChild(makeWalletRow(w, snapshot.byWallet?.[w]?.escrow_sol || 0, actions));
+            pingersList.appendChild(makeWalletRow(w, snapshot.byWallet?.[w] || {}, actions));
           });
         }
       }
@@ -2486,7 +2548,7 @@ if(connectBtn){
             if(isCreator(r, connectedWallet) && !isCreator(r, w)){
               actions.push({ label: "remove", onClick: () => toggleApproverWallet(roomId, w) });
             }
-            approversList.appendChild(makeWalletRow(w, snapshot.byWallet?.[w]?.escrow_sol || 0, actions));
+            approversList.appendChild(makeWalletRow(w, snapshot.byWallet?.[w] || {}, actions));
           });
         }
         if(isCreator(r, connectedWallet)){
@@ -2544,9 +2606,11 @@ if(connectBtn){
           const escrow = Number(spawnSnapshot.byWallet[w]?.escrow_sol || 0);
           return sum + Math.min(escrow, capSol);
         }, 0);
-        const target = spawnTargetSol();
+        const target = spawnTargetSol(r);
         const progressLine = $("spawnProgressLine");
-        if(progressLine) progressLine.textContent = `approved counted: ${counted.toFixed(3)}/${target.toFixed(3)} SOL • cap per wallet: ${capSol.toFixed(3)} SOL • Spawn fee: 1% (only charged if coin spawns)`;
+        const approvedCount = Number(snapshot.approvedWallets?.length || 0);
+        const minApproved = minApprovedWalletsRequired(r);
+        if(progressLine) progressLine.textContent = `approved counted: ${counted.toFixed(3)}/${target.toFixed(3)} SOL • approved wallets: ${approvedCount}/${minApproved} • max alloc per wallet: ${capSol.toFixed(3)} SOL • Spawn fee: 1% (only charged if coin spawns)`;
       } else if(r.state === "BONDING"){
         phaseLabel.textContent = "BONDING";
         statePill.textContent = "BONDING";
@@ -2578,6 +2642,23 @@ if(connectBtn){
     // Ping / Unping flow
     // Use an explicit room id for modals so home-card clicks can't race view changes.
     let modalRoomId = null;
+    function updatePingAllocationHint(roomId){
+      const hint = $("pingAllocationHint");
+      if(!hint) return;
+      const r = roomById(roomId || activeRoomId);
+      if(!r){
+        hint.textContent = "This will allocate up to 0.000 SOL, remainder stays refundable.";
+        return;
+      }
+      const snapshot = getRoomEscrowSnapshot(r);
+      const capSol = walletCapSol(r);
+      const targetRemaining = Math.max(0, spawnTargetSol(r) - countedEscrowSol(r));
+      const walletAllocated = Number(snapshot.byWallet?.[connectedWallet || ""]?.allocated_sol || 0);
+      const walletRemaining = Math.max(0, capSol - walletAllocated);
+      const allocMax = Math.max(0, Math.min(walletRemaining, targetRemaining));
+      hint.textContent = `This will allocate up to ${allocMax.toFixed(3)} SOL, remainder stays refundable.`;
+    }
+
     function openPingModal(roomId){
       if(!connectedWallet) return showToast("connect wallet first.");
       const rid = roomId || activeRoomId;
@@ -2586,6 +2667,7 @@ if(connectBtn){
       modalRoomId = rid;
       $("pingAmount").value = "";
       $("pingRoomLine").textContent = `coin: ${r.name}  $${r.ticker}`;
+      updatePingAllocationHint(rid);
       openModal($("pingBack"));
     }
     function openUnpingModal(roomId){
@@ -2600,6 +2682,7 @@ if(connectBtn){
       openModal($("unpingBack"));
     }
     $("pingBtn").addEventListener("click", () => openPingModal(activeRoomId));
+    $("pingAmount").addEventListener("input", () => updatePingAllocationHint(modalRoomId || activeRoomId));
     $("unpingBtn").addEventListener("click", () => openUnpingModal(activeRoomId));
     $("pingWalletSmokeTest").addEventListener("click", runWalletSmokeTest);
     function nudgeChange(r, delta){
@@ -2629,33 +2712,33 @@ if(connectBtn){
           const walletPk = new PublicKey(connectedWallet);
           const [threadPda] = await deriveThreadPda(rid);
           const [depositPda] = await deriveDepositPda(rid, walletPk);
-          const [userVaultPda] = await deriveUserVaultPda(walletPk);
+          const [threadEscrowPda] = await deriveThreadEscrowPda(rid);
           const [spawnPoolPda] = await deriveSpawnPoolPda(rid);
           const threadInfo = await connection.getAccountInfo(threadPda, "confirmed");
 
-          const vaultInfoBefore = await connection.getAccountInfo(userVaultPda, "confirmed");
-          const balBefore = vaultInfoBefore ? await connection.getBalance(userVaultPda, "confirmed") : 0;
+          const escrowInfoBefore = await connection.getAccountInfo(threadEscrowPda, "confirmed");
+          const balBefore = escrowInfoBefore ? await connection.getBalance(threadEscrowPda, "confirmed") : 0;
           try {
             const sig = await pingWithOptionalThreadInitTx(rid, amountLamports, !threadInfo);
-            const vaultInfoAfter = await connection.getAccountInfo(userVaultPda, "confirmed");
-            const balAfter = vaultInfoAfter ? await connection.getBalance(userVaultPda, "confirmed") : 0;
+            const escrowInfoAfter = await connection.getAccountInfo(threadEscrowPda, "confirmed");
+            const balAfter = escrowInfoAfter ? await connection.getBalance(threadEscrowPda, "confirmed") : 0;
             const deltaLamports = Number(balAfter || 0) - Number(balBefore || 0);
             const deltaSol = deltaLamports / 1_000_000_000;
             console.log("[ping-debug] deposit balance delta", {
               depositPda: depositPda.toBase58(),
-              userVaultPda: userVaultPda.toBase58(),
+              threadEscrowPda: threadEscrowPda.toBase58(),
               balBefore,
               balAfter,
               deltaLamports,
               deltaSol,
               expectedLamports: amountLamports,
               txExplorer: explorerTxUrl(sig),
-              vaultExplorer: explorerAddressUrl(userVaultPda.toBase58()),
+              escrowExplorer: explorerAddressUrl(threadEscrowPda.toBase58()),
             });
-            showToast(`Escrow deposit +${deltaSol.toFixed(9)} SOL (expected ~${solAmount} SOL)`);
+            showToast(`Thread escrow deposit +${deltaSol.toFixed(9)} SOL (expected ~${solAmount} SOL)`);
             console.log("[ping-debug] explorer links", {
               tx: explorerTxUrl(sig),
-              vault: explorerAddressUrl(userVaultPda.toBase58()),
+              threadEscrow: explorerAddressUrl(threadEscrowPda.toBase58()),
             });
           } catch(e){
             if(isUserBannedError(e)){
@@ -2670,7 +2753,7 @@ if(connectBtn){
               programId: PROGRAM_ID.toBase58(),
               threadPda: threadPda.toBase58(),
               depositPda: depositPda.toBase58(),
-              userVaultPda: userVaultPda.toBase58(),
+              threadEscrowPda: threadEscrowPda.toBase58(),
               spawnPoolPda: spawnPoolPda.toBase58(),
               vault: null,
               solAmount,
@@ -2704,7 +2787,7 @@ if(connectBtn){
 
       closeModal($("pingBack"));
       await fetchRoomOnchainSnapshot(rid);
-      await fetchUserVaultSnapshot();
+      await fetchConnectedWalletDepositSnapshot();
       renderRoom(rid);
       r._pulseUntil = Date.now() + 900;
       r._lastActivity = Date.now();
@@ -2740,7 +2823,7 @@ if(connectBtn){
 
       closeModal($("unpingBack"));
       await fetchRoomOnchainSnapshot(rid);
-      await fetchUserVaultSnapshot();
+      await fetchConnectedWalletDepositSnapshot();
       renderRoom(rid);
       r._pulseUntil = Date.now() + 900;
       r._lastActivity = Date.now();
