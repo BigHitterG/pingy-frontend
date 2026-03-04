@@ -1031,11 +1031,13 @@ const $ = (id) => document.getElementById(id);
         const wallet = deposit.user;
         const refundableSol = Math.max(0, Number(deposit.refundable_lamports || 0) / 1_000_000_000);
         const allocatedSol = Math.max(0, Number(deposit.allocated_lamports || 0) / 1_000_000_000);
+        const withdrawableSol = refundableSol + allocatedSol;
 
         byWallet[wallet] = {
           status: deposit.status,
           refundable_sol: refundableSol,
           allocated_sol: allocatedSol,
+          withdrawable_sol: withdrawableSol,
           escrow_sol: allocatedSol,
           deposit_pda: acct.pubkey.toBase58()
         };
@@ -1074,7 +1076,7 @@ const $ = (id) => document.getElementById(id);
       const depositInfo = await connection.getAccountInfo(depositPda, "confirmed");
       if(!depositInfo || !depositInfo.data || depositInfo.data.length < 8) return 0;
       const deposit = decodeDepositAccount(depositInfo.data);
-      return Number(deposit?.allocated_lamports || 0);
+      return Number((deposit?.allocated_lamports || 0) + (deposit?.refundable_lamports || 0));
     }
 
 
@@ -1094,6 +1096,7 @@ const $ = (id) => document.getElementById(id);
       state.userVault = {
         refundable_lamports: Number(deposit?.refundable_lamports || 0),
         allocated_lamports: Number(deposit?.allocated_lamports || 0),
+        withdrawable_lamports: Number((deposit?.refundable_lamports || 0) + (deposit?.allocated_lamports || 0)),
         deposit_pda: depositPda.toBase58(),
       };
       return state.userVault;
@@ -1214,7 +1217,10 @@ const $ = (id) => document.getElementById(id);
       if(!connectedWallet) return 0;
       const snapshot = state.onchain?.[roomId];
       if(snapshot?.byWallet?.[connectedWallet]){
-        return Math.max(0, Number(snapshot.byWallet[connectedWallet].escrow_sol || 0));
+        const row = snapshot.byWallet[connectedWallet] || {};
+        const withdrawable = Number(row.withdrawable_sol);
+        if(Number.isFinite(withdrawable)) return Math.max(0, withdrawable);
+        return Math.max(0, Number(row.escrow_sol || 0));
       }
       const r = roomById(roomId);
       const p = r.positions[connectedWallet] || {escrow_sol:0, bond_sol:0, spawn_tokens:0};
