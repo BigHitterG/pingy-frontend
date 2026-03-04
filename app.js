@@ -655,6 +655,10 @@ const $ = (id) => document.getElementById(id);
           sig = typeof sendRes === "string" ? sendRes : sendRes?.signature;
           traceStep("tx:signAndSendTransaction:ok", { signature: sig });
         } catch (e){
+          if(isWalletTxRejected(e)){
+            traceStep("tx:signAndSendTransaction:rejected", { error: String(e?.message || e) }, "tx step: wallet request rejected by user.");
+            throw e;
+          }
           traceStep("tx:signAndSendTransaction:failed", { error: String(e?.message || e) }, "tx step: signAndSend failed, trying fallback...");
         }
       }
@@ -1974,20 +1978,21 @@ if(connectBtn){
       const id = "r" + Math.random().toString(16).slice(2,6);
 
       if(shouldUseOnchain()){
-        try {
-          await initializeThreadTx(id);
-        } catch (e){
-          reportTxError(e, "initialize_thread transaction failed");
-          return;
-        }
-
         if(commitLamports > 0){
           try {
-            await pingDepositTx(id, commitLamports);
+            await pingWithOptionalThreadInitTx(id, commitLamports, true);
           } catch(e){
-            if(isWalletTxRejected(e)) showToast("Commit cancelled — you can ping in later.");
+            if(isWalletTxRejected(e)) showToast("Create cancelled — no coin or commit was submitted.");
             else if(isUserBannedError(e)) showToast("You were denied from this coin and can’t re-enter.");
-            else reportTxError(e, "ping_deposit transaction failed on create");
+            else reportTxError(e, "initialize + ping_deposit transaction failed on create");
+            return;
+          }
+        } else {
+          try {
+            await initializeThreadTx(id);
+          } catch (e){
+            reportTxError(e, "initialize_thread transaction failed");
+            return;
           }
         }
       }
