@@ -465,8 +465,8 @@ impl Thread {
     pub const MAX_THREAD_ID_LEN: usize = 64;
     pub const LEN: usize = 4 + Self::MAX_THREAD_ID_LEN + 32 + 1 + 4 + 4 + 8;
 
-    fn increment_status_count(&mut self, status: DepositStatus) -> Result<()> {
-        match status {
+    fn increment_status_count(&mut self, new_status: DepositStatus) -> Result<()> {
+        match new_status {
             DepositStatus::Pending => {
                 self.pending_count = self
                     .pending_count
@@ -484,8 +484,8 @@ impl Thread {
         Ok(())
     }
 
-    fn decrement_status_count(&mut self, status: DepositStatus) -> Result<()> {
-        match status {
+    fn decrement_status_count(&mut self, old_status: DepositStatus) -> Result<()> {
+        match old_status {
             DepositStatus::Pending => {
                 self.pending_count = self
                     .pending_count
@@ -505,14 +505,14 @@ impl Thread {
 
     fn apply_status_transition(
         &mut self,
-        previous_status: DepositStatus,
-        next_status: DepositStatus,
+        old: DepositStatus,
+        new: DepositStatus,
     ) -> Result<()> {
-        if previous_status == next_status {
+        if old == new {
             return Ok(());
         }
-        self.decrement_status_count(previous_status)?;
-        self.increment_status_count(next_status)?;
+        self.decrement_status_count(old)?;
+        self.increment_status_count(new)?;
         Ok(())
     }
 }
