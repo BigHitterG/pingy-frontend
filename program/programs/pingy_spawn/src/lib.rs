@@ -47,6 +47,7 @@ pub mod pingy_spawn {
         thread.pending_count = 0;
         thread.approved_count = 0;
         thread.total_allocated_lamports = 0;
+        thread.total_escrow_lamports = 0;
         thread.min_approved_wallets = min_approved_wallets;
         thread.spawn_target_lamports = spawn_target_lamports;
         thread.max_wallet_share_bps = max_wallet_share_bps;
@@ -56,7 +57,6 @@ pub mod pingy_spawn {
 
         let thread_escrow = &mut ctx.accounts.thread_escrow;
         thread_escrow.thread_id = thread_id;
-        thread_escrow.bump = ctx.bumps.thread_escrow;
 
         let fee_vault = &mut ctx.accounts.fee_vault;
         if !fee_vault.initialized {
@@ -101,7 +101,7 @@ pub mod pingy_spawn {
             let deposit = &mut ctx.accounts.deposit;
             if deposit.thread_id.is_empty() {
                 is_new_deposit = true;
-                deposit.thread_id = thread_id;
+                deposit.thread_id = thread_id.clone();
                 deposit.user_pubkey = ctx.accounts.user.key();
                 deposit.status = DepositStatus::Pending;
                 deposit.rejected_once = false;
@@ -122,6 +122,17 @@ pub mod pingy_spawn {
             },
         );
         system_program::transfer(transfer_ctx, amount_lamports)?;
+        msg!(
+            "ping_deposit amount={} user={} escrow={} thread={}",
+            amount_lamports,
+            ctx.accounts.user.key(),
+            ctx.accounts.thread_escrow.key(),
+            thread_id
+        );
+        thread.total_escrow_lamports = thread
+            .total_escrow_lamports
+            .checked_add(amount_lamports)
+            .ok_or(PingyError::AmountOverflow)?;
 
         let previous_status;
         {
@@ -206,12 +217,14 @@ pub mod pingy_spawn {
                 .total_allocated_lamports
                 .checked_sub(allocated_before)
                 .ok_or(PingyError::AccountingUnderflow)?;
+            thread.total_escrow_lamports = thread
+                .total_escrow_lamports
+                .checked_sub(payout)
+                .ok_or(PingyError::AccountingUnderflow)?;
             thread.apply_status_transition(previous_status, deposit.status)?;
         }
 
         transfer_from_thread_escrow_to_account(
-            &ctx.accounts.thread.thread_id,
-            ctx.accounts.thread_escrow.bump,
             &ctx.accounts.thread_escrow.to_account_info(),
             &ctx.accounts.user.to_account_info(),
             payout,
@@ -249,9 +262,13 @@ pub mod pingy_spawn {
         let allocated_before = deposit.allocated_lamports;
         let previous_status = deposit.status;
 
+        msg!(
+            "unping_withdraw payout={} refundable={} allocated={}",
+            payout,
+            deposit.refundable_lamports,
+            deposit.allocated_lamports
+        );
         transfer_from_thread_escrow_to_account(
-            &ctx.accounts.thread.thread_id,
-            ctx.accounts.thread_escrow.bump,
             &ctx.accounts.thread_escrow.to_account_info(),
             &ctx.accounts.user.to_account_info(),
             payout,
@@ -261,6 +278,10 @@ pub mod pingy_spawn {
         thread.total_allocated_lamports = thread
             .total_allocated_lamports
             .checked_sub(allocated_before)
+            .ok_or(PingyError::AccountingUnderflow)?;
+        thread.total_escrow_lamports = thread
+            .total_escrow_lamports
+            .checked_sub(payout)
             .ok_or(PingyError::AccountingUnderflow)?;
 
         deposit.refundable_lamports = 0;
@@ -290,8 +311,6 @@ pub mod pingy_spawn {
         let allocated_before = deposit.allocated_lamports;
 
         transfer_from_thread_escrow_to_account(
-            &ctx.accounts.thread.thread_id,
-            ctx.accounts.thread_escrow.bump,
             &ctx.accounts.thread_escrow.to_account_info(),
             &ctx.accounts.user.to_account_info(),
             payout,
@@ -302,6 +321,10 @@ pub mod pingy_spawn {
         thread.total_allocated_lamports = thread
             .total_allocated_lamports
             .checked_sub(allocated_before)
+            .ok_or(PingyError::AccountingUnderflow)?;
+        thread.total_escrow_lamports = thread
+            .total_escrow_lamports
+            .checked_sub(payout)
             .ok_or(PingyError::AccountingUnderflow)?;
         deposit.refundable_lamports = 0;
         deposit.allocated_lamports = 0;
@@ -338,20 +361,24 @@ pub mod pingy_spawn {
             .ok_or(PingyError::AccountingUnderflow)?;
 
         transfer_from_thread_escrow_to_account(
-            &thread.thread_id,
-            ctx.accounts.thread_escrow.bump,
             &ctx.accounts.thread_escrow.to_account_info(),
             &ctx.accounts.fee_vault.to_account_info(),
             fee,
         )?;
         transfer_from_thread_escrow_to_account(
-            &thread.thread_id,
-            ctx.accounts.thread_escrow.bump,
             &ctx.accounts.thread_escrow.to_account_info(),
             &ctx.accounts.spawn_pool.to_account_info(),
             net,
         )?;
 
+        thread.total_allocated_lamports = thread
+            .total_allocated_lamports
+            .checked_sub(use_amt)
+            .ok_or(PingyError::AccountingUnderflow)?;
+        thread.total_escrow_lamports = thread
+            .total_escrow_lamports
+            .checked_sub(use_amt)
+            .ok_or(PingyError::AccountingUnderflow)?;
         thread.spawn_state = SpawnState::Closed;
 
         emit!(SpawnExecuted {
@@ -406,31 +433,31 @@ fn allocate_for_deposit(
 }
 
 fn transfer_from_thread_escrow_to_account<'info>(
-    thread_id: &str,
-    escrow_bump: u8,
     thread_escrow_info: &AccountInfo<'info>,
     recipient_account: &AccountInfo<'info>,
     amount: u64,
 ) -> Result<()> {
     require!(amount > 0, PingyError::NothingToRefund);
 
-    let min_balance = Rent::get()?.minimum_balance(8 + ThreadEscrow::SIZE);
+    let min_balance = Rent::get()?.minimum_balance(8 + ThreadEscrow::LEN);
     let available = thread_escrow_info.lamports().saturating_sub(min_balance);
+    msg!(
+        "escrow_refund_check amount={} escrow_lamports={} min_balance={} available={}",
+        amount,
+        thread_escrow_info.lamports(),
+        min_balance,
+        available
+    );
     require!(available >= amount, PingyError::InsufficientEscrowBalance);
 
-    let thread_id_bytes = thread_id.as_bytes();
-    let signer_seeds: &[&[u8]] = &[b"escrow", thread_id_bytes, &[escrow_bump]];
-    let signer_seed_list = [signer_seeds];
-
-    let transfer_ctx = CpiContext::new_with_signer(
-        thread_escrow_info.clone(),
-        system_program::Transfer {
-            from: thread_escrow_info.clone(),
-            to: recipient_account.clone(),
-        },
-        &signer_seed_list,
-    );
-    system_program::transfer(transfer_ctx, amount)?;
+    **thread_escrow_info.try_borrow_mut_lamports()? = thread_escrow_info
+        .lamports()
+        .checked_sub(amount)
+        .ok_or(PingyError::AccountingUnderflow)?;
+    **recipient_account.try_borrow_mut_lamports()? = recipient_account
+        .lamports()
+        .checked_add(amount)
+        .ok_or(PingyError::AmountOverflow)?;
 
     Ok(())
 }
@@ -459,7 +486,7 @@ pub struct InitializeThread<'info> {
     #[account(
         init,
         payer = admin,
-        space = 8 + ThreadEscrow::SIZE,
+        space = 8 + ThreadEscrow::LEN,
         seeds = [b"escrow", thread_id.as_bytes()],
         bump
     )]
@@ -487,13 +514,6 @@ pub struct PingDeposit<'info> {
     )]
     pub thread: Account<'info, Thread>,
     #[account(
-        mut,
-        seeds = [b"escrow", thread_id.as_bytes()],
-        bump = thread_escrow.bump,
-        constraint = thread_escrow.thread_id == thread_id @ PingyError::ThreadMismatch
-    )]
-    pub thread_escrow: Account<'info, ThreadEscrow>,
-    #[account(
         init_if_needed,
         payer = user,
         space = 8 + Deposit::SIZE,
@@ -501,6 +521,13 @@ pub struct PingDeposit<'info> {
         bump
     )]
     pub deposit: Account<'info, Deposit>,
+    #[account(
+        mut,
+        seeds = [b"escrow", thread_id.as_bytes()],
+        bump,
+        constraint = thread_escrow.thread_id == thread_id @ PingyError::ThreadMismatch
+    )]
+    pub thread_escrow: Account<'info, ThreadEscrow>,
     pub system_program: Program<'info, System>,
 }
 
@@ -539,7 +566,7 @@ pub struct AdminRefund<'info> {
     #[account(
         mut,
         seeds = [b"escrow", thread_id.as_bytes()],
-        bump = thread_escrow.bump,
+        bump,
         constraint = thread_escrow.thread_id == thread_id @ PingyError::ThreadMismatch
     )]
     pub thread_escrow: Account<'info, ThreadEscrow>,
@@ -574,19 +601,18 @@ pub struct UserWithdraw<'info> {
     pub thread: Account<'info, Thread>,
     #[account(
         mut,
-        seeds = [b"escrow", thread_id.as_bytes()],
-        bump = thread_escrow.bump,
-        constraint = thread_escrow.thread_id == thread_id @ PingyError::ThreadMismatch
-    )]
-    pub thread_escrow: Account<'info, ThreadEscrow>,
-    #[account(
-        mut,
         seeds = [b"deposit", thread_id.as_bytes(), user.key().as_ref()],
         bump,
         close = user
     )]
     pub deposit: Account<'info, Deposit>,
-    pub system_program: Program<'info, System>,
+    #[account(
+        mut,
+        seeds = [b"escrow", thread_id.as_bytes()],
+        bump,
+        constraint = thread_escrow.thread_id == thread_id @ PingyError::ThreadMismatch
+    )]
+    pub thread_escrow: Account<'info, ThreadEscrow>,
 }
 
 #[derive(Accounts)]
@@ -603,7 +629,7 @@ pub struct ExecuteSpawn<'info> {
     #[account(
         mut,
         seeds = [b"escrow", thread_id.as_bytes()],
-        bump = thread_escrow.bump,
+        bump,
         constraint = thread_escrow.thread_id == thread_id @ PingyError::ThreadMismatch
     )]
     pub thread_escrow: Account<'info, ThreadEscrow>,
@@ -630,6 +656,7 @@ pub struct Thread {
     pub pending_count: u32,
     pub approved_count: u32,
     pub total_allocated_lamports: u64,
+    pub total_escrow_lamports: u64,
     pub min_approved_wallets: u32,
     pub spawn_target_lamports: u64,
     pub max_wallet_share_bps: u16,
@@ -637,7 +664,7 @@ pub struct Thread {
 
 impl Thread {
     pub const MAX_THREAD_ID_LEN: usize = 64;
-    pub const LEN: usize = 4 + Self::MAX_THREAD_ID_LEN + 32 + 1 + 4 + 4 + 8 + 4 + 8 + 2;
+    pub const LEN: usize = 4 + Self::MAX_THREAD_ID_LEN + 32 + 1 + 4 + 4 + 8 + 8 + 4 + 8 + 2;
 
     fn increment_status_count(&mut self, new_status: DepositStatus) -> Result<()> {
         match new_status {
@@ -690,7 +717,6 @@ impl Thread {
 #[account]
 pub struct ThreadEscrow {
     pub thread_id: String,
-    pub bump: u8,
 }
 
 #[account]
@@ -726,7 +752,7 @@ pub struct Ban {
 
 impl ThreadEscrow {
     pub const MAX_THREAD_ID_LEN: usize = 64;
-    pub const SIZE: usize = 4 + Self::MAX_THREAD_ID_LEN + 1;
+    pub const LEN: usize = 4 + Self::MAX_THREAD_ID_LEN;
 }
 
 impl FeeVault {

@@ -34,6 +34,10 @@
           "writable": true
         },
         {
+          "name": "threadEscrow",
+          "writable": true
+        },
+        {
           "name": "feeVault",
           "writable": true
         },
@@ -46,6 +50,18 @@
         {
           "name": "threadId",
           "type": "string"
+        },
+        {
+          "name": "minApprovedWallets",
+          "type": "u32"
+        },
+        {
+          "name": "spawnTargetLamports",
+          "type": "u64"
+        },
+        {
+          "name": "maxWalletShareBps",
+          "type": "u16"
         }
       ]
     },
@@ -76,7 +92,7 @@
           "writable": true
         },
         {
-          "name": "userVault",
+          "name": "threadEscrow",
           "writable": true
         },
         {
@@ -152,19 +168,19 @@
           "signer": true
         },
         {
-          "name": "thread",
-          "writable": true
-        },
-        {
-          "name": "deposit",
-          "writable": true
-        },
-        {
           "name": "user",
           "writable": true
         },
         {
-          "name": "userVault",
+          "name": "thread",
+          "writable": true
+        },
+        {
+          "name": "threadEscrow",
+          "writable": true
+        },
+        {
+          "name": "deposit",
           "writable": true
         },
         {
@@ -214,7 +230,7 @@
           "writable": true
         },
         {
-          "name": "userVault",
+          "name": "threadEscrow",
           "writable": true
         }
       ],
@@ -224,35 +240,6 @@
           "type": "string"
         }
       ]
-    },
-    {
-      "name": "refundAll",
-      "discriminator": [
-        174,
-        87,
-        222,
-        126,
-        23,
-        59,
-        189,
-        155
-      ],
-      "accounts": [
-        {
-          "name": "user",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "userVault",
-          "writable": true
-        },
-        {
-          "name": "systemProgram",
-          "address": "11111111111111111111111111111111"
-        }
-      ],
-      "args": []
     },
     {
       "name": "executeSpawn",
@@ -277,6 +264,10 @@
           "writable": true
         },
         {
+          "name": "threadEscrow",
+          "writable": true
+        },
+        {
           "name": "spawnPool",
           "writable": true
         },
@@ -293,10 +284,44 @@
         {
           "name": "threadId",
           "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "withdrawRejected",
+      "discriminator": [
+        181,
+        161,
+        139,
+        89,
+        78,
+        96,
+        188,
+        226
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
         },
         {
-          "name": "totalToUse",
-          "type": "u64"
+          "name": "thread",
+          "writable": true
+        },
+        {
+          "name": "deposit",
+          "writable": true
+        },
+        {
+          "name": "threadEscrow",
+          "writable": true
+        }
+      ],
+      "args": [
+        {
+          "name": "threadId",
+          "type": "string"
         }
       ]
     }
@@ -342,16 +367,16 @@
       ]
     },
     {
-      "name": "userVault",
+      "name": "threadEscrow",
       "discriminator": [
-        23,
-        76,
-        96,
-        159,
-        210,
-        10,
-        5,
-        22
+        222,
+        110,
+        6,
+        190,
+        176,
+        87,
+        11,
+        91
       ]
     },
     {
@@ -414,6 +439,22 @@
           {
             "name": "totalAllocatedLamports",
             "type": "u64"
+          },
+          {
+            "name": "totalEscrowLamports",
+            "type": "u64"
+          },
+          {
+            "name": "minApprovedWallets",
+            "type": "u32"
+          },
+          {
+            "name": "spawnTargetLamports",
+            "type": "u64"
+          },
+          {
+            "name": "maxWalletShareBps",
+            "type": "u16"
           }
         ]
       }
@@ -444,6 +485,10 @@
             "type": "bool"
           },
           {
+            "name": "refundableLamports",
+            "type": "u64"
+          },
+          {
             "name": "allocatedLamports",
             "type": "u64"
           }
@@ -463,17 +508,13 @@
       }
     },
     {
-      "name": "userVault",
+      "name": "threadEscrow",
       "type": {
         "kind": "struct",
         "fields": [
           {
-            "name": "userPubkey",
-            "type": "pubkey"
-          },
-          {
-            "name": "refundableLamports",
-            "type": "u64"
+            "name": "threadId",
+            "type": "string"
           }
         ]
       }
@@ -508,6 +549,9 @@
           },
           {
             "name": "withdrawn"
+          },
+          {
+            "name": "converted"
           }
         ]
       }
@@ -614,6 +658,41 @@
       "code": 6009,
       "name": "UserBanned",
       "msg": "User is banned from this thread"
+    },
+    {
+      "code": 6010,
+      "name": "DepositNotRejected",
+      "msg": "Deposit is not rejected"
+    },
+    {
+      "code": 6011,
+      "name": "InsufficientEscrowBalance",
+      "msg": "Thread escrow has insufficient available lamports"
+    },
+    {
+      "code": 6012,
+      "name": "MinApprovedWalletsOutOfBounds",
+      "msg": "min_approved_wallets is outside allowed bounds"
+    },
+    {
+      "code": 6013,
+      "name": "SpawnTargetOutOfBounds",
+      "msg": "spawn_target_lamports is outside allowed bounds"
+    },
+    {
+      "code": 6014,
+      "name": "MaxWalletShareOutOfBounds",
+      "msg": "max_wallet_share_bps is outside allowed bounds"
+    },
+    {
+      "code": 6015,
+      "name": "SpawnTargetNotReached",
+      "msg": "Spawn target has not been reached"
+    },
+    {
+      "code": 6016,
+      "name": "MinApprovedWalletsNotReached",
+      "msg": "Minimum approved wallets requirement has not been reached"
     }
   ]
 }
