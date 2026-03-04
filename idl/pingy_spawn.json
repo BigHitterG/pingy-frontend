@@ -158,6 +158,10 @@
           "writable": true
         },
         {
+          "name": "user",
+          "writable": true
+        },
+        {
           "name": "userVault",
           "writable": true
         }
