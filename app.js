@@ -989,6 +989,8 @@ const $ = (id) => document.getElementById(id);
       o = o4;
       const totalAllocatedLamports = new DataView(bytes.buffer, bytes.byteOffset + o, 8).getBigUint64(0, true);
       o += 8;
+      const totalEscrowLamports = new DataView(bytes.buffer, bytes.byteOffset + o, 8).getBigUint64(0, true);
+      o += 8;
       const [minWallets, o5] = readU32LE(bytes, o);
       o = o5;
       const spawnTargetLamports = new DataView(bytes.buffer, bytes.byteOffset + o, 8).getBigUint64(0, true);
@@ -1002,6 +1004,7 @@ const $ = (id) => document.getElementById(id);
         pending_count: pendingCount,
         approved_count: approvedCount,
         total_allocated_lamports: Number(totalAllocatedLamports || 0n),
+        total_escrow_lamports: Number(totalEscrowLamports || 0n),
         min_approved_wallets: Number(minWallets || 0),
         spawn_target_lamports: Number(spawnTargetLamports || 0n),
         max_wallet_share_bps: Number(maxWalletShareBps || 0),
@@ -1084,6 +1087,7 @@ const $ = (id) => document.getElementById(id);
         pending_count: Number(thread.pending_count || 0),
         approved_count: Number(thread.approved_count || 0),
         total_allocated_lamports: Number(thread.total_allocated_lamports || 0),
+        total_escrow_lamports: Number(thread.total_escrow_lamports || 0),
         min_approved_wallets: Number(thread.min_approved_wallets || 0),
         spawn_target_lamports: Number(thread.spawn_target_lamports || 0),
         max_wallet_share_bps: Number(thread.max_wallet_share_bps || 0),
