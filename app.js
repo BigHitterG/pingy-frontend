@@ -2677,7 +2677,7 @@ if(connectBtn){
       const phaseBar = $("phaseBar");
 
       if(r.state === "SPAWNING"){
-        phaseLabel.textContent = "Funding first 10% of curve";
+        phaseLabel.textContent = "Raising launch liquidity";
         statePill.textContent = "SPAWNING";
         phaseBar.style.width = Math.round(spawnProgress01(r)*100) + "%";
         const progressLine = $("spawnProgressLine");
@@ -2690,7 +2690,7 @@ if(connectBtn){
             const counted = Number(onchain.total_allocated_lamports || 0) / LAMPORTS_PER_SOL;
             const approvedCount = Number(onchain.approved_count || 0);
             const minApproved = Number(onchain.min_approved_wallets || 0);
-            progressLine.textContent = `approved counted: ${counted.toFixed(3)}/${target.toFixed(3)} SOL • approved wallets: ${approvedCount}/${minApproved} • max alloc per wallet: ${capSol.toFixed(3)} SOL • Spawn fee: 1% (only charged if coin spawns)`;
+            progressLine.textContent = `approved counted: ${counted.toFixed(3)}/${target.toFixed(3)} SOL • approved wallets: ${approvedCount}/${minApproved} • Max per wallet: ${capSol.toFixed(3)} SOL • Spawn fee: 1% (only charged if coin spawns)`;
           } else {
             const spawnSnapshot = getRoomEscrowSnapshot(r);
             const legacyCapSol = Number(roomPreset(r).targetSol || 0) * (Number(roomPreset(r).maxWalletShareBps || 0) / BPS_DENOM);
@@ -2701,7 +2701,7 @@ if(connectBtn){
             const legacyTarget = Number(roomPreset(r).targetSol || 0);
             const legacyApprovedCount = Number(spawnSnapshot.approvedWallets?.length || 0);
             const legacyMinApproved = Number(roomPreset(r).minWallets || 0);
-            progressLine.textContent = `approved counted: ${legacyCounted.toFixed(3)}/${legacyTarget.toFixed(3)} SOL • approved wallets: ${legacyApprovedCount}/${legacyMinApproved} • max alloc per wallet: ${legacyCapSol.toFixed(3)} SOL • legacy thread • Spawn fee: 1% (only charged if coin spawns)`;
+            progressLine.textContent = `approved counted: ${legacyCounted.toFixed(3)}/${legacyTarget.toFixed(3)} SOL • approved wallets: ${legacyApprovedCount}/${legacyMinApproved} • Max per wallet: ${legacyCapSol.toFixed(3)} SOL • legacy thread • Spawn fee: 1% (only charged if coin spawns)`;
           }
         }
       } else if(r.state === "BONDING"){
