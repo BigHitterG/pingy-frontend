@@ -574,7 +574,7 @@ const $ = (id) => document.getElementById(id);
       userEscrow: null,
       walletPubkey: null,
       maxPingLamports: 0,
-      movers: { enabled: true, tickMs: 3000, active: new Set(), scores: {} }
+      movers: { enabled: true, tickMs: 3000, active: new Set(), scores: {}, shimmyId: null, shimmyUntil: 0 }
     };
 
     const ONCHAIN_REFRESH_MS = 7000;
@@ -2189,6 +2189,8 @@ if(connectBtn){
       const topScore = liveRooms.reduce((maxScore, room) => Math.max(maxScore, Number(state.movers.scores[room.id] || 0)), 0);
       state.movers.scores[last.id] = topScore + 10;
       state.movers.active = new Set([last.id, ...liveRooms.slice(0,2).map((room) => room.id)]);
+      state.movers.shimmyId = last.id;
+      state.movers.shimmyUntil = Date.now() + 250;
       renderHome();
     }
 
@@ -2224,6 +2226,7 @@ if(connectBtn){
       const classes = ["card"];
       if(Date.now() < (r._pulseUntil||0)) classes.push("pulse");
       if(state.movers.active.has(r.id)) classes.push("isMover");
+      if(state.movers.shimmyId === r.id && Date.now() < Number(state.movers.shimmyUntil || 0)) classes.push("isShimmy");
       el.className = classes.join(" ");
       el.innerHTML = `
         ${cardInner(r)}
