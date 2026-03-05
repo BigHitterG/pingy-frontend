@@ -1488,13 +1488,26 @@ const $ = (id) => document.getElementById(id);
       });
     }
 
-    // Create coin image (local preview)
+    // Create coin image/banner previews
     let newImgData = null;
-    function setNewImgPreview(dataUrl){
-      const prev = $("newImgPreview");
+    let newBannerData = null;
+
+    function toggleInfoPanel(btnId, panelId){
+      const btn = $(btnId);
+      const panel = $(panelId);
+      if(!btn || !panel) return;
+      btn.addEventListener("click", () => {
+        const show = panel.style.display === "none";
+        panel.style.display = show ? "block" : "none";
+        btn.setAttribute("aria-expanded", show ? "true" : "false");
+      });
+    }
+
+    function setImagePreview(elId, dataUrl, emptyText){
+      const prev = $(elId);
       prev.innerHTML = "";
       if(!dataUrl){
-        prev.innerHTML = '<span class="muted">no image</span>';
+        prev.innerHTML = `<span class="muted">${emptyText}</span>`;
         return;
       }
       const im = document.createElement("img");
@@ -1502,15 +1515,39 @@ const $ = (id) => document.getElementById(id);
       im.alt = "";
       prev.appendChild(im);
     }
-    $("newImg").addEventListener("change", (e) => {
-      const f = e.target.files && e.target.files[0];
-      if(!f){ newImgData = null; setNewImgPreview(null); return; }
-      if(!String(f.type||"").startsWith("image/")){ alert("please choose an image file."); e.target.value=""; return; }
-      // keep it lightweight (mock): cap at ~1.5MB
-      if(f.size > 1500000){ alert("image too large (max ~1.5MB for mock)."); e.target.value=""; return; }
-      const reader = new FileReader();
-      reader.onload = () => { newImgData = String(reader.result||""); setNewImgPreview(newImgData); };
-      reader.readAsDataURL(f);
+
+    function handleImageInput({ inputId, maxBytes, assignData, previewId, emptyText, overLimitMsg }){
+      $(inputId).addEventListener("change", (e) => {
+        const f = e.target.files && e.target.files[0];
+        if(!f){ assignData(null); setImagePreview(previewId, null, emptyText); return; }
+        const okType = String(f.type || "").startsWith("image/") || /\.(jpg|jpeg|gif|png)$/i.test(String(f.name || ""));
+        if(!okType){ alert("please choose a .jpg, .gif, or .png image file."); e.target.value=""; return; }
+        if(f.size > maxBytes){ alert(overLimitMsg); e.target.value=""; return; }
+        const reader = new FileReader();
+        reader.onload = () => { assignData(String(reader.result||"")); setImagePreview(previewId, String(reader.result||""), emptyText); };
+        reader.readAsDataURL(f);
+      });
+    }
+
+    toggleInfoPanel("coinImageInfoBtn", "coinImageInfo");
+    toggleInfoPanel("socialsInfoBtn", "socialsInfo");
+
+    handleImageInput({
+      inputId: "newImg",
+      maxBytes: 15000000,
+      assignData: (v) => { newImgData = v; },
+      previewId: "newImgPreview",
+      emptyText: "no image",
+      overLimitMsg: "image too large (max 15mb)."
+    });
+
+    handleImageInput({
+      inputId: "newBanner",
+      maxBytes: 4300000,
+      assignData: (v) => { newBannerData = v; },
+      previewId: "newBannerPreview",
+      emptyText: "no banner",
+      overLimitMsg: "banner too large (max 4.3mb)."
     });
 
 
@@ -2402,6 +2439,7 @@ if(connectBtn){
       r.approverWallets[connectedWallet] = true;
       r.socials = { x: xUrl, tg: tgUrl, web: webUrl };
       if(newImgData) r.image = newImgData;
+      if(newBannerData) r.banner = newBannerData;
       state.rooms.unshift(r);
       state.chat[id] = [{ ts:"—", wallet:"SYSTEM", text:"coin created. waiting for spawn." }];
 
@@ -2418,7 +2456,10 @@ if(connectBtn){
       }
       $("newImg").value = "";
       newImgData = null;
-      setNewImgPreview(null);
+      setImagePreview("newImgPreview", null, "no image");
+      if($("newBanner")) $("newBanner").value = "";
+      newBannerData = null;
+      setImagePreview("newBannerPreview", null, "no banner");
 
       toggleCreateCoin(false);
       renderHome();
@@ -3160,7 +3201,18 @@ if(connectBtn){
 
       updatePingersToggleLabel(roomId);
 
-      // room image (if provided)
+      // room banner + image (if provided)
+      const bannerEl = $("roomBanner");
+      if(bannerEl){
+        if(r.banner){
+          bannerEl.style.display = "block";
+          bannerEl.innerHTML = `<img src="${r.banner}" alt="" />`;
+        } else {
+          bannerEl.style.display = "none";
+          bannerEl.innerHTML = "";
+        }
+      }
+
       const imgEl = $("roomImg");
       if(imgEl){
         if(r.image){

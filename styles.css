@@ -330,6 +330,42 @@
     }
     .toast.on{display:flex}
 
+
+
+    .infoIconBtn{
+      width:18px;
+      height:18px;
+      border:1px solid var(--line);
+      border-radius:999px;
+      background:#fff;
+      color:var(--muted);
+      font:inherit;
+      font-size:11px;
+      line-height:1;
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      cursor:pointer;
+      padding:0;
+      flex:0 0 auto;
+    }
+    .infoIconBtn:hover{border-color:var(--fg);color:var(--fg)}
+    .infoIconBtn:focus{outline:2px solid var(--focus);outline-offset:1px}
+
+    .roomBanner{
+      border:1px solid var(--line);
+      margin-bottom:8px;
+      overflow:hidden;
+      background:#fff;
+      max-height:120px;
+    }
+    .roomBanner img{
+      width:100%;
+      height:100%;
+      object-fit:cover;
+      display:block;
+      aspect-ratio:3/1;
+    }
     .imgPrev{
       border:1px solid var(--line);
       height:72px;
