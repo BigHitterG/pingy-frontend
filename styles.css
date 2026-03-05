@@ -76,10 +76,31 @@
       scroll-snap-align:start;
       background:#fff;
       transform: translateY(0);
-      transition: transform .12s ease;
+      transition: transform 140ms ease, box-shadow 140ms ease, filter 140ms ease;
     }
-    .card:hover{transform: translateY(-2px)}
+    .card:hover{transform: translateY(-6px) scale(1.01); box-shadow:0 12px 24px rgba(0,0,0,0.18); filter:brightness(1.05)}
     .card.pulse{outline:2px solid var(--fg); outline-offset:2px}
+
+    .card.isMover{
+      position:relative;
+      outline:1px solid rgba(255,255,255,0.12);
+      box-shadow:0 10px 30px rgba(0,0,0,0.35);
+      animation:moverPulse 1.4s ease-in-out infinite;
+    }
+    .card.isMover::after{
+      content:"MOVE";
+      position:absolute;
+      top:8px;
+      right:8px;
+      border:1px solid var(--line);
+      background:#fff;
+      padding:1px 5px;
+      border-radius:999px;
+      color:var(--muted);
+      font-size:11px;
+      line-height:1;
+      pointer-events:none;
+    }
     .k{display:inline-block;border:1px solid var(--line);padding:2px 6px;border-radius:999px;color:var(--muted);font-size:12px;white-space:nowrap}
     .tiny{font-size:12px;color:var(--muted)}
     .name{font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:210px}
@@ -166,6 +187,13 @@
     .bar.barHot .barSpark::before{right:-2px; top:-4px; animation-delay:.1s;}
     .bar.barHot .barSpark::after{right:-4px; top:5px; animation-delay:.45s;}
 
+    
+    @keyframes moverPulse{
+      0%{ transform: translateY(0); }
+      50%{ transform: translateY(-2px); }
+      100%{ transform: translateY(0); }
+    }
+
     @keyframes barSheen{
       from{ transform:translateX(0); }
       to{ transform:translateX(460%); }
@@ -180,6 +208,7 @@
     }
 
     @media (prefers-reduced-motion: reduce){
+      .card.isMover{animation:none;}
       .bar.barActive::after,
       .bar.barHot .barSpark,
       .bar.barHot .barSpark::before,

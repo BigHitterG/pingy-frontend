@@ -247,6 +247,26 @@ const $ = (id) => document.getElementById(id);
       return `https://explorer.solana.com/address/${address}?cluster=devnet`;
     }
 
+
+    let moversIntervalId = null;
+
+    function stopMoversSimulation(){
+      if(moversIntervalId){
+        clearInterval(moversIntervalId);
+        moversIntervalId = null;
+      }
+    }
+
+    function startMoversSimulation(){
+      stopMoversSimulation();
+      if(!state.movers.enabled) return;
+      simulateMovers(state.rooms);
+      moversIntervalId = setInterval(() => {
+        if(!homeView?.classList.contains("on")) return;
+        simulateMovers(state.rooms);
+      }, state.movers.tickMs);
+    }
+
     function setView(which){
       const isHome = (which === "home");
       const isRoom = (which === "room");
@@ -257,6 +277,8 @@ const $ = (id) => document.getElementById(id);
       profileView.classList.toggle("on", isProfile);
       legalView.classList.toggle("on", isLegal);
       homeBtn.style.display = isHome ? "none" : "inline-block";
+      if(isHome) startMoversSimulation();
+      else stopMoversSimulation();
     }
 
     function escapeText(s){
@@ -533,7 +555,10 @@ const $ = (id) => document.getElementById(id);
       rooms: [
         mkRoom("r1","cats","CATS","just a mock coin"),
         mkRoom("r2","pump_alpha","ALPHA","tokenized attention"),
-        mkRoom("r3","meme_lab","MEME","chaos, but organized")
+        mkRoom("r3","meme_lab","MEME","chaos, but organized"),
+        mkRoom("r4","orbit_mint","ORBT","countdown to ignition"),
+        mkRoom("r5","liquid_hype","HYPE","everyone is watching"),
+        mkRoom("r6","night_shift","NITE","late hours, loud charts")
       ],
       chat: {
         r1: [{ ts:"—", wallet:"SYSTEM", text:"waiting for spawn." }],
@@ -546,7 +571,8 @@ const $ = (id) => document.getElementById(id);
       walletBalancesMeta: {},
       userEscrow: null,
       walletPubkey: null,
-      maxPingLamports: 0
+      maxPingLamports: 0,
+      movers: { enabled: true, tickMs: 3000, active: new Set(), scores: {} }
     };
 
     const ONCHAIN_REFRESH_MS = 7000;
@@ -1293,6 +1319,17 @@ const $ = (id) => document.getElementById(id);
     state.rooms[2].change_pct = 28.14;
     state.rooms[2].token_address = "4khTDC...tG8d";
     state.rooms[2].image = null;
+
+    // Extra demo rooms
+    state.rooms[3].positions = { [state.rooms[3].creator_wallet]: { escrow_sol: 0.18 } };
+    state.rooms[3]._lastActivity = Date.now() - 25_000;
+    state.rooms[4].positions = { [state.rooms[4].creator_wallet]: { escrow_sol: 2.2 } };
+    state.rooms[4]._lastActivity = Date.now() - 7_000;
+    state.rooms[5].state = "BONDING";
+    state.rooms[5].market_cap_usd = 61200;
+    state.rooms[5].change_pct = 9.84;
+    state.rooms[5].token_address = "8m7QKp...nV1z";
+    state.rooms[5]._lastActivity = Date.now() - 4_000;
 
     state.rooms.forEach((r) => {
       r.approval = r.approval || {};
@@ -2074,24 +2111,7 @@ if(connectBtn){
     }
 
     function renderCard(r, where){
-      const el = document.createElement("div");
-      el.className = "card" + ((Date.now() < (r._pulseUntil||0)) ? " pulse" : "");
-      el.innerHTML = `
-        ${cardInner(r)}
-        <div class="row" style="justify-content:flex-end; margin-top:10px;">
-          <button class="btn subtle small" data-ping="${escapeText(r.id)}">ping</button>
-          <button class="btn subtle small" data-open="${escapeText(r.id)}">open</button>
-          <button class="btn subtle small" title="share" data-share="${escapeText(r.id)}">↗</button>
-        </div>
-      `;
-      el.querySelector("[data-open]").addEventListener("click", () => openRoom(r.id));
-      el.querySelector("[data-ping]").addEventListener("click", () => {
-        openRoom(r.id);
-        // defer to ensure the room view is active before opening modal
-        setTimeout(() => openPingModal(r.id), 0);
-      });
-      el.querySelector("[data-share]").addEventListener("click", () => openShareModal(r.id));
-      where.appendChild(el);
+      where.appendChild(getOrCreateHomeCard(r));
     }
 
     function renderExploreCard(r, where){
@@ -2130,6 +2150,110 @@ if(connectBtn){
              (r.state === "BONDING") ? bondingProgress01(r) : 1;
     }
 
+    function computeMoversScore(thread){
+      const now = Date.now();
+      const lastChatAt = Number(thread?.lastChatAtMs || thread?._lastActivity || 0);
+      const recency = lastChatAt > 0 ? Math.max(0, 1 - ((now - lastChatAt) / 300000)) : 0;
+      const pingers = Array.isArray(thread?.pingers) ? thread.pingers.length : 0;
+      const pingerSignal = Math.min(1, pingers / 8);
+      const progressSignal = pctForRoom(thread);
+      return (recency * 0.45) + (pingerSignal * 0.2) + (progressSignal * 0.35) + (Math.random() * 0.25);
+    }
+
+    function simulateMovers(threads){
+      if(!state.movers.enabled) return;
+      const ranked = threads.map((thread) => {
+        const score = computeMoversScore(thread);
+        state.movers.scores[thread.id] = score;
+        return { id: thread.id, score };
+      }).sort((a,b) => b.score - a.score);
+
+      const topIds = ranked.slice(0, Math.min(3, ranked.length)).map((item) => item.id);
+      state.movers.active = new Set(topIds);
+      renderHome();
+    }
+
+    function sortedLiveRooms(){
+      return state.rooms
+        .slice()
+        .sort((a,b) => {
+          const moverDelta = Number(state.movers.scores[b.id] || 0) - Number(state.movers.scores[a.id] || 0);
+          if(Math.abs(moverDelta) > 0.0001) return moverDelta;
+          const la = Number(a._lastActivity||0), lb = Number(b._lastActivity||0);
+          if(lb !== la) return lb - la;
+          const sa = roomRankKey(a), sb = roomRankKey(b);
+          if(sa !== sb) return sa - sb;
+          return pctForRoom(b) - pctForRoom(a);
+        })
+        .slice(0,9);
+    }
+
+    const homeCardElsByThreadId = new Map();
+
+    function getOrCreateHomeCard(r){
+      let el = homeCardElsByThreadId.get(r.id);
+      if(!el){
+        el = document.createElement("div");
+        el.style.willChange = "transform";
+        homeCardElsByThreadId.set(r.id, el);
+      }
+      updateHomeCard(el, r);
+      return el;
+    }
+
+    function updateHomeCard(el, r){
+      const classes = ["card"];
+      if(Date.now() < (r._pulseUntil||0)) classes.push("pulse");
+      if(state.movers.active.has(r.id)) classes.push("isMover");
+      el.className = classes.join(" ");
+      el.innerHTML = `
+        ${cardInner(r)}
+        <div class="row" style="justify-content:flex-end; margin-top:10px;">
+          <button class="btn subtle small" data-ping="${escapeText(r.id)}">ping</button>
+          <button class="btn subtle small" data-open="${escapeText(r.id)}">open</button>
+          <button class="btn subtle small" title="share" data-share="${escapeText(r.id)}">↗</button>
+        </div>
+      `;
+      el.querySelector("[data-open]").addEventListener("click", () => openRoom(r.id));
+      el.querySelector("[data-ping]").addEventListener("click", () => {
+        openRoom(r.id);
+        setTimeout(() => openPingModal(r.id), 0);
+      });
+      el.querySelector("[data-share]").addEventListener("click", () => openShareModal(r.id));
+    }
+
+    function animateHomeReorder(container, liveRooms){
+      const first = new Map();
+      liveRooms.forEach((room) => {
+        const existing = homeCardElsByThreadId.get(room.id);
+        if(existing && existing.isConnected) first.set(room.id, existing.getBoundingClientRect());
+      });
+
+      liveRooms.forEach((room) => container.appendChild(getOrCreateHomeCard(room)));
+
+      const flips = [];
+      liveRooms.forEach((room) => {
+        const el = homeCardElsByThreadId.get(room.id);
+        const prev = first.get(room.id);
+        if(!el || !prev) return;
+        const next = el.getBoundingClientRect();
+        const dx = prev.left - next.left;
+        const dy = prev.top - next.top;
+        if(Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return;
+        el.style.transition = "none";
+        el.style.transform = `translate(${dx}px, ${dy}px)`;
+        flips.push(el);
+      });
+
+      if(!flips.length) return;
+      requestAnimationFrame(() => {
+        flips.forEach((el) => {
+          el.style.transition = "transform 350ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 140ms ease, filter 140ms ease";
+          el.style.transform = "translate(0, 0)";
+        });
+      });
+    }
+
     let exploreQuery = "";
     let exploreHasSearched = false;
 
@@ -2142,22 +2266,17 @@ if(connectBtn){
     function renderHome(){
       const cardsRow = $("cardsRow");
       const exploreList = $("exploreList");
-      cardsRow.innerHTML = "";
+      if(!cardsRow || !exploreList) return;
       exploreList.innerHTML = "";
 
       // LIVE: never filtered by explore search
-      const liveRooms = state.rooms
-        .slice()
-        .sort((a,b) => {
-          const la = Number(a._lastActivity||0), lb = Number(b._lastActivity||0);
-          if(lb !== la) return lb - la; // most recent activity first
-          const sa = roomRankKey(a), sb = roomRankKey(b);
-          if(sa !== sb) return sa - sb;
-          return pctForRoom(b) - pctForRoom(a);
-        })
-        .slice(0,9);
+      const liveRooms = sortedLiveRooms();
+      animateHomeReorder(cardsRow, liveRooms);
+      const liveIds = new Set(liveRooms.map((r) => r.id));
+      for(const [id, el] of homeCardElsByThreadId.entries()){
+        if(!liveIds.has(id) && el.parentElement === cardsRow) cardsRow.removeChild(el);
+      }
 
-      liveRooms.forEach(r => renderCard(r, cardsRow));
 
       // EXPLORE: show nothing until a search is submitted
       if(!exploreHasSearched || !exploreQuery){
