@@ -2034,7 +2034,7 @@ if(connectBtn){
                 <span class="k">SPAWNING</span>
               </div>
               <div class="tiny subline">${escapeText(r.desc || "prespawn chat open")}</div>
-              <div class="bar"><i style="width:${pct}%"></i></div>
+              <div class="bar barActive barSpawn"><i style="width:${pct}%"></i></div>
               <div class="barRow">
                 <div class="tiny">raising launch liquidity</div>
                 <div class="pct">${pct}%</div>
@@ -2050,6 +2050,9 @@ if(connectBtn){
       const chg = Number(r.change_pct || 0);
       const chgCls = chg > 0 ? "up" : (chg < 0 ? "down" : "");
       const chip = (r.state === "BONDING") ? "BONDING" : "BONDED";
+      const athRatio = p;
+      const isHotBonding = r.state === "BONDING" && athRatio >= 0.9;
+      const barClass = isHotBonding ? "bar barActive barBonding barHot" : "bar barActive barBonding";
 
       return `
         <div class="cardGrid">
@@ -2060,7 +2063,7 @@ if(connectBtn){
               <span class="k">${chip}</span>
             </div>
             <div class="tiny subline">${escapeText(r.desc || "—")}</div>
-            <div class="bar green"><i style="width:${pct}%"></i></div>
+            <div class="${barClass}"><i style="width:${pct}%"></i>${isHotBonding ? `<span class="barSpark"></span>` : ""}</div>
           </div>
           <div>
             <div class="metric">${fmtK(mc)}</div>
@@ -3043,6 +3046,7 @@ if(connectBtn){
       const phaseLabel = $("phaseLabel");
       const statePill = $("statePill");
       const phaseBar = $("phaseBar");
+      const phaseBarWrap = phaseBar ? phaseBar.parentElement : null;
 
       if(r.state === "SPAWNING"){
         phaseLabel.textContent = "Raising launch liquidity";
@@ -3053,6 +3057,12 @@ if(connectBtn){
           ? Math.min(allocated / target, 1)
           : 0;
         phaseBar.style.width = Math.round(progress * 100) + "%";
+        phaseBar.style.background = "#ff6eb1";
+        if(phaseBarWrap){
+          phaseBarWrap.className = "bar barActive barSpawn";
+          const sparkEl = phaseBarWrap.querySelector(".barSpark");
+          if(sparkEl) sparkEl.remove();
+        }
         const progressLine = $("spawnProgressLine");
         if(progressLine){
           const approvedCount = Number(r?.onchain?.approved_count || 0);
@@ -3062,13 +3072,32 @@ if(connectBtn){
       } else if(r.state === "BONDING"){
         phaseLabel.textContent = "BONDING";
         statePill.textContent = "BONDING";
-        phaseBar.style.width = Math.round(bondingProgress01(r)*100) + "%";
+        const bondProgress = bondingProgress01(r);
+        const hotBonding = bondProgress >= 0.9;
+        phaseBar.style.width = Math.round(bondProgress*100) + "%";
+        phaseBar.style.background = hotBonding ? "#46d36f" : "#84d4ff";
+        if(phaseBarWrap){
+          phaseBarWrap.className = hotBonding ? "bar barActive barBonding barHot" : "bar barActive barBonding";
+          let sparkEl = phaseBarWrap.querySelector(".barSpark");
+          if(hotBonding && !sparkEl){
+            sparkEl = document.createElement("span");
+            sparkEl.className = "barSpark";
+            phaseBarWrap.appendChild(sparkEl);
+          }
+          if(!hotBonding && sparkEl) sparkEl.remove();
+        }
         const progressLine = $("spawnProgressLine");
         if(progressLine) progressLine.textContent = `trading fee: ${POST_SPAWN_TRADING_FEE_BPS / 100}% (displayed only; enforcement depends on trade routing)`;
       } else {
         phaseLabel.textContent = "BONDED";
         statePill.textContent = "BONDED";
         phaseBar.style.width = "100%";
+        phaseBar.style.background = "#46d36f";
+        if(phaseBarWrap){
+          phaseBarWrap.className = "bar";
+          const sparkEl = phaseBarWrap.querySelector(".barSpark");
+          if(sparkEl) sparkEl.remove();
+        }
         const progressLine = $("spawnProgressLine");
         if(progressLine) progressLine.textContent = `trading fee: ${POST_SPAWN_TRADING_FEE_BPS / 100}% (displayed only; enforcement depends on trade routing)`;
       }
