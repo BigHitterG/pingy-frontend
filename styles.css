@@ -87,6 +87,9 @@
       box-shadow:0 10px 30px rgba(0,0,0,0.35);
       animation:moverPulse 1.4s ease-in-out infinite;
     }
+    .card.isMover.isShimmy{
+      animation:moverShimmy 0.25s ease-in-out, moverPulse 1.4s ease-in-out 0.25s infinite;
+    }
     .k{display:inline-block;border:1px solid var(--line);padding:2px 6px;border-radius:999px;color:var(--muted);font-size:12px;white-space:nowrap}
     .tiny{font-size:12px;color:var(--muted)}
     .name{font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:210px}
@@ -174,6 +177,14 @@
     .bar.barHot .barSpark::after{right:-4px; top:5px; animation-delay:.45s;}
 
     
+    @keyframes moverShimmy{
+      0%{ transform: translateX(0) translateY(0); }
+      25%{ transform: translateX(-2px) translateY(0); }
+      50%{ transform: translateX(2px) translateY(0); }
+      75%{ transform: translateX(-1px) translateY(0); }
+      100%{ transform: translateX(0) translateY(0); }
+    }
+
     @keyframes moverPulse{
       0%{ transform: translateY(0); }
       50%{ transform: translateY(-2px); }
@@ -194,7 +205,8 @@
     }
 
     @media (prefers-reduced-motion: reduce){
-      .card.isMover{animation:none;}
+      .card.isMover,
+      .card.isMover.isShimmy{animation:none;}
       .bar.barActive::after,
       .bar.barHot .barSpark,
       .bar.barHot .barSpark::before,
