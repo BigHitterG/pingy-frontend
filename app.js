@@ -358,8 +358,9 @@ const $ = (id) => document.getElementById(id);
       const hint = $("presetCapHint");
       if(!hint) return;
       const preset = selectedPreset();
-      const pct = Number(preset.maxWalletShareBps || 0) / 100;
-      hint.textContent = `Cap per wallet: ${pct}%`;
+      const targetSol = Number(preset.targetSol || 0);
+      const capSol = targetSol * (Number(preset.maxWalletShareBps || 0) / 10000);
+      hint.textContent = `Cap per wallet: ${capSol.toFixed(3)} SOL`;
     }
 
     function roomPreset(room){

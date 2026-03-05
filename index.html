@@ -30,15 +30,15 @@
     </div>
     <!-- HOME VIEW: discovery and coin creation -->
     <div class="view on" id="homeView">
-      <!-- Create coin (collapsible) -->
+      <!-- Spawn coin (collapsible) -->
       <div class="panel collapse" id="createCoinWrap" style="margin-bottom:10px;">
         <div class="collapseHead" id="createCoinHead" aria-expanded="false">
-          <div class="caret"><span class="tri" id="createTri">▶</span> <b>create coin</b></div>
-          <div class="muted">spawns later • can exit anytime before spawn</div>
+          <div class="caret"><span class="tri" id="createTri">▶</span> <b>spawn coin</b></div>
         </div>
         <div class="collapseBody" id="createCoinBody">
           <div class="col" style="gap:10px;">
             <div class="panel">
+              <div class="muted" style="margin-bottom:8px;">spawns later • can exit anytime before spawn</div>
               <div class="h">details</div>
               <div class="muted">name</div>
               <input id="newName" placeholder="e.g. cats" maxlength="32" />
@@ -55,7 +55,7 @@
                 <option value="balanced" selected>Balanced (20 wallets, 5 SOL)</option>
                 <option value="high_quality">High Quality (30 wallets, 8 SOL)</option>
               </select>
-              <div class="muted tiny" id="presetCapHint" style="margin-top:6px;">Cap per wallet: 7%</div>
+              <div class="muted tiny" id="presetCapHint" style="margin-top:6px;">Cap per wallet: 0.350 SOL</div>
               <div class="muted" style="margin-top:8px;">coin image</div>
               <input id="newImg" type="file" accept="image/*" />
               <div class="imgPrev" id="newImgPreview" style="margin-top:6px;"><span class="muted">no image</span></div>
@@ -74,16 +74,16 @@
 
             <div class="panel">
               <div class="h">optional commit</div>
-              <div class="muted">escrow only. you can still unping before spawn.</div>
+              <div class="muted">you are committing SOL escrow. this is returned to you as creator if you unping before spawn.</div>
               <div class="row" style="margin-top:8px;">
                 <div class="muted" style="min-width:120px;">SOL</div>
                 <input id="newCommit" placeholder="e.g. 0.50" inputmode="decimal" style="max-width:220px;" />
               </div>
-              <div class="muted" style="margin-top:8px;">first ping may include a small Solana network/storage cost. you can fully unping before spawn to withdraw your escrow (minus network fees).</div>
+              <div class="muted" style="margin-top:8px;">creators also incur a small spawn-pool creation fee for the community escrow pool. this fee is not returned.</div>
             </div>
 
             <div class="row" style="justify-content:flex-end;">
-              <button class="btn" id="createCoinBtn">create (mock)</button>
+              <button class="btn" id="createCoinBtn">spawn</button>
             </div>
           </div>
         </div>
