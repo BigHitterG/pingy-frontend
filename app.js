@@ -1461,6 +1461,11 @@ const $ = (id) => document.getElementById(id);
       if(location.hash !== target) location.hash = target;
     }
 
+    function openProfile(wallet){
+      if(!wallet) return;
+      navigateHash("profile/" + encodeURIComponent(wallet));
+    }
+
 
     async function init(){
       homeView = $("homeView");
@@ -1686,7 +1691,7 @@ if(connectBtn){
     console.log("[pingy] visible modal overlays at init:", visibleModalOverlays);
 
     // Profile modal
-    function openProfile(){
+    function openProfileModal(){
       // allow opening even when disconnected (read-only)
       $("profileWalletLine").textContent = connectedWallet ? connectedWallet : "not connected";
       if(connectedWallet){
@@ -2698,6 +2703,19 @@ if(connectBtn){
           <div class="ts">${escapeText(m.ts)}</div>
         `;
 
+        if(!isSys){
+          const whoName = row.querySelector(".whoName");
+          if(whoName){
+            whoName.innerHTML = "";
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "walletLink";
+            btn.textContent = displayName(m.wallet);
+            btn.addEventListener("click", () => openProfile(m.wallet));
+            whoName.appendChild(btn);
+          }
+        }
+
         row.querySelector(".copyBtn").addEventListener("click", () => copyToClipboard(m.wallet));
 
         box.appendChild(row);
@@ -2851,7 +2869,14 @@ if(connectBtn){
         const left = document.createElement("div");
         left.className = "tiny";
         const allocated = Number(walletRow.allocated_sol || 0);
-        left.textContent = `@${shortWallet(wallet)} • Allocated ${allocated.toFixed(3)} SOL`;
+        left.innerHTML = "";
+        const walletBtn = document.createElement("button");
+        walletBtn.type = "button";
+        walletBtn.className = "walletLink";
+        walletBtn.textContent = displayName(wallet);
+        walletBtn.addEventListener("click", () => openProfile(wallet));
+        left.appendChild(walletBtn);
+        left.appendChild(document.createTextNode(` • Allocated ${allocated.toFixed(3)} SOL`));
 
         const right = document.createElement("div");
         right.className = "row";
