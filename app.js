@@ -1175,46 +1175,60 @@ const $ = (id) => document.getElementById(id);
       const lamports = await connection.getBalance(ownerPk, "confirmed");
       const nativeSol = Number(lamports || 0) / LAMPORTS_PER_SOL;
 
-      const depositsByThread = {};
-      const depositAccounts = await connection.getProgramAccounts(PROGRAM_ID, {
-        commitment: "confirmed",
-        filters: [{ dataSize: 8 + 4 + 64 + 32 + 1 + 1 + 8 + 8 }]
-      });
-      for(const acct of depositAccounts){
-        if(!acct?.account?.data || acct.account.data.length < 8) continue;
-        const deposit = decodeDepositAccount(acct.account.data);
-        if(!deposit || deposit.user !== wallet) continue;
-        const refundableSol = Math.max(0, Number(deposit.refundable_lamports || 0) / LAMPORTS_PER_SOL);
-        const allocatedSol = Math.max(0, Number(deposit.allocated_lamports || 0) / LAMPORTS_PER_SOL);
-        const threadId = deposit.threadId;
-        depositsByThread[threadId] = {
-          threadId,
-          status: normalizeDepositStatus(deposit.status),
-          refundable_sol: refundableSol,
-          allocated_sol: allocatedSol,
-          withdrawable_sol: refundableSol + allocatedSol,
-          deposit_pda: acct.pubkey.toBase58(),
-        };
+      let depositsByThread = {};
+      let tokenBalances = [];
+      let depositsError = "";
+      let tokensError = "";
+
+      try {
+        const depositAccounts = await connection.getProgramAccounts(PROGRAM_ID, {
+          commitment: "confirmed",
+          filters: [{ dataSize: 8 + 4 + 64 + 32 + 1 + 1 + 8 + 8 }]
+        });
+        for(const acct of depositAccounts){
+          if(!acct?.account?.data || acct.account.data.length < 8) continue;
+          const deposit = decodeDepositAccount(acct.account.data);
+          if(!deposit || deposit.user !== wallet) continue;
+          const refundableSol = Math.max(0, Number(deposit.refundable_lamports || 0) / LAMPORTS_PER_SOL);
+          const allocatedSol = Math.max(0, Number(deposit.allocated_lamports || 0) / LAMPORTS_PER_SOL);
+          const threadId = deposit.threadId;
+          depositsByThread[threadId] = {
+            threadId,
+            status: normalizeDepositStatus(deposit.status),
+            refundable_sol: refundableSol,
+            allocated_sol: allocatedSol,
+            withdrawable_sol: refundableSol + allocatedSol,
+            deposit_pda: acct.pubkey.toBase58(),
+          };
+        }
+      } catch(e){
+        depositsByThread = {};
+        depositsError = String(e?.message || e || "failed to fetch deposits");
       }
 
-      const tokenResp = await connection.getParsedTokenAccountsByOwner(ownerPk, { programId: TOKEN_PROGRAM_ID }, "confirmed");
-      const roomByTokenAddress = new Map();
-      state.rooms.forEach((room) => {
-        const normalized = normalizeMintAddress(room.token_address);
-        if(normalized) roomByTokenAddress.set(normalized, room.id);
-      });
-      const tokenBalances = [];
-      for(const entry of tokenResp?.value || []){
-        const info = entry?.account?.data?.parsed?.info;
-        const mint = info?.mint;
-        const uiAmount = Number(info?.tokenAmount?.uiAmount || 0);
-        if(!mint || uiAmount <= 0) continue;
-        const normalizedMint = normalizeMintAddress(mint);
-        tokenBalances.push({
-          mint: normalizedMint || String(mint),
-          amount: uiAmount,
-          roomId: roomByTokenAddress.get(normalizedMint) || null,
+      try {
+        const tokenResp = await connection.getParsedTokenAccountsByOwner(ownerPk, { programId: TOKEN_PROGRAM_ID }, "confirmed");
+        const roomByTokenAddress = new Map();
+        state.rooms.forEach((room) => {
+          const normalized = normalizeMintAddress(room.token_address);
+          if(normalized) roomByTokenAddress.set(normalized, room.id);
         });
+        tokenBalances = [];
+        for(const entry of tokenResp?.value || []){
+          const info = entry?.account?.data?.parsed?.info;
+          const mint = info?.mint;
+          const uiAmount = Number(info?.tokenAmount?.uiAmount || 0);
+          if(!mint || uiAmount <= 0) continue;
+          const normalizedMint = normalizeMintAddress(mint);
+          tokenBalances.push({
+            mint: normalizedMint || String(mint),
+            amount: uiAmount,
+            roomId: roomByTokenAddress.get(normalizedMint) || null,
+          });
+        }
+      } catch(e){
+        tokenBalances = [];
+        tokensError = String(e?.message || e || "failed to fetch token balances");
       }
 
       const snapshot = {
@@ -1224,6 +1238,8 @@ const $ = (id) => document.getElementById(id);
         tokenBalances,
         fetchedAtMs: Date.now(),
       };
+      if(depositsError) snapshot.deposits_error = depositsError;
+      if(tokensError) snapshot.tokens_error = tokensError;
       state.walletBalances[wallet] = snapshot;
       state.walletBalancesMeta[wallet] = { fetchedAtMs: snapshot.fetchedAtMs };
       return snapshot;
@@ -1238,7 +1254,19 @@ const $ = (id) => document.getElementById(id);
       if(!force && meta.fetchedAtMs && (now - meta.fetchedAtMs) < WALLET_BAL_REFRESH_MS){
         return Promise.resolve(state.walletBalances[wallet] || null);
       }
-      const inflight = fetchWalletBalancesSnapshot(wallet).catch(() => null).finally(() => {
+      const inflight = fetchWalletBalancesSnapshot(wallet).catch((e) => {
+        const fallback = {
+          wallet,
+          nativeSol: 0,
+          depositsByThread: {},
+          tokenBalances: [],
+          fetchedAtMs: Date.now(),
+          error: String(e?.message || e || "balance fetch failed"),
+        };
+        state.walletBalances[wallet] = fallback;
+        state.walletBalancesMeta[wallet] = { fetchedAtMs: fallback.fetchedAtMs };
+        return fallback;
+      }).finally(() => {
         const latest = state.walletBalancesMeta[wallet] || {};
         delete latest.inflight;
         state.walletBalancesMeta[wallet] = latest;
@@ -2334,6 +2362,13 @@ if(connectBtn){
         const usd = Math.max(0, sol) * SOL_TO_USD;
         const sections = document.createElement("div");
         sections.className = "profileTabList";
+
+        if(snapshot.error || snapshot.deposits_error || snapshot.tokens_error){
+          const partial = document.createElement("div");
+          partial.className = "muted tiny";
+          partial.textContent = "Balances partial (offline)";
+          sections.appendChild(partial);
+        }
 
         const solRow = document.createElement("div");
         solRow.className = "btn subtle profileTabRow";
