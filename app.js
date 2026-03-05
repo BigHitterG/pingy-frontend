@@ -537,13 +537,17 @@ const $ = (id) => document.getElementById(id);
       },
       onchain: {},
       onchainMeta: {},
+      walletBalances: {},
+      walletBalancesMeta: {},
       userEscrow: null,
       walletPubkey: null,
       maxPingLamports: 0
     };
 
     const ONCHAIN_REFRESH_MS = 7000;
+    const WALLET_BAL_REFRESH_MS = 6000;
     const LAMPORTS_PER_SOL = 1_000_000_000;
+    const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 
 
     function readU32LE(bytes, offset){
@@ -1029,7 +1033,7 @@ const $ = (id) => document.getElementById(id);
       const refundableLamports = new DataView(bytes.buffer, bytes.byteOffset + o, 8).getBigUint64(0, true);
       o += 8;
       const allocatedLamports = new DataView(bytes.buffer, bytes.byteOffset + o, 8).getBigUint64(0, true);
-      const statusMap = ["pending", "approved", "denied", "withdrawn", "converted"];
+      const statusMap = ["pending", "approved", "rejected", "withdrawn", "converted"];
       return {
         threadId,
         user: userPubkey.toBase58(),
@@ -1154,6 +1158,92 @@ const $ = (id) => document.getElementById(id);
         state.onchainMeta[roomId] = latest;
       });
       state.onchainMeta[roomId] = { ...meta, inflight };
+      return inflight;
+    }
+
+    function normalizeMintAddress(mint){
+      const raw = String(mint || "").trim();
+      if(!raw || raw.includes("...")) return "";
+      try { return new PublicKey(raw).toBase58(); }
+      catch(_e){ return ""; }
+    }
+
+    async function fetchWalletBalancesSnapshot(wallet){
+      if(!wallet) return null;
+      const ownerPk = new PublicKey(wallet);
+
+      const lamports = await connection.getBalance(ownerPk, "confirmed");
+      const nativeSol = Number(lamports || 0) / LAMPORTS_PER_SOL;
+
+      const depositsByThread = {};
+      const depositAccounts = await connection.getProgramAccounts(PROGRAM_ID, {
+        commitment: "confirmed",
+        filters: [{ dataSize: 8 + 4 + 64 + 32 + 1 + 1 + 8 + 8 }]
+      });
+      for(const acct of depositAccounts){
+        if(!acct?.account?.data || acct.account.data.length < 8) continue;
+        const deposit = decodeDepositAccount(acct.account.data);
+        if(!deposit || deposit.user !== wallet) continue;
+        const refundableSol = Math.max(0, Number(deposit.refundable_lamports || 0) / LAMPORTS_PER_SOL);
+        const allocatedSol = Math.max(0, Number(deposit.allocated_lamports || 0) / LAMPORTS_PER_SOL);
+        const threadId = deposit.threadId;
+        depositsByThread[threadId] = {
+          threadId,
+          status: normalizeDepositStatus(deposit.status),
+          refundable_sol: refundableSol,
+          allocated_sol: allocatedSol,
+          withdrawable_sol: refundableSol + allocatedSol,
+          deposit_pda: acct.pubkey.toBase58(),
+        };
+      }
+
+      const tokenResp = await connection.getParsedTokenAccountsByOwner(ownerPk, { programId: TOKEN_PROGRAM_ID }, "confirmed");
+      const roomByTokenAddress = new Map();
+      state.rooms.forEach((room) => {
+        const normalized = normalizeMintAddress(room.token_address);
+        if(normalized) roomByTokenAddress.set(normalized, room.id);
+      });
+      const tokenBalances = [];
+      for(const entry of tokenResp?.value || []){
+        const info = entry?.account?.data?.parsed?.info;
+        const mint = info?.mint;
+        const uiAmount = Number(info?.tokenAmount?.uiAmount || 0);
+        if(!mint || uiAmount <= 0) continue;
+        const normalizedMint = normalizeMintAddress(mint);
+        tokenBalances.push({
+          mint: normalizedMint || String(mint),
+          amount: uiAmount,
+          roomId: roomByTokenAddress.get(normalizedMint) || null,
+        });
+      }
+
+      const snapshot = {
+        wallet,
+        nativeSol,
+        depositsByThread,
+        tokenBalances,
+        fetchedAtMs: Date.now(),
+      };
+      state.walletBalances[wallet] = snapshot;
+      state.walletBalancesMeta[wallet] = { fetchedAtMs: snapshot.fetchedAtMs };
+      return snapshot;
+    }
+
+    function refreshWalletBalances(wallet, opts = {}){
+      if(!wallet) return Promise.resolve(null);
+      const force = !!opts.force;
+      const now = Date.now();
+      const meta = state.walletBalancesMeta[wallet] || {};
+      if(!force && meta.inflight) return meta.inflight;
+      if(!force && meta.fetchedAtMs && (now - meta.fetchedAtMs) < WALLET_BAL_REFRESH_MS){
+        return Promise.resolve(state.walletBalances[wallet] || null);
+      }
+      const inflight = fetchWalletBalancesSnapshot(wallet).catch(() => null).finally(() => {
+        const latest = state.walletBalancesMeta[wallet] || {};
+        delete latest.inflight;
+        state.walletBalancesMeta[wallet] = latest;
+      });
+      state.walletBalancesMeta[wallet] = { ...meta, inflight };
       return inflight;
     }
 
@@ -1695,7 +1785,7 @@ if(connectBtn){
 
     function normalizeDepositStatus(status){
       const raw = statusToString(status).toLowerCase();
-      if(raw === "rejected") return "denied";
+      if(raw === "denied") return "rejected";
       return raw;
     }
 
@@ -1721,7 +1811,10 @@ if(connectBtn){
       if(onchainApprovers.length > 0) return onchainApprovers.includes(wallet);
       return isCreator(r, wallet) || !!(r.approverWallets && r.approverWallets[wallet]);
     }
-    function isDenied(r, wallet){ return walletStatus(r, wallet) === "denied"; }
+    function isDenied(r, wallet){
+      const status = walletStatus(r, wallet);
+      return status === "denied" || status === "rejected";
+    }
     function isPending(r, wallet){ return walletStatus(r, wallet) === "pending"; }
 
     function getRoomEscrowSnapshot(room){
@@ -2192,6 +2285,15 @@ if(connectBtn){
       renderProfilePage();
     }
 
+    function profileBalanceStatusLabel(status){
+      if(status === "pending") return "pending approval";
+      if(status === "approved") return "approved";
+      if(status === "rejected") return "rejected";
+      if(status === "withdrawn") return "withdrawn";
+      if(status === "converted") return "converted";
+      return status || "unknown";
+    }
+
     async function renderProfileTabs(wallet){
       const content = $("profileTabContent");
       const tabButtons = {
@@ -2211,20 +2313,125 @@ if(connectBtn){
       }
 
       if(activeProfileTab === "balances"){
-        let sol = null;
-        try {
-          const lamports = await connection.getBalance(new PublicKey(wallet));
-          sol = Number(lamports || 0) / LAMPORTS_PER_SOL;
-        } catch(err){
-          sol = null;
+        let snapshot = state.walletBalances[wallet] || null;
+        if(!snapshot){
+          snapshot = await refreshWalletBalances(wallet);
+        } else {
+          refreshWalletBalances(wallet);
         }
         if(profileRouteWallet() !== wallet) return;
-        if(sol === null){
-          content.innerHTML = '<div class="muted">— SOL</div><div class="muted tiny">$0 (mock)</div>';
-        } else {
-          const usd = Math.max(0, sol) * SOL_TO_USD;
-          content.innerHTML = `<div><b>${sol.toFixed(2)} SOL</b></div><div class="muted tiny">${fmtUsd(usd)} (mock)</div>`;
+        if(!snapshot){
+          content.innerHTML = '<div class="muted">loading balances…</div>';
+          return;
         }
+
+        const sol = Number(snapshot.nativeSol || 0);
+        const usd = Math.max(0, sol) * SOL_TO_USD;
+        const sections = document.createElement("div");
+        sections.className = "profileTabList";
+
+        const solRow = document.createElement("div");
+        solRow.className = "btn subtle profileTabRow";
+        solRow.innerHTML = `<span><b>${sol.toFixed(4)} SOL</b></span><span class="muted tiny">${fmtUsd(usd)} (mock)</span>`;
+        sections.appendChild(solRow);
+
+        const escrowsHeader = document.createElement("div");
+        escrowsHeader.className = "muted tiny";
+        escrowsHeader.textContent = "Pingy escrows";
+        sections.appendChild(escrowsHeader);
+
+        const deposits = Object.values(snapshot.depositsByThread || {});
+        if(!deposits.length){
+          const none = document.createElement("div");
+          none.className = "muted tiny";
+          none.textContent = "no escrow positions";
+          sections.appendChild(none);
+        } else {
+          deposits.forEach((deposit) => {
+            const room = roomById(deposit.threadId);
+            const row = document.createElement("div");
+            row.className = "btn subtle profileTabRow";
+            const left = document.createElement("span");
+            left.innerHTML = `${escapeText(room ? `${room.name} $${room.ticker}` : deposit.threadId)} <span class="muted tiny">${escapeText(profileBalanceStatusLabel(deposit.status))} • ${Number(deposit.withdrawable_sol || 0).toFixed(4)} SOL</span>`;
+            const right = document.createElement("span");
+            right.style.display = "inline-flex";
+            right.style.gap = "6px";
+            const openBtn = document.createElement("button");
+            openBtn.className = "btn subtle small";
+            openBtn.type = "button";
+            openBtn.textContent = "open";
+            openBtn.addEventListener("click", (e) => {
+              e.stopPropagation();
+              navigateHash("room/" + encodeURIComponent(deposit.threadId));
+            });
+            right.appendChild(openBtn);
+            if(room && connectedWallet && connectedWallet === wallet && room.state === "SPAWNING"){
+              const unpingBtn = document.createElement("button");
+              unpingBtn.className = "btn subtle small";
+              unpingBtn.type = "button";
+              unpingBtn.textContent = "unping";
+              unpingBtn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                openUnpingModal(room.id);
+              });
+              right.appendChild(unpingBtn);
+            }
+            row.appendChild(left);
+            row.appendChild(right);
+            sections.appendChild(row);
+          });
+        }
+
+        const tokenHeader = document.createElement("div");
+        tokenHeader.className = "muted tiny";
+        tokenHeader.textContent = "Tokens";
+        sections.appendChild(tokenHeader);
+
+        const tokens = snapshot.tokenBalances || [];
+        if(!tokens.length){
+          const none = document.createElement("div");
+          none.className = "muted tiny";
+          none.textContent = "no SPL tokens";
+          sections.appendChild(none);
+        } else {
+          tokens.forEach((token) => {
+            const room = token.roomId ? roomById(token.roomId) : null;
+            const row = document.createElement("div");
+            row.className = "btn subtle profileTabRow";
+            const left = document.createElement("span");
+            left.innerHTML = `${escapeText(room ? `${room.name} $${room.ticker}` : shortWallet(token.mint))} <span class="muted tiny">${Number(token.amount || 0).toLocaleString()}</span>`;
+            row.appendChild(left);
+            if(room){
+              const right = document.createElement("span");
+              right.style.display = "inline-flex";
+              right.style.gap = "6px";
+              const openBtn = document.createElement("button");
+              openBtn.className = "btn subtle small";
+              openBtn.type = "button";
+              openBtn.textContent = "open";
+              openBtn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                navigateHash("room/" + encodeURIComponent(room.id));
+              });
+              right.appendChild(openBtn);
+              const sellBtn = document.createElement("button");
+              sellBtn.className = "btn subtle small";
+              sellBtn.type = "button";
+              sellBtn.textContent = "sell";
+              sellBtn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                navigateHash("room/" + encodeURIComponent(room.id));
+                setTimeout(() => openUnpingModal(room.id), 0);
+              });
+              right.appendChild(sellBtn);
+              row.appendChild(right);
+            }
+            sections.appendChild(row);
+          });
+        }
+
+        content.innerHTML = "";
+        content.appendChild(sections);
         return;
       }
 
@@ -3120,6 +3327,10 @@ if(connectBtn){
       if(activeRoomId){
         refreshRoomOnchainSnapshot(activeRoomId);
         renderRoom(activeRoomId);
+      }
+      if(profileView.classList.contains("on") && activeProfileTab === "balances"){
+        const wallet = profileRouteWallet();
+        if(wallet) refreshWalletBalances(wallet);
       }
       if(profileView.classList.contains("on")) renderProfilePage();
     }
