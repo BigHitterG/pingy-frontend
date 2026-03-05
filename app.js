@@ -74,11 +74,6 @@ const $ = (id) => document.getElementById(id);
     const MAX_TOKENS_PER_WALLET = TOTAL_SUPPLY * MAX_WALLET_PCT_TOTAL; // 5,000,000
 
 
-    // Virtual spawn curve (SOL per token) — linear, increasing with tranche sold (mock)
-    const VPRICE_P0 = 2e-7;   // starting price (SOL per token)
-    const VPRICE_P1 = 8e-7;   // additional price by end of tranche
-    const VPRICE_T = SPAWN_TRANCHE_TOKENS;
-
     const MC_SPAWN = 6600;
     const MC_BONDED = 66000;
     const SPAWN_FEE_BPS = 100;
@@ -381,12 +376,10 @@ const $ = (id) => document.getElementById(id);
 
     function spawnTargetSol(room){
       const lamports = room?.onchain?.spawn_target_lamports;
-      if(typeof lamports === "number") return lamports / LAMPORTS_PER_SOL;
-      if(room){
-        const fallback = Number(roomPreset(room).targetSol || 0);
-        return fallback > 0 ? fallback : null;
+      if (typeof lamports === "number") {
+        return lamports / 1e9;
       }
-      return Number(selectedPreset().targetSol || 0);
+      return 0;
     }
 
     function minApprovedWalletsRequired(room){
@@ -395,23 +388,11 @@ const $ = (id) => document.getElementById(id);
       return Number(roomPreset(room).minWallets || 0);
     }
 
-    // Deterministic mock: SOL cost to buy first 10% of supply from the bonding curve.
-    function spawnCostSolForTokens(tokensIn){
-      const T = Math.max(0, Number(VPRICE_T || 0));
-      if(T <= 0) return 0;
-      const N = Math.max(0, Math.min(T, Number(tokensIn || 0)));
-      const a = Number(VPRICE_P0 || 0);
-      const b = Number(VPRICE_P1 || 0);
-      return (a * N) + ((b / (2 * T)) * N * N);
-    }
-
     function walletCapSol(room){
       const target = spawnTargetSol(room);
       const bps = room?.onchain?.max_wallet_share_bps;
-      if(target != null && typeof bps === "number") return target * (bps / BPS_DENOM);
-      const fallbackBps = Number(roomPreset(room).maxWalletShareBps || 0);
-      if(target != null) return target * (fallbackBps / BPS_DENOM);
-      return null;
+      if (!target || !bps) return 0;
+      return target * (bps / 10000);
     }
 
     function presetWalletCapLamports(presetKey){
@@ -881,7 +862,7 @@ const $ = (id) => document.getElementById(id);
             { pubkey: (await deriveFeeVaultPda())[0], isSigner: false, isWritable: true },
             { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
           ],
-          data: concatBytes(await anchorDiscriminator("initialize_thread"), encodeStringArg(rid), encodeU32Arg(minApprovedWalletsRequired()), encodeU64Arg(Math.floor(spawnTargetSol() * LAMPORTS_PER_SOL)), encodeU16Arg(selectedPreset().maxWalletShareBps)),
+          data: concatBytes(await anchorDiscriminator("initialize_thread"), encodeStringArg(rid), encodeU32Arg(minApprovedWalletsRequired()), encodeU64Arg(Math.floor(Number(selectedPreset().targetSol || 0) * LAMPORTS_PER_SOL)), encodeU16Arg(selectedPreset().maxWalletShareBps)),
         }));
       }
 
@@ -2677,32 +2658,19 @@ if(connectBtn){
       const phaseBar = $("phaseBar");
 
       if(r.state === "SPAWNING"){
-        phaseLabel.textContent = "Funding first 10% of curve";
+        phaseLabel.textContent = "Raising launch liquidity";
         statePill.textContent = "SPAWNING";
-        phaseBar.style.width = Math.round(spawnProgress01(r)*100) + "%";
-        const progressLine = $("spawnProgressLine");
         const target = spawnTargetSol(r);
-        const capSol = walletCapSol(r);
-        const onchain = r.onchain || {};
-        const hasThreadFields = Number(onchain.spawn_target_lamports || 0) > 0;
+        const allocated = Number(r?.onchain?.total_allocated_lamports || 0) / 1e9;
+        const progress = target > 0
+          ? Math.min(allocated / target, 1)
+          : 0;
+        phaseBar.style.width = Math.round(progress * 100) + "%";
+        const progressLine = $("spawnProgressLine");
         if(progressLine){
-          if(hasThreadFields && target != null && capSol != null){
-            const counted = Number(onchain.total_allocated_lamports || 0) / LAMPORTS_PER_SOL;
-            const approvedCount = Number(onchain.approved_count || 0);
-            const minApproved = Number(onchain.min_approved_wallets || 0);
-            progressLine.textContent = `approved counted: ${counted.toFixed(3)}/${target.toFixed(3)} SOL • approved wallets: ${approvedCount}/${minApproved} • max alloc per wallet: ${capSol.toFixed(3)} SOL • Spawn fee: 1% (only charged if coin spawns)`;
-          } else {
-            const spawnSnapshot = getRoomEscrowSnapshot(r);
-            const legacyCapSol = Number(roomPreset(r).targetSol || 0) * (Number(roomPreset(r).maxWalletShareBps || 0) / BPS_DENOM);
-            const legacyCounted = spawnSnapshot.approvedWallets.reduce((sum, w) => {
-              const escrow = Number(spawnSnapshot.byWallet[w]?.escrow_sol || 0);
-              return sum + Math.min(escrow, legacyCapSol);
-            }, 0);
-            const legacyTarget = Number(roomPreset(r).targetSol || 0);
-            const legacyApprovedCount = Number(spawnSnapshot.approvedWallets?.length || 0);
-            const legacyMinApproved = Number(roomPreset(r).minWallets || 0);
-            progressLine.textContent = `approved counted: ${legacyCounted.toFixed(3)}/${legacyTarget.toFixed(3)} SOL • approved wallets: ${legacyApprovedCount}/${legacyMinApproved} • max alloc per wallet: ${legacyCapSol.toFixed(3)} SOL • legacy thread • Spawn fee: 1% (only charged if coin spawns)`;
-          }
+          const approvedCount = Number(r?.onchain?.approved_count || 0);
+          const minApproved = Number(r?.onchain?.min_approved_wallets || 0);
+          progressLine.textContent = `Allocated: ${allocated.toFixed(3)} / ${target.toFixed(3)} SOL • Approved wallets: ${approvedCount} / ${minApproved} • Max per wallet: ${walletCapSol(r).toFixed(3)} SOL • Spawn fee: 1% (only charged if coin spawns)`;
         }
       } else if(r.state === "BONDING"){
         phaseLabel.textContent = "BONDING";
