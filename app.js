@@ -2575,7 +2575,21 @@ if(connectBtn){
       maybeAdvance(r);
 
       $("roomTitle").textContent = r.name + "  $" + r.ticker;
-      $("roomMeta").textContent = `creator: ${shortWallet(r.creator_wallet)} • created: ${r.created_at}`;
+      const roomMeta = $("roomMeta");
+      roomMeta.textContent = "";
+      roomMeta.appendChild(document.createTextNode("creator: "));
+      const creatorLink = document.createElement("a");
+      creatorLink.href = "#/profile/" + encodeURIComponent(r.creator_wallet);
+      creatorLink.style.textDecoration = "underline";
+      creatorLink.style.color = "inherit";
+      creatorLink.textContent = displayName(r.creator_wallet);
+      creatorLink.title = r.creator_wallet || "";
+      creatorLink.addEventListener("click", (e) => {
+        e.preventDefault();
+        navigateHash("profile/" + encodeURIComponent(r.creator_wallet));
+      });
+      roomMeta.appendChild(creatorLink);
+      roomMeta.appendChild(document.createTextNode(` • created: ${r.created_at}`));
 
       // coin info panel
       $("roomDescOut").textContent = r.desc ? r.desc : "—";
