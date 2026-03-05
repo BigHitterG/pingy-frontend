@@ -289,3 +289,33 @@
     }
     .profileTabList{display:flex;flex-direction:column;gap:6px}
     .profileTabRow{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
+
+#siteFooter{
+  max-width:980px;
+  margin:16px auto 20px;
+  padding:10px 12px 0;
+  border-top:1px solid var(--line);
+  color:var(--muted);
+  font-size:12px;
+  display:flex;
+  justify-content:center;
+  align-items:center;
+  gap:6px;
+  flex-wrap:wrap;
+  text-align:center;
+}
+#siteFooter a{
+  color:var(--muted);
+  text-decoration:none;
+}
+#siteFooter a:hover,
+#siteFooter a:focus{
+  text-decoration:underline;
+}
+
+#legalContent p{
+  margin:0 0 8px;
+  color:var(--muted);
+  line-height:1.4;
+}
+#legalContent p:last-child{margin-bottom:0}

@@ -84,6 +84,7 @@ const $ = (id) => document.getElementById(id);
     let homeView;
     let roomView;
     let profileView;
+    let legalView;
     let homeBtn;
 
     let walletPill;
@@ -250,9 +251,11 @@ const $ = (id) => document.getElementById(id);
       const isHome = (which === "home");
       const isRoom = (which === "room");
       const isProfile = (which === "profile");
+      const isLegal = (which === "legal");
       homeView.classList.toggle("on", isHome);
       roomView.classList.toggle("on", isRoom);
       profileView.classList.toggle("on", isProfile);
+      legalView.classList.toggle("on", isLegal);
       homeBtn.style.display = isHome ? "none" : "inline-block";
     }
 
@@ -1501,6 +1504,7 @@ const $ = (id) => document.getElementById(id);
       homeView = $("homeView");
       roomView = $("roomView");
       profileView = $("profileView");
+      legalView = $("legalView");
       homeBtn = $("homeBtn");
 
       walletPill = $("walletPill");
@@ -3331,6 +3335,58 @@ if(connectBtn){
       }
     });
 
+    const LEGAL_PAGES = {
+      privacy: {
+        title: "Privacy Policy",
+        body: `
+          <p>We collect your wallet address, on-chain transaction data, basic usage analytics (if any), and optional display name details you provide.</p>
+          <p>We do not collect passwords or seed phrases.</p>
+          <p>Cookies/localStorage are used for UI preferences and local app behavior.</p>
+          <p>We do not share your information except with service providers (if any) needed to operate the app.</p>
+          <p>Contact: [add contact email]</p>
+        `,
+      },
+      terms: {
+        title: "Terms of Service",
+        body: `
+          <p>This app and its content are not financial advice.</p>
+          <p>You are responsible for your trades, wallet decisions, and wallet security.</p>
+          <p>Tokens and on-chain participation involve risk, including volatility and potential loss.</p>
+          <p>Prohibited behavior includes spam, abuse, and attempts to harm the app or other users.</p>
+          <p>Limitation of liability: use is at your own risk to the maximum extent allowed by law.</p>
+          <p>We may change these terms over time by posting updated terms in-app.</p>
+        `,
+      },
+      fees: {
+        title: "Fees",
+        body: `
+          <p>Current fees: 0% platform fee; network fees apply. Future fees may be introduced with notice.</p>
+          <p>This includes spawn flow, transactions, and creator-related actions unless explicitly stated otherwise in future updates.</p>
+        `,
+      },
+      revenue: {
+        title: "Revenue",
+        body: `
+          <p>Pingy may generate revenue through optional platform fees in the future.</p>
+          <p>Featured listings or promotional placements may also be introduced as optional revenue sources.</p>
+          <p>Today, there may be no platform revenue while the product is in early stages.</p>
+          <p>We aim to keep any monetization approach transparent to users.</p>
+        `,
+      },
+    };
+
+    function renderLegalPage(key){
+      const page = LEGAL_PAGES[key];
+      if(!page){
+        setView("home");
+        renderHome();
+        return;
+      }
+      setView("legal");
+      $("legalTitle").textContent = page.title;
+      $("legalContent").innerHTML = page.body;
+    }
+
     // Hash routing
     function handleHash(){
       const h = (location.hash || "").replace(/^#/, "");
@@ -3353,6 +3409,11 @@ if(connectBtn){
       if(parts[0] === "profile"){
         setView("profile");
         renderProfilePage();
+        return;
+      }
+
+      if(["privacy", "terms", "fees", "revenue"].includes(parts[0])){
+        renderLegalPage(parts[0]);
         return;
       }
 
