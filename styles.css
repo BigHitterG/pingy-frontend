@@ -173,11 +173,11 @@
     .text{white-space:pre-wrap;word-break:break-word}
 
     .composer{margin-top:8px;display:grid;grid-template-columns:1fr auto;gap:8px;align-items:start}
-    input,textarea{
+    input,textarea,select{
       width:100%; border:1px solid var(--line); padding:6px 7px; font:inherit;
       color:var(--fg); background:#fff; border-radius:0;
     }
-    input:focus,textarea:focus{outline:2px solid var(--focus);outline-offset:1px}
+    input:focus,textarea:focus,select:focus{outline:2px solid var(--focus);outline-offset:1px}
     textarea{resize:none;height:70px}
 
     /* Collapsible */

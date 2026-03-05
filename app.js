@@ -352,7 +352,7 @@ const $ = (id) => document.getElementById(id);
     };
 
     function selectedPreset(){
-      const key = ($("newPreset")?.value || "balanced").toLowerCase();
+      const key = ($("newPreset")?.value || "fast").toLowerCase();
       return PRESETS[key] || PRESETS.balanced;
     }
 
@@ -367,7 +367,7 @@ const $ = (id) => document.getElementById(id);
 
     function roomPreset(room){
       const r = room || {};
-      const key = String(r.launch_preset || "balanced").toLowerCase();
+      const key = String(r.launch_preset || "fast").toLowerCase();
       const base = PRESETS[key] || PRESETS.balanced;
       return {
         ...base,
@@ -386,6 +386,8 @@ const $ = (id) => document.getElementById(id);
     }
 
     function minApprovedWalletsRequired(room){
+      const roomMin = room?.min_approved_wallets;
+      if(typeof roomMin === "number") return roomMin;
       const onchainMin = room?.onchain?.min_approved_wallets;
       if(typeof onchainMin === "number") return onchainMin;
       return Number(roomPreset(room).minWallets || 0);
@@ -1299,7 +1301,7 @@ const $ = (id) => document.getElementById(id);
       }
     });
 
-    function mkRoom(id, name, ticker, desc, presetKey = "balanced"){
+    function mkRoom(id, name, ticker, desc, presetKey = "fast"){
       const creator_wallet = (Math.random().toString(16).slice(2,10) + '111111111111111111111111111111').slice(0,44);
       const preset = PRESETS[presetKey] || PRESETS.balanced;
       return {
@@ -2258,7 +2260,7 @@ if(connectBtn){
       $("newWeb").value = "";
       $("newCommit").value = "";
       if($("newPreset")) {
-        $("newPreset").value = "balanced";
+        $("newPreset").value = "fast";
         updatePresetCapHint();
       }
       $("newImg").value = "";
@@ -3050,21 +3052,21 @@ if(connectBtn){
         const progressLine = $("spawnProgressLine");
         if(progressLine){
           const approvedCount = Number(r?.onchain?.approved_count || 0);
-          const minApproved = Number(r?.onchain?.min_approved_wallets || 0);
-          progressLine.textContent = `Allocated: ${allocated.toFixed(3)} / ${target.toFixed(3)} SOL • Approved wallets: ${approvedCount} / ${minApproved} • Max per wallet: ${walletCapSol(r).toFixed(3)} SOL • Spawn fee: 1% (only charged if coin spawns)`;
+          const minApproved = minApprovedWalletsRequired(r);
+          progressLine.textContent = `Allocated: ${allocated.toFixed(3)} / ${target.toFixed(3)} SOL • Approved wallets: ${approvedCount} / ${minApproved} • Max per wallet: ${walletCapSol(r).toFixed(3)} SOL`;
         }
       } else if(r.state === "BONDING"){
         phaseLabel.textContent = "BONDING";
         statePill.textContent = "BONDING";
         phaseBar.style.width = Math.round(bondingProgress01(r)*100) + "%";
         const progressLine = $("spawnProgressLine");
-        if(progressLine) progressLine.textContent = `spawn fee paid: ${Number(r.spawn_fee_paid_sol || 0).toFixed(3)} SOL • trading fee: ${POST_SPAWN_TRADING_FEE_BPS / 100}% (displayed only; enforcement depends on trade routing)`;
+        if(progressLine) progressLine.textContent = `trading fee: ${POST_SPAWN_TRADING_FEE_BPS / 100}% (displayed only; enforcement depends on trade routing)`;
       } else {
         phaseLabel.textContent = "BONDED";
         statePill.textContent = "BONDED";
         phaseBar.style.width = "100%";
         const progressLine = $("spawnProgressLine");
-        if(progressLine) progressLine.textContent = `spawn fee paid: ${Number(r.spawn_fee_paid_sol || 0).toFixed(3)} SOL • trading fee: ${POST_SPAWN_TRADING_FEE_BPS / 100}% (displayed only; enforcement depends on trade routing)`;
+        if(progressLine) progressLine.textContent = `trading fee: ${POST_SPAWN_TRADING_FEE_BPS / 100}% (displayed only; enforcement depends on trade routing)`;
       }
 
       const me =
