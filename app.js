@@ -2132,11 +2132,13 @@ if(connectBtn){
         ${cardInner(r)}
         <div class="row" style="justify-content:flex-end; margin-top:10px;">
           <button class="btn subtle" data-ping="${escapeText(r.id)}">ping</button>
-          <button class="btn subtle" data-open="${escapeText(r.id)}">open</button>
           <button class="btn subtle" title="share" data-share="${escapeText(r.id)}">↗</button>
         </div>
       `;
-      el.querySelector("[data-open]").addEventListener("click", () => openRoom(r.id));
+      el.addEventListener("dblclick", (ev) => {
+        if(ev.target.closest("[data-ping],[data-share]")) return;
+        openRoom(r.id);
+      });
       el.querySelector("[data-ping]").addEventListener("click", () => {
         openRoom(r.id);
         setTimeout(() => openPingModal(r.id), 0);
@@ -2232,11 +2234,13 @@ if(connectBtn){
         ${cardInner(r)}
         <div class="row" style="justify-content:flex-end; margin-top:10px;">
           <button class="btn subtle small" data-ping="${escapeText(r.id)}">ping</button>
-          <button class="btn subtle small" data-open="${escapeText(r.id)}">open</button>
           <button class="btn subtle small" title="share" data-share="${escapeText(r.id)}">↗</button>
         </div>
       `;
-      el.querySelector("[data-open]").addEventListener("click", () => openRoom(r.id));
+      el.addEventListener("dblclick", (ev) => {
+        if(ev.target.closest("[data-ping],[data-share]")) return;
+        openRoom(r.id);
+      });
       el.querySelector("[data-ping]").addEventListener("click", () => {
         openRoom(r.id);
         setTimeout(() => openPingModal(r.id), 0);
