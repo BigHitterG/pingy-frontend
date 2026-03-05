@@ -260,6 +260,7 @@ const $ = (id) => document.getElementById(id);
     function startMoversSimulation(){
       stopMoversSimulation();
       if(!state.movers.enabled) return;
+      if(typeof simulateMovers !== "function") return;
       simulateMovers(state.rooms);
       moversIntervalId = setInterval(() => {
         if(!homeView?.classList.contains("on")) return;
@@ -407,7 +408,8 @@ const $ = (id) => document.getElementById(id);
       if (typeof lamports === "number") {
         return lamports / 1e9;
       }
-      return 0;
+      const fallback = Number(room?.spawn_target_sol || 0);
+      return Number.isFinite(fallback) ? fallback : 0;
     }
 
     function minApprovedWalletsRequired(room){
@@ -1137,6 +1139,13 @@ const $ = (id) => document.getElementById(id);
       };
 
       state.onchain[roomId] = snapshot;
+      const room = roomById(roomId);
+      if(room){
+        room.onchain = snapshot;
+        room.spawn_target_sol = Number(snapshot.spawn_target_lamports || 0) / LAMPORTS_PER_SOL;
+        room.min_approved_wallets = Number(snapshot.min_approved_wallets || room.min_approved_wallets || 0);
+        room.max_wallet_share_bps = Number(snapshot.max_wallet_share_bps || room.max_wallet_share_bps || 0);
+      }
       state.onchainMeta[roomId] = { fetchedAtMs: snapshot.fetchedAtMs };
       return snapshot;
     }
@@ -2173,6 +2182,16 @@ if(connectBtn){
       renderHome();
     }
 
+    function moveBottomLiveCardToTop(){
+      const liveRooms = sortedLiveRooms();
+      if(liveRooms.length < 2) return;
+      const last = liveRooms[liveRooms.length - 1];
+      const topScore = liveRooms.reduce((maxScore, room) => Math.max(maxScore, Number(state.movers.scores[room.id] || 0)), 0);
+      state.movers.scores[last.id] = topScore + 10;
+      state.movers.active = new Set([last.id, ...liveRooms.slice(0,2).map((room) => room.id)]);
+      renderHome();
+    }
+
     function sortedLiveRooms(){
       return state.rooms
         .slice()
@@ -2308,6 +2327,7 @@ if(connectBtn){
     }
 
     $("searchBtn").addEventListener("click", runExploreSearch);
+    $("moveCardsBtn")?.addEventListener("click", moveBottomLiveCardToTop);
     $("searchInput").addEventListener("keydown", (e) => {
       if(e.key === "Enter"){ e.preventDefault(); runExploreSearch(); }
     });
@@ -3598,6 +3618,9 @@ if(connectBtn){
       if(activeRoomId){
         refreshRoomOnchainSnapshot(activeRoomId);
         renderRoom(activeRoomId);
+      }
+      if(homeView?.classList.contains("on")){
+        for(const room of state.rooms) refreshRoomOnchainSnapshot(room.id);
       }
       if(profileView.classList.contains("on") && activeProfileTab === "balances"){
         const wallet = profileRouteWallet();
