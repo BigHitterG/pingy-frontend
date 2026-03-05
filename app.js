@@ -1573,7 +1573,7 @@ if(connectBtn){
 }
     $("toastConnect").addEventListener("click", connectMock);
     $("toastClose").addEventListener("click", () => toast.classList.remove("on"));
-    homeBtn.addEventListener("click", () => setView("home"));
+    homeBtn.addEventListener("click", () => navigateHash("home"));
     // Modals
     function openModal(backEl){ backEl.classList.add("on"); }
     function closeModal(backEl){ backEl.classList.remove("on"); }
@@ -2958,11 +2958,18 @@ if(connectBtn){
       console.log("[pingy] handleHash:", h || "<empty>");
       if(!h){
         setView("home");
+        renderHome();
         return;
       }
 
       const clean = h.replace(/^\//, "");
       const parts = clean.split("/").filter(Boolean);
+
+      if(parts[0] === "home"){
+        setView("home");
+        renderHome();
+        return;
+      }
 
       if(parts[0] === "profile"){
         setView("profile");
@@ -3007,8 +3014,7 @@ if(connectBtn){
       if(profileView.classList.contains("on")) renderProfilePage();
     }
 
-    setView("home");
-    renderHome();
+    if(!location.hash) navigateHash("home");
     (async () => {
       const provider = getProvider();
       if(!provider) return;
