@@ -1901,7 +1901,7 @@ if(connectBtn){
               <div class="tiny subline">${escapeText(r.desc || "prespawn chat open")}</div>
               <div class="bar"><i style="width:${pct}%"></i></div>
               <div class="barRow">
-                <div class="tiny">funding first 10% of curve</div>
+                <div class="tiny">raising launch liquidity</div>
                 <div class="pct">${pct}%</div>
               </div>
             </div>
@@ -2532,9 +2532,8 @@ if(connectBtn){
 
         const left = document.createElement("div");
         left.className = "tiny";
-        const refundable = Number(walletRow.refundable_sol || 0);
         const allocated = Number(walletRow.allocated_sol || 0);
-        left.textContent = `@${shortWallet(wallet)} • Refundable ${refundable.toFixed(3)} SOL • Allocated ${allocated.toFixed(3)} SOL`;
+        left.textContent = `@${shortWallet(wallet)} • Allocated ${allocated.toFixed(3)} SOL`;
 
         const right = document.createElement("div");
         right.className = "row";
