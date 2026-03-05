@@ -95,6 +95,8 @@ const $ = (id) => document.getElementById(id);
     let walletDisconnectItem;
     let connectBtn;
 
+    let activeProfileTab = "balances";
+
     let toast;
     let toastText;
     let toastTimer = null;
@@ -2185,6 +2187,93 @@ if(connectBtn){
       avatar.textContent = shortWallet(wallet || "wallet").slice(0,1).toUpperCase();
     }
 
+    function setActiveProfileTab(tab){
+      activeProfileTab = tab;
+      renderProfilePage();
+    }
+
+    async function renderProfileTabs(wallet){
+      const content = $("profileTabContent");
+      const tabButtons = {
+        balances: $("profileTabBalances"),
+        coins: $("profileTabCoins"),
+        rewards: $("profileTabRewards"),
+        followers: $("profileTabFollowers"),
+      };
+      Object.entries(tabButtons).forEach(([tab, btn]) => {
+        if(btn) btn.classList.toggle("active", tab === activeProfileTab);
+      });
+      if(!content) return;
+
+      if(!wallet){
+        content.innerHTML = '<div class="muted">connect wallet to view tab details.</div>';
+        return;
+      }
+
+      if(activeProfileTab === "balances"){
+        let sol = null;
+        try {
+          const lamports = await connection.getBalance(new PublicKey(wallet));
+          sol = Number(lamports || 0) / LAMPORTS_PER_SOL;
+        } catch(err){
+          sol = null;
+        }
+        if(profileRouteWallet() !== wallet) return;
+        if(sol === null){
+          content.innerHTML = '<div class="muted">— SOL</div><div class="muted tiny">$0 (mock)</div>';
+        } else {
+          const usd = Math.max(0, sol) * SOL_TO_USD;
+          content.innerHTML = `<div><b>${sol.toFixed(2)} SOL</b></div><div class="muted tiny">${fmtUsd(usd)} (mock)</div>`;
+        }
+        return;
+      }
+
+      if(activeProfileTab === "coins"){
+        const rooms = state.rooms.filter(r => r.creator_wallet === wallet);
+        if(!rooms.length){
+          content.innerHTML = '<div class="muted">no coins created yet.</div>';
+          return;
+        }
+        const list = document.createElement("div");
+        list.className = "profileTabList";
+        rooms.forEach((r) => {
+          const row = document.createElement("button");
+          row.className = "btn subtle profileTabRow";
+          row.type = "button";
+          row.innerHTML = `<span>${escapeText(r.name)} <span class="muted">$${escapeText(r.ticker)}</span></span><span class="muted">view</span>`;
+          row.addEventListener("click", () => navigateHash("room/" + encodeURIComponent(r.id)));
+          list.appendChild(row);
+        });
+        content.innerHTML = "";
+        content.appendChild(list);
+        return;
+      }
+
+      if(activeProfileTab === "rewards"){
+        content.innerHTML = '<div class="muted">creator rewards coming soon.</div>';
+        return;
+      }
+
+      const all = profile.followsByWallet || {};
+      const followers = Object.keys(all).filter((followerWallet) => all[followerWallet] && all[followerWallet][wallet]);
+      if(!followers.length){
+        content.innerHTML = '<div class="muted">no followers yet.</div>';
+        return;
+      }
+      const list = document.createElement("div");
+      list.className = "profileTabList";
+      followers.forEach((followerWallet) => {
+        const row = document.createElement("button");
+        row.className = "btn subtle profileTabRow";
+        row.type = "button";
+        row.innerHTML = `<span>${escapeText(displayName(followerWallet))}</span><span class="muted">${escapeText(shortWallet(followerWallet))}</span>`;
+        row.addEventListener("click", () => navigateHash("profile/" + encodeURIComponent(followerWallet)));
+        list.appendChild(row);
+      });
+      content.innerHTML = "";
+      content.appendChild(list);
+    }
+
     function renderProfilePage(){
       const wallet = profileRouteWallet();
       if(!wallet){
@@ -2199,6 +2288,7 @@ if(connectBtn){
         $("profileActionBtn").textContent = "edit profile";
         $("profileActionBtn").disabled = true;
         renderProfileAvatar("", "");
+        renderProfileTabs("");
         return;
       }
 
@@ -2218,6 +2308,7 @@ if(connectBtn){
       $("followingCountOut").textContent = String(followCount(wallet));
       $("createdCountOut").textContent = String(createdCoinsCount(wallet));
       renderProfileAvatar(wallet, details.image || "");
+      renderProfileTabs(wallet);
 
       const isSelf = !!connectedWallet && connectedWallet === wallet;
       const actionBtn = $("profileActionBtn");
@@ -2290,6 +2381,11 @@ if(connectBtn){
       renderHome();
       if(activeRoomId) renderRoom(activeRoomId);
     });
+
+    $("profileTabBalances").addEventListener("click", () => setActiveProfileTab("balances"));
+    $("profileTabCoins").addEventListener("click", () => setActiveProfileTab("coins"));
+    $("profileTabRewards").addEventListener("click", () => setActiveProfileTab("rewards"));
+    $("profileTabFollowers").addEventListener("click", () => setActiveProfileTab("followers"));
 
     $("profileActionBtn").addEventListener("click", () => {
       const wallet = profileRouteWallet();

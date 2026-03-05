@@ -278,4 +278,12 @@
       flex:0 0 auto;
     }
     .profileAvatar img{width:100%;height:100%;object-fit:cover}
+
     .profileCounts > div{min-width:120px}
+    .profileTabs{gap:6px}
+    .profileTabs .btn.active{
+      border-color:var(--fg);
+      color:var(--fg);
+    }
+    .profileTabList{display:flex;flex-direction:column;gap:6px}
+    .profileTabRow{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
