@@ -56,14 +56,41 @@
                 <option value="high_quality">High Quality (30 wallets, 8 SOL)</option>
               </select>
               <div class="muted tiny" id="presetCapHint" style="margin-top:6px;">Cap per wallet: 0.350 SOL</div>
-              <div class="muted" style="margin-top:8px;">coin image</div>
-              <input id="newImg" type="file" accept="image/*" />
+              <div class="row" style="margin-top:8px; justify-content:space-between;">
+                <div class="muted">coin image</div>
+                <button class="infoIconBtn" id="coinImageInfoBtn" type="button" aria-expanded="false" title="image requirements">i</button>
+              </div>
+              <div class="panel muted tiny" id="coinImageInfo" style="display:none; margin-bottom:6px;">
+                <div><b>File size and type</b></div>
+                <div>• Image - max 15mb. '.jpg', '.gif' or '.png' recommended</div>
+                <div>• Video - max 30mb. '.mp4' recommended</div>
+                <div style="margin-top:6px;"><b>Resolution and aspect ratio</b></div>
+                <div>• Image - min. 1000x1000px, 1:1 square recommended</div>
+                <div>• Video - 16:9 or 9:16, 1080p+ recommended</div>
+              </div>
+              <input id="newImg" type="file" accept=".jpg,.jpeg,.gif,.png,image/*" />
               <div class="imgPrev" id="newImgPreview" style="margin-top:6px;"><span class="muted">no image</span></div>
+
+              <details style="margin-top:8px;">
+                <summary class="muted" style="cursor:pointer;">add banner (optional)</summary>
+                <div class="muted" style="margin-top:8px;">upload banner</div>
+                <div class="muted tiny">This will be shown on the coin page in addition to the coin image. images or animated gifs up to 5mb, 3:1 / 1500x500px original. You can only do this when creating the coin, and it cannot be changed later.</div>
+                <input id="newBanner" type="file" accept=".jpg,.jpeg,.gif,.png,image/*" style="margin-top:6px;" />
+                <div class="imgPrev" id="newBannerPreview" style="margin-top:6px;"><span class="muted">no banner</span></div>
+                <div class="muted tiny" style="margin-top:6px;">File size and type</div>
+                <div class="muted tiny">• Image - max 4.3mb. '.jpg', '.gif' or '.png' recommended</div>
+                <div class="muted tiny" style="margin-top:6px;">Resolution and aspect ratio</div>
+                <div class="muted tiny">• 3:1 aspect ratio, 1500x500px recommended</div>
+              </details>
 
             </div>
 
             <div class="panel">
-              <div class="h">socials</div>
+              <div class="row" style="justify-content:space-between; align-items:center;">
+                <div class="h" style="margin:0;">socials</div>
+                <button class="infoIconBtn" id="socialsInfoBtn" type="button" aria-expanded="false" title="socials info">i</button>
+              </div>
+              <div class="panel muted tiny" id="socialsInfo" style="display:none; margin-bottom:8px;">Coin data (social links, banner, etc) can only be added now, and can't be changed or edited after creation</div>
               <div class="muted">x / twitter</div>
               <input id="newX" placeholder="https://x.com/yourhandle" maxlength="120" />
               <div class="muted">telegram</div>
@@ -166,6 +193,7 @@
 
     <!-- ROOM VIEW: coin detail, progress, and interactions -->
     <div class="view" id="roomView">
+      <div class="roomBanner" id="roomBanner" style="display:none;"></div>
       <div class="roomHeader">
         <div class="row" style="align-items:flex-start; gap:10px;">
           <div class="mosaic img" id="roomImg" aria-hidden="true"><span class="muted" style="display:block;padding:10px 6px;">—</span></div>
