@@ -8,7 +8,6 @@ import {
   deriveFeeVaultPda,
   deriveDepositPda,
   deriveThreadEscrowPda,
-  deriveBanPda,
   fetchProgramAccounts,
   PublicKey,
   SystemProgram,
@@ -51,7 +50,6 @@ const $ = (id) => document.getElementById(id);
       deriveFeeVaultPda,
       deriveDepositPda,
       deriveThreadEscrowPda,
-      deriveBanPda,
       fetchProgramAccounts,
     };
 
@@ -232,12 +230,6 @@ const $ = (id) => document.getElementById(id);
       return /not\s+implemented|not\s+supported|signAndSendTransaction\s+is\s+not\s+a\s+function/i.test(msg);
     }
 
-    function isUserBannedError(err){
-      const logs = getErrorLogs(err).join(" ");
-      const msg = String(err?.message || err || "");
-      const combined = `${msg} ${logs}`;
-      return /UserBanned|User is banned from this thread/i.test(combined);
-    }
 
     function explorerTxUrl(signature){
       return `https://explorer.solana.com/tx/${signature}?cluster=devnet`;
@@ -839,8 +831,6 @@ const $ = (id) => document.getElementById(id);
       const [threadPda] = await deriveThreadPda(rid);
       const [depositPda] = await deriveDepositPda(rid, walletPk);
       const [threadEscrowPda] = await deriveThreadEscrowPda(rid);
-      const [banPda] = await deriveBanPda(rid, walletPk);
-      const banInfo = await connection.getAccountInfo(banPda, "confirmed");
       const discriminator = await anchorDiscriminator("ping_deposit");
       const data = concatBytes(
         discriminator,
@@ -854,7 +844,6 @@ const $ = (id) => document.getElementById(id);
         { pubkey: threadEscrowPda, isSigner: false, isWritable: true },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       ];
-      if(banInfo) keys.push({ pubkey: banPda, isSigner: false, isWritable: false });
       console.log("[ping-debug] ping_deposit ix", {
         programId: PROGRAM_ID.toBase58(),
         threadPda: threadPda.toBase58(),
@@ -887,8 +876,6 @@ const $ = (id) => document.getElementById(id);
       const [spawnPoolPda] = await deriveSpawnPoolPda(rid);
       const [depositPda] = await deriveDepositPda(rid, walletPk);
       const [threadEscrowPda] = await deriveThreadEscrowPda(rid);
-      const [banPda] = await deriveBanPda(rid, walletPk);
-      const banInfo = await connection.getAccountInfo(banPda, "confirmed");
 
       const instructions = [];
       if(includeThreadInit){
@@ -913,7 +900,6 @@ const $ = (id) => document.getElementById(id);
         { pubkey: threadEscrowPda, isSigner: false, isWritable: true },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       ];
-      if(banInfo) pingKeys.push({ pubkey: banPda, isSigner: false, isWritable: false });
 
       instructions.push(new TransactionInstruction({
         programId: PROGRAM_ID,
@@ -1013,6 +999,29 @@ const $ = (id) => document.getElementById(id);
       }));
     }
 
+
+    async function revokeApprovedUserTx(roomId, userWallet){
+      const rid = String(roomId || "");
+      const adminPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
+      const userPk = parsePublicKeyStrict(userWallet, "revoked user wallet");
+      const [threadPda] = await deriveThreadPda(rid);
+      const [depositPda] = await deriveDepositPda(rid, userPk);
+      const data = concatBytes(
+        await anchorDiscriminator("revoke_approved_user"),
+        encodeStringArg(rid),
+        userPk.toBytes()
+      );
+      return sendProgramInstruction(new TransactionInstruction({
+        programId: PROGRAM_ID,
+        keys: [
+          { pubkey: adminPk, isSigner: true, isWritable: true },
+          { pubkey: threadPda, isSigner: false, isWritable: true },
+          { pubkey: depositPda, isSigner: false, isWritable: true },
+        ],
+        data,
+      }));
+    }
+
     function decodeThreadAccount(data){
       const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
       if(!bytes?.length || bytes.length < 8) return null;
@@ -1066,7 +1075,7 @@ const $ = (id) => document.getElementById(id);
       const refundableLamports = new DataView(bytes.buffer, bytes.byteOffset + o, 8).getBigUint64(0, true);
       o += 8;
       const allocatedLamports = new DataView(bytes.buffer, bytes.byteOffset + o, 8).getBigUint64(0, true);
-      const statusMap = ["pending", "approved", "rejected", "withdrawn", "converted"];
+      const statusMap = ["pending", "approved", "revoked", "rejected", "withdrawn", "converted"];
       return {
         threadId,
         user: userPubkey.toBase58(),
@@ -2426,7 +2435,6 @@ if(connectBtn){
             await pingWithOptionalThreadInitTx(id, commitLamports, true);
           } catch(e){
             if(isWalletTxRejected(e)) showToast("Create cancelled — no coin or commit was submitted.");
-            else if(isUserBannedError(e)) showToast("You were denied from this coin and can’t re-enter.");
             else reportTxError(e, "initialize + ping_deposit transaction failed on create");
             return;
           }
@@ -2975,7 +2983,7 @@ if(connectBtn){
       const enabled = !!connectedWallet && !denied;
       $("msgInput").disabled = !enabled;
       $("sendBtn").disabled = !enabled;
-      $("msgInput").placeholder = denied ? "denied — chat is read-only" : (enabled ? "message" : "connect wallet");
+      $("msgInput").placeholder = denied ? "Denied from this spawn. Your SOL remains in escrow until you unping." : (enabled ? "message" : "connect wallet");
     }
 
 
@@ -3003,13 +3011,34 @@ if(connectBtn){
       const r = roomById(roomId);
       if(!r || !wallet) return;
       if(!isApprover(r, connectedWallet)) return;
-      if(isApproved(r, wallet)) return showToast("approved pingers are permanent");
+      if(!isPending(r, wallet)) return;
       if(r.blockedWallets && r.blockedWallets[wallet]) return;
       r.blockedWallets = r.blockedWallets || {};
       r.blockedWallets[wallet] = true;
       r.approval = r.approval || {};
       r.approval[wallet] = "denied";
-      addSystemEvent(roomId, `@${shortWallet(wallet)} denied — wallet is now blocked from ping + chat.`);
+      addSystemEvent(roomId, `@${shortWallet(wallet)} denied from pending. Denied from this spawn. Your SOL remains in escrow until you unping.`);
+      await refreshConnectedWalletEscrowLine(roomId);
+      renderRoom(roomId);
+      renderHome();
+    }
+
+    async function removeApprovedFromSpawn(roomId, wallet){
+      if(!onchainEnabled) return showToast("On-chain disabled: PROGRAM_ID misconfigured");
+      const r = roomById(roomId);
+      if(!r || !wallet) return;
+      if(!isApprover(r, connectedWallet)) return;
+      if(!isApproved(r, wallet)) return;
+      try{
+        await revokeApprovedUserTx(roomId, wallet);
+      } catch(e){
+        reportTxError(e, "remove from spawn transaction failed");
+        return;
+      }
+      r.blockedWallets = r.blockedWallets || {};
+      r.blockedWallets[wallet] = true;
+      addSystemEvent(roomId, `@${shortWallet(wallet)} removed from spawn on-chain and blocked from this thread.`);
+      await refreshRoomOnchainSnapshot(roomId, { force: true });
       await refreshConnectedWalletEscrowLine(roomId);
       renderRoom(roomId);
       renderHome();
@@ -3159,7 +3188,7 @@ if(connectBtn){
               snapshot.byWallet?.[w] || {},
               [
                 { label: "approve", onClick: () => approveWallet(roomId, w) },
-                { label: "deny", onClick: () => denyWallet(roomId, w) }
+                { label: "Deny", onClick: () => denyWallet(roomId, w) }
               ]
             );
             pendingList.appendChild(row);
@@ -3177,6 +3206,9 @@ if(connectBtn){
         } else {
           pingers.forEach((w) => {
             const actions = [];
+            if(isAdmin){
+              actions.push({ label: "Remove from spawn", onClick: () => removeApprovedFromSpawn(roomId, w) });
+            }
             pingersList.appendChild(makeWalletRow(w, snapshot.byWallet?.[w] || {}, actions));
           });
         }
@@ -3413,7 +3445,7 @@ if(connectBtn){
       if(!s || Number.isNaN(solAmount) || solAmount <= 0) return alert("enter a valid SOL amount.");
 
       if(r.state === "SPAWNING"){
-        if(r.blockedWallets && r.blockedWallets[connectedWallet]) return alert("you were denied from this spawn.");
+        if(r.blockedWallets && r.blockedWallets[connectedWallet]) return alert("Denied from this spawn. Your SOL remains in escrow until you unping.");
         if(!isCreator(r, connectedWallet)){
           r.approval = r.approval || {};
           if(!r.approval[connectedWallet]) r.approval[connectedWallet] = "pending";
@@ -3459,11 +3491,7 @@ if(connectBtn){
               threadEscrow: explorerAddressUrl(threadEscrowPda.toBase58()),
             });
           } catch(e){
-            if(isUserBannedError(e)){
-              showToast("You were denied from this coin and can’t re-enter.");
-            } else {
-              reportTxError(e, "ping deposit transaction failed");
-            }
+            reportTxError(e, "ping deposit transaction failed");
             console.error("[ping-debug] context", {
               connectedWallet,
               DEVNET_RPC,

@@ -73,22 +73,6 @@ pub mod pingy_spawn {
     ) -> Result<()> {
         require!(amount_lamports > 0, PingyError::InvalidAmount);
 
-        let (ban_pda, _ban_bump) = Pubkey::find_program_address(
-            &[
-                b"ban",
-                thread_id.as_bytes(),
-                ctx.accounts.user.key().as_ref(),
-            ],
-            ctx.program_id,
-        );
-        if ctx
-            .remaining_accounts
-            .iter()
-            .any(|account_info| account_info.key() == ban_pda)
-        {
-            return err!(PingyError::UserBanned);
-        }
-
         let thread = &mut ctx.accounts.thread;
         require!(thread.thread_id == thread_id, PingyError::ThreadMismatch);
         require!(
@@ -184,8 +168,8 @@ pub mod pingy_spawn {
         Ok(())
     }
 
-    pub fn reject_and_refund(
-        ctx: Context<AdminRefund>,
+    pub fn revoke_approved_user(
+        ctx: Context<RevokeApprovedUser>,
         thread_id: String,
         user_pubkey: Pubkey,
     ) -> Result<()> {
@@ -200,45 +184,21 @@ pub mod pingy_spawn {
 
         let deposit = &mut ctx.accounts.deposit;
         require!(deposit.user_pubkey == user_pubkey, PingyError::UserMismatch);
+        require!(
+            deposit.status == DepositStatus::Approved,
+            PingyError::DepositNotApproved
+        );
 
-        let previous_status = deposit.status;
-        deposit.status = DepositStatus::Rejected;
-        deposit.rejected_once = true;
-
-        let payout = deposit
-            .refundable_lamports
-            .checked_add(deposit.allocated_lamports)
-            .ok_or(PingyError::AmountOverflow)?;
         let allocated_before = deposit.allocated_lamports;
+        let previous_status = deposit.status;
+        deposit.status = DepositStatus::Revoked;
 
-        {
-            let thread = &mut ctx.accounts.thread;
-            thread.total_allocated_lamports = thread
-                .total_allocated_lamports
-                .checked_sub(allocated_before)
-                .ok_or(PingyError::AccountingUnderflow)?;
-            thread.total_escrow_lamports = thread
-                .total_escrow_lamports
-                .checked_sub(payout)
-                .ok_or(PingyError::AccountingUnderflow)?;
-            thread.apply_status_transition(previous_status, deposit.status)?;
-        }
-
-        transfer_from_thread_escrow_to_account(
-            &ctx.accounts.thread_escrow.to_account_info(),
-            &ctx.accounts.user.to_account_info(),
-            payout,
-        )?;
-
-        deposit.refundable_lamports = 0;
-        deposit.allocated_lamports = 0;
-        deposit.status = DepositStatus::Withdrawn;
-        ctx.accounts
-            .thread
-            .apply_status_transition(DepositStatus::Rejected, deposit.status)?;
-
-        let ban_bump = ctx.bumps.ban;
-        ctx.accounts.ban.bump = ban_bump;
+        let thread = &mut ctx.accounts.thread;
+        thread.total_allocated_lamports = thread
+            .total_allocated_lamports
+            .checked_sub(allocated_before)
+            .ok_or(PingyError::AccountingUnderflow)?;
+        thread.apply_status_transition(previous_status, deposit.status)?;
 
         Ok(())
     }
@@ -284,48 +244,6 @@ pub mod pingy_spawn {
             .checked_sub(payout)
             .ok_or(PingyError::AccountingUnderflow)?;
 
-        deposit.refundable_lamports = 0;
-        deposit.allocated_lamports = 0;
-        deposit.status = DepositStatus::Withdrawn;
-        thread.apply_status_transition(previous_status, deposit.status)?;
-
-        Ok(())
-    }
-
-    pub fn withdraw_rejected(ctx: Context<UserWithdraw>, thread_id: String) -> Result<()> {
-        let thread = &ctx.accounts.thread;
-        require!(thread.thread_id == thread_id, PingyError::ThreadMismatch);
-
-        let user_key = ctx.accounts.user.key();
-        let deposit = &mut ctx.accounts.deposit;
-        require!(deposit.user_pubkey == user_key, PingyError::UserMismatch);
-        require!(
-            deposit.status == DepositStatus::Rejected,
-            PingyError::DepositNotRejected
-        );
-
-        let payout = deposit
-            .refundable_lamports
-            .checked_add(deposit.allocated_lamports)
-            .ok_or(PingyError::AmountOverflow)?;
-        let allocated_before = deposit.allocated_lamports;
-
-        transfer_from_thread_escrow_to_account(
-            &ctx.accounts.thread_escrow.to_account_info(),
-            &ctx.accounts.user.to_account_info(),
-            payout,
-        )?;
-
-        let previous_status = deposit.status;
-        let thread = &mut ctx.accounts.thread;
-        thread.total_allocated_lamports = thread
-            .total_allocated_lamports
-            .checked_sub(allocated_before)
-            .ok_or(PingyError::AccountingUnderflow)?;
-        thread.total_escrow_lamports = thread
-            .total_escrow_lamports
-            .checked_sub(payout)
-            .ok_or(PingyError::AccountingUnderflow)?;
         deposit.refundable_lamports = 0;
         deposit.allocated_lamports = 0;
         deposit.status = DepositStatus::Withdrawn;
@@ -552,11 +470,9 @@ pub struct ApproveUser<'info> {
 
 #[derive(Accounts)]
 #[instruction(thread_id: String, user_pubkey: Pubkey)]
-pub struct AdminRefund<'info> {
+pub struct RevokeApprovedUser<'info> {
     #[account(mut, address = thread.admin_pubkey)]
     pub admin: Signer<'info>,
-    #[account(mut)]
-    pub user: SystemAccount<'info>,
     #[account(
         mut,
         seeds = [b"thread", thread_id.as_bytes()],
@@ -565,27 +481,10 @@ pub struct AdminRefund<'info> {
     pub thread: Account<'info, Thread>,
     #[account(
         mut,
-        seeds = [b"escrow", thread_id.as_bytes()],
-        bump,
-        constraint = thread_escrow.thread_id == thread_id @ PingyError::ThreadMismatch
-    )]
-    pub thread_escrow: Account<'info, ThreadEscrow>,
-    #[account(
-        mut,
         seeds = [b"deposit", thread_id.as_bytes(), user_pubkey.as_ref()],
-        bump,
-        close = user
-    )]
-    pub deposit: Account<'info, Deposit>,
-    #[account(
-        init_if_needed,
-        payer = admin,
-        space = 8 + Ban::LEN,
-        seeds = [b"ban", thread_id.as_bytes(), user_pubkey.as_ref()],
         bump
     )]
-    pub ban: Account<'info, Ban>,
-    pub system_program: Program<'info, System>,
+    pub deposit: Account<'info, Deposit>,
 }
 
 #[derive(Accounts)]
@@ -745,10 +644,6 @@ pub struct FeeVault {
     pub initialized: bool,
 }
 
-#[account]
-pub struct Ban {
-    pub bump: u8,
-}
 
 impl ThreadEscrow {
     pub const MAX_THREAD_ID_LEN: usize = 64;
@@ -759,9 +654,6 @@ impl FeeVault {
     pub const SIZE: usize = 1;
 }
 
-impl Ban {
-    pub const LEN: usize = 1;
-}
 
 #[event]
 pub struct SpawnExecuted {
@@ -786,6 +678,7 @@ pub enum SpawnState {
 pub enum DepositStatus {
     Pending,
     Approved,
+    Revoked,
     Rejected,
     Withdrawn,
     Converted,
@@ -815,6 +708,8 @@ pub enum PingyError {
     UserBanned,
     #[msg("Deposit is not rejected")]
     DepositNotRejected,
+    #[msg("Deposit is not approved")]
+    DepositNotApproved,
     #[msg("Thread escrow has insufficient available lamports")]
     InsufficientEscrowBalance,
     #[msg("min_approved_wallets is outside allowed bounds")]

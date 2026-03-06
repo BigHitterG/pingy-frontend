@@ -150,16 +150,16 @@
       ]
     },
     {
-      "name": "rejectAndRefund",
+      "name": "revokeApprovedUser",
       "discriminator": [
-        129,
-        30,
-        228,
-        60,
-        177,
-        153,
-        19,
-        135
+        206,
+        183,
+        58,
+        47,
+        189,
+        209,
+        76,
+        161
       ],
       "accounts": [
         {
@@ -168,28 +168,55 @@
           "signer": true
         },
         {
-          "name": "user",
-          "writable": true
-        },
-        {
           "name": "thread",
-          "writable": true
-        },
-        {
-          "name": "threadEscrow",
-          "writable": true
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  104,
+                  114,
+                  101,
+                  97,
+                  100
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "threadId"
+              }
+            ]
+          }
         },
         {
           "name": "deposit",
-          "writable": true
-        },
-        {
-          "name": "ban",
-          "writable": true
-        },
-        {
-          "name": "systemProgram",
-          "address": "11111111111111111111111111111111"
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  101,
+                  112,
+                  111,
+                  115,
+                  105,
+                  116
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "threadId"
+              },
+              {
+                "kind": "arg",
+                "path": "userPubkey"
+              }
+            ]
+          }
         }
       ],
       "args": [
@@ -286,44 +313,6 @@
           "type": "string"
         }
       ]
-    },
-    {
-      "name": "withdrawRejected",
-      "discriminator": [
-        181,
-        161,
-        139,
-        89,
-        78,
-        96,
-        188,
-        226
-      ],
-      "accounts": [
-        {
-          "name": "user",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "thread",
-          "writable": true
-        },
-        {
-          "name": "deposit",
-          "writable": true
-        },
-        {
-          "name": "threadEscrow",
-          "writable": true
-        }
-      ],
-      "args": [
-        {
-          "name": "threadId",
-          "type": "string"
-        }
-      ]
     }
   ],
   "accounts": [
@@ -390,19 +379,6 @@
         149,
         157,
         132
-      ]
-    },
-    {
-      "name": "ban",
-      "discriminator": [
-        179,
-        156,
-        71,
-        13,
-        108,
-        245,
-        135,
-        4
       ]
     }
   ],
@@ -545,6 +521,9 @@
             "name": "approved"
           },
           {
+            "name": "revoked"
+          },
+          {
             "name": "rejected"
           },
           {
@@ -564,18 +543,6 @@
           {
             "name": "initialized",
             "type": "bool"
-          }
-        ]
-      }
-    },
-    {
-      "name": "ban",
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "bump",
-            "type": "u8"
           }
         ]
       }
@@ -693,6 +660,11 @@
       "code": 6016,
       "name": "MinApprovedWalletsNotReached",
       "msg": "Minimum approved wallets requirement has not been reached"
+    },
+    {
+      "code": 6017,
+      "name": "DepositNotApproved",
+      "msg": "Deposit is not approved"
     }
   ]
 }
