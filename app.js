@@ -782,10 +782,16 @@ const $ = (id) => document.getElementById(id);
 
     function ensureRoomChart(){
       const chartEl = $("roomChart");
-      if(!chartEl) return null;
+      if(!chartEl){
+        if(roomChart && typeof roomChart.remove === "function") roomChart.remove();
+        roomChart = null;
+        roomCandlesSeries = null;
+        roomChartContainerEl = null;
+        return null;
+      }
 
-      const chartContainerChanged = roomChart && roomChartContainerEl && roomChartContainerEl !== chartEl;
-      const chartContainerMissing = roomChart && roomChartContainerEl && !roomChartContainerEl.isConnected;
+      const chartContainerChanged = roomChart && roomChartContainerEl !== chartEl;
+      const chartContainerMissing = roomChart && (!roomChartContainerEl || !roomChartContainerEl.isConnected);
       if(roomChart && (chartContainerChanged || chartContainerMissing)){
         if(typeof roomChart.remove === "function") roomChart.remove();
         roomChart = null;
@@ -842,8 +848,10 @@ const $ = (id) => document.getElementById(id);
         window.addEventListener("resize", () => {
           const el = $("roomChart");
           if(!roomChart || !el) return;
-          const nextDims = roomChartDims(el);
-          roomChart.applyOptions({ width: nextDims.width, height: nextDims.height });
+          roomChart.applyOptions({
+            width: el.clientWidth || 300,
+            height: el.clientHeight || 90,
+          });
         });
         window.__pingyRoomChartResizeBound = true;
       }
