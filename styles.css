@@ -454,3 +454,24 @@
   line-height:1.4;
 }
 #legalContent p:last-child{margin-bottom:0}
+
+.launchConfigPanel{
+  border:1px solid var(--line);
+  padding:8px;
+  background:#fff;
+}
+.launchConfigGrid{
+  display:grid;
+  gap:8px;
+  margin-top:8px;
+}
+.launchConfigSummary{
+  border:1px solid var(--line);
+  padding:6px;
+  margin-top:8px;
+  background:#fcfcfc;
+}
+.fieldError{
+  color:#b00020;
+  margin-top:6px;
+}
