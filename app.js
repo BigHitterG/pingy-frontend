@@ -73,6 +73,9 @@ const $ = (id) => document.getElementById(id);
     const POST_SPAWN_TRADING_FEE_BPS = 100;
     const BPS_DENOM = 10_000;
 
+    const DEV_SIMULATION = !!(window?.location?.hostname === "localhost" || window?.location?.hostname === "127.0.0.1" || window?.location?.hostname === "0.0.0.0" || window?.location?.hostname?.endsWith?.(".local") || window?.location?.search?.includes("devsim=1"));
+    const DEV_SIM_DEFAULT_SEED = 1337;
+
 
     let homeView;
     let roomView;
@@ -941,7 +944,17 @@ const $ = (id) => document.getElementById(id);
       userEscrow: null,
       walletPubkey: null,
       maxPingLamports: 0,
-      movers: { enabled: true, tickMs: 3000, active: new Set(), scores: {}, leadId: null, topId: null, shimmyId: null, shimmyUntil: 0 }
+      movers: { enabled: true, tickMs: 3000, active: new Set(), scores: {}, leadId: null, topId: null, shimmyId: null, shimmyUntil: 0 },
+      devSim: {
+        enabled: DEV_SIMULATION,
+        active: false,
+        roomId: null,
+        endAtMs: 0,
+        tickId: null,
+        seed: DEV_SIM_DEFAULT_SEED,
+        walletPool: [],
+        backup: null
+      }
     };
 
     const ONCHAIN_REFRESH_MS = 7000;
@@ -2489,6 +2502,329 @@ if(connectBtn){
         }
       }
     }
+
+
+    function seededRandom(seed){
+      const raw = String(seed || 1);
+      let x = 2166136261;
+      for(let i = 0; i < raw.length; i += 1){
+        x ^= raw.charCodeAt(i);
+        x = Math.imul(x, 16777619) >>> 0;
+      }
+      return function next(){
+        x = (1664525 * x + 1013904223) >>> 0;
+        return x / 4294967296;
+      };
+    }
+
+    function randomWalletFromSeed(tag){
+      const chars = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+      const rand = seededRandom(tag);
+      let out = "";
+      for(let i=0;i<44;i+=1) out += chars[Math.floor(rand() * chars.length)] || "1";
+      return out;
+    }
+
+    function makeDevSimWalletPool(roomId, size = 36, seed = DEV_SIM_DEFAULT_SEED){
+      const pool = [];
+      for(let i=0;i<size;i+=1){
+        pool.push(randomWalletFromSeed(`${roomId}:${seed}:${i}`));
+      }
+      return pool;
+    }
+
+    function cloneRoomForDevSim(r){
+      return JSON.parse(JSON.stringify({
+        state: r.state,
+        min_approved_wallets: r.min_approved_wallets,
+        spawn_target_sol: r.spawn_target_sol,
+        max_wallet_share_bps: r.max_wallet_share_bps,
+        spawn_tokens_total: r.spawn_tokens_total,
+        spawn_fee_paid_sol: r.spawn_fee_paid_sol,
+        protocol_fees_sol: r.protocol_fees_sol,
+        positions: r.positions || {},
+        curve_state: r.curve_state || makeCurveState(),
+        trade_history: r.trade_history || [],
+        approval: r.approval || {},
+        approverWallets: r.approverWallets || {},
+        blockedWallets: r.blockedWallets || {},
+        market_cap_usd: r.market_cap_usd,
+        change_pct: r.change_pct,
+        token_address: r.token_address,
+        onchain: r.onchain || null,
+        chat: state.chat[r.id] || []
+      }));
+    }
+
+    function restoreRoomFromDevSimBackup(roomId){
+      const r = roomById(roomId);
+      const backup = state.devSim.backup;
+      if(!r || !backup || backup.roomId !== roomId) return;
+      const data = backup.room || {};
+      r.state = data.state || r.state;
+      r.min_approved_wallets = Number(data.min_approved_wallets || r.min_approved_wallets || 0);
+      r.spawn_target_sol = Number(data.spawn_target_sol || r.spawn_target_sol || 0);
+      r.max_wallet_share_bps = Number(data.max_wallet_share_bps || r.max_wallet_share_bps || 0);
+      r.spawn_tokens_total = Number(data.spawn_tokens_total || 0);
+      r.spawn_fee_paid_sol = Number(data.spawn_fee_paid_sol || 0);
+      r.protocol_fees_sol = Number(data.protocol_fees_sol || 0);
+      r.positions = data.positions || {};
+      r.curve_state = data.curve_state || makeCurveState();
+      r.trade_history = Array.isArray(data.trade_history) ? data.trade_history : [];
+      r.approval = data.approval || {};
+      r.approverWallets = data.approverWallets || {};
+      r.blockedWallets = data.blockedWallets || {};
+      r.market_cap_usd = Number(data.market_cap_usd || 0);
+      r.change_pct = Number(data.change_pct || 0);
+      r.token_address = data.token_address || null;
+      state.onchain[roomId] = data.onchain || null;
+      state.chat[roomId] = Array.isArray(data.chat) ? data.chat : [];
+      if(r.creator_wallet){
+        r.approval[r.creator_wallet] = "approved";
+        r.approverWallets[r.creator_wallet] = true;
+      }
+    }
+
+    function ensureRoomLocalSnapshot(roomId){
+      const r = roomById(roomId);
+      if(!r) return null;
+      const byWallet = {};
+      const approvedWallets = [];
+      const pendingWallets = [];
+      const pos = r.positions || {};
+      for(const wallet of Object.keys(pos)){
+        const rowPos = pos[wallet] || {};
+        const status = normalizeDepositStatus(r.approval?.[wallet] || (wallet === r.creator_wallet ? "approved" : ""));
+        if(!status) continue;
+        const escrow = Math.max(0, Number(rowPos.escrow_sol || 0));
+        byWallet[wallet] = { status, allocated_sol: escrow, escrow_sol: escrow, withdrawable_sol: escrow, refundable_sol: escrow };
+        if(status === "pending") pendingWallets.push(wallet);
+        if(status === "approved") approvedWallets.push(wallet);
+      }
+      const totalAllocated = Object.values(byWallet).reduce((sum, row) => sum + Number(row.allocated_sol || 0), 0);
+      const snapshot = {
+        roomId,
+        admin: r.creator_wallet,
+        approverWallets: Object.keys(r.approverWallets || {}).filter((w) => !!r.approverWallets[w]),
+        byWallet,
+        approvedWallets,
+        pendingWallets,
+        approved_count: approvedWallets.length,
+        pending_count: pendingWallets.length,
+        total_allocated_lamports: Math.round(totalAllocated * LAMPORTS_PER_SOL),
+        spawn_target_lamports: Math.round(spawnTargetSol(r) * LAMPORTS_PER_SOL),
+        min_approved_wallets: minApprovedWalletsRequired(r),
+        max_wallet_share_bps: Number(r.max_wallet_share_bps || 0),
+        fetchedAtMs: Date.now(),
+      };
+      state.onchain[roomId] = snapshot;
+      state.onchainMeta[roomId] = { fetchedAtMs: snapshot.fetchedAtMs };
+      r.onchain = snapshot;
+      return snapshot;
+    }
+
+    function upsertDevSimPing(room, wallet, solIn, approvedNow){
+      const amount = Math.max(0.01, Number(solIn || 0));
+      applySpawnCommit(room, wallet, amount);
+      room.approval = room.approval || {};
+      const existing = normalizeDepositStatus(room.approval[wallet]);
+      const wasApproved = existing === "approved";
+      room.approval[wallet] = approvedNow ? "approved" : (wasApproved ? "approved" : "pending");
+      if(approvedNow && !wasApproved) addSystemEvent(room.id, `@${shortWallet(wallet)} approved — now a PINGER`);
+      else if(!existing) addSystemEvent(room.id, `@${shortWallet(wallet)} pinged ${amount.toFixed(3)} SOL (pending)`);
+      room._lastActivity = Date.now();
+      room._pulseUntil = Date.now() + 600;
+    }
+
+    function runSpawnSimulationStep(room, sim, rand){
+      const minWallets = minApprovedWalletsRequired(room);
+      const target = spawnTargetSol(room);
+      const cap = Math.max(0.01, walletCapSol(room));
+      const shouldPing = rand() < 0.78;
+      let snapshot = getRoomEscrowSnapshot(room);
+      if(shouldPing){
+        const wallet = sim.walletPool[Math.floor(rand() * sim.walletPool.length)];
+        const pos = ensurePos(room, wallet);
+        const leftCap = Math.max(0, cap - Number(pos.escrow_sol || 0));
+        if(leftCap > 0.002){
+          const contribution = Math.min(leftCap, 0.02 + rand() * 0.28);
+          const approveChance = snapshot.approvedWallets.length < minWallets ? 0.58 : 0.32;
+          const approveNow = rand() < approveChance;
+          upsertDevSimPing(room, wallet, contribution, approveNow);
+          snapshot = getRoomEscrowSnapshot(room);
+        }
+      }
+
+      if(snapshot.pendingWallets.length > 0 && rand() < 0.7){
+        const wallet = snapshot.pendingWallets[Math.floor(rand() * snapshot.pendingWallets.length)];
+        const wasApproved = normalizeDepositStatus(room.approval?.[wallet]) === "approved";
+        room.approval[wallet] = "approved";
+        if(!wasApproved) addSystemEvent(room.id, `@${shortWallet(wallet)} approved — now a PINGER`);
+        snapshot = getRoomEscrowSnapshot(room);
+      }
+
+      const approvedTotal = approvedEscrowSol(room);
+      if(approvedTotal < target && rand() < 0.65 && snapshot.approvedWallets.length > 0){
+        const wallet = snapshot.approvedWallets[Math.floor(rand() * snapshot.approvedWallets.length)];
+        const pos = ensurePos(room, wallet);
+        const leftCap = Math.max(0, cap - Number(pos.escrow_sol || 0));
+        if(leftCap > 0.001) applySpawnCommit(room, wallet, Math.min(leftCap, 0.02 + rand() * 0.2));
+      }
+      ensureRoomLocalSnapshot(room.id);
+      maybeAdvance(room);
+    }
+
+    function runBondingSimulationStep(room, sim, rand){
+      const activeWallets = sim.walletPool.slice(0, 20);
+      const buyers = activeWallets.filter((w) => Number(ensurePos(room, w).net_sol_in || 0) < 8);
+      const sellers = activeWallets.filter((w) => Number(ensurePos(room, w).token_balance || 0) > 10);
+      const buyBias = sellers.length < 3 ? 0.8 : 0.58;
+      const buySide = rand() < buyBias;
+      if((buySide && buyers.length === 0) || (!buySide && sellers.length === 0)) return;
+
+      if(buySide){
+        const wallet = buyers[Math.floor(rand() * buyers.length)];
+        const grossSol = 0.01 + rand() * 0.2;
+        const buyFee = applyTradingFeeToBuySol(grossSol);
+        const buy = applyCurveBuy(buyFee.netSol, room.curve_state || makeCurveState());
+        const pos = ensurePos(room, wallet);
+        room.curve_state = buy.next;
+        pos.token_balance = Number(pos.token_balance || 0) + buy.tokensOut;
+        pos.net_sol_in = Number(pos.net_sol_in || 0) + buyFee.netSol;
+        room.protocol_fees_sol = Number(room.protocol_fees_sol || 0) + buyFee.feeSol;
+        syncRoomMarketCap(room);
+        appendBondingTradeEvent(room, {
+          ts: nowStamp(),
+          wallet,
+          side: "buy",
+          gross_sol: buyFee.grossSol,
+          fee_sol: buyFee.feeSol,
+          net_sol: buyFee.netSol,
+          tokens_out: buy.tokensOut,
+          price_after: curvePrice(room.curve_state),
+          market_cap_after: Number(room.market_cap_usd || 0),
+        });
+        if(rand() < 0.35) addSystemEvent(room.id, `@${shortWallet(wallet)} bought ${buy.tokensOut.toFixed(3)} tokens`);
+        nudgeChange(room, rand() * 2.4);
+      } else {
+        const wallet = sellers[Math.floor(rand() * sellers.length)];
+        const pos = ensurePos(room, wallet);
+        const tokenBalance = Number(pos.token_balance || 0);
+        const tokenIn = Math.max(5, tokenBalance * (0.05 + rand() * 0.22));
+        const soldTokens = Math.min(tokenBalance, tokenIn);
+        const sell = applyCurveSell(soldTokens, room.curve_state || makeCurveState());
+        const sellFee = applyTradingFeeToSellSol(sell.grossSolOut);
+        room.curve_state = sell.next;
+        pos.token_balance = Math.max(0, tokenBalance - soldTokens);
+        pos.net_sol_in = Number(pos.net_sol_in || 0) - sellFee.netSol;
+        room.protocol_fees_sol = Number(room.protocol_fees_sol || 0) + sellFee.feeSol;
+        syncRoomMarketCap(room);
+        appendBondingTradeEvent(room, {
+          ts: nowStamp(),
+          wallet,
+          side: "sell",
+          tokens_in: soldTokens,
+          gross_sol_out: sellFee.grossSol,
+          fee_sol: sellFee.feeSol,
+          net_sol_out: sellFee.netSol,
+          price_after: curvePrice(room.curve_state),
+          market_cap_after: Number(room.market_cap_usd || 0),
+        });
+        if(rand() < 0.28) addSystemEvent(room.id, `@${shortWallet(wallet)} sold ${soldTokens.toFixed(3)} tokens`);
+        nudgeChange(room, -(rand() * 2.2));
+      }
+      maybeAdvance(room);
+      room._lastActivity = Date.now();
+      room._pulseUntil = Date.now() + 450;
+      ensureRoomLocalSnapshot(room.id);
+    }
+
+    function stopDevSimulation(roomId){
+      const sim = state.devSim;
+      if(sim.tickId){
+        clearInterval(sim.tickId);
+        sim.tickId = null;
+      }
+      sim.active = false;
+      sim.endAtMs = 0;
+      if(roomId && sim.roomId && roomId !== sim.roomId) return;
+      sim.roomId = roomId || sim.roomId;
+    }
+
+    function resetDevSimulationRoom(roomId){
+      if(!roomId) return;
+      stopDevSimulation(roomId);
+      restoreRoomFromDevSimBackup(roomId);
+      state.devSim.backup = null;
+      ensureRoomLocalSnapshot(roomId);
+      renderHome();
+      if(activeRoomId === roomId) renderRoom(roomId);
+    }
+
+    function devSimStatusText(roomId){
+      const sim = state.devSim;
+      if(!DEV_SIMULATION) return "disabled";
+      if(!sim.active || sim.roomId !== roomId) return "idle";
+      const leftMs = Math.max(0, sim.endAtMs - Date.now());
+      return `running (${Math.ceil(leftMs / 1000)}s left)`;
+    }
+
+    function startDevSimulation(roomId, durationMinutes){
+      if(!DEV_SIMULATION) return;
+      const room = roomById(roomId);
+      if(!room) return;
+      stopDevSimulation();
+      state.devSim.backup = {
+        roomId,
+        room: cloneRoomForDevSim(room)
+      };
+      room.state = "SPAWNING";
+      room.positions = room.positions || {};
+      room.trade_history = [];
+      room.protocol_fees_sol = 0;
+      room.spawn_tokens_total = 0;
+      room.spawn_fee_paid_sol = 0;
+      room.curve_state = makeCurveState();
+      room.token_address = null;
+      room.market_cap_usd = 0;
+      room.approval = { [room.creator_wallet]: "approved" };
+      room.approverWallets = { [room.creator_wallet]: true };
+      room.blockedWallets = {};
+      state.chat[roomId] = [{ ts: nowStamp(), wallet: "SYSTEM", text: "dev simulation started (local-only)." }];
+      ensureRoomLocalSnapshot(roomId);
+
+      const sim = state.devSim;
+      sim.seed = DEV_SIM_DEFAULT_SEED + (durationMinutes * 17) + roomId.length;
+      sim.walletPool = makeDevSimWalletPool(roomId, 40, sim.seed);
+      sim.roomId = roomId;
+      sim.endAtMs = Date.now() + (durationMinutes * 60 * 1000);
+      sim.active = true;
+
+      const rand = seededRandom(sim.seed);
+      sim.tickId = setInterval(() => {
+        const currentRoom = roomById(roomId);
+        if(!currentRoom) return stopDevSimulation(roomId);
+        if(Date.now() >= sim.endAtMs) return stopDevSimulation(roomId);
+        if(currentRoom.state === "SPAWNING") runSpawnSimulationStep(currentRoom, sim, rand);
+        else if(currentRoom.state === "BONDING") runBondingSimulationStep(currentRoom, sim, rand);
+        if(activeRoomId === roomId) renderRoom(roomId);
+        renderHome();
+      }, 1200);
+
+      if(activeRoomId === roomId) renderRoom(roomId);
+      renderHome();
+    }
+
+    function renderDevSimulationPanel(room){
+      const panel = $("devSimPanel");
+      const status = $("devSimStatus");
+      if(!panel || !status) return;
+      const visible = DEV_SIMULATION && !!room;
+      panel.style.display = visible ? "block" : "none";
+      if(!visible) return;
+      status.textContent = devSimStatusText(room.id);
+    }
+
     // Card UI helpers (home cards unchanged)
     function mosaicHtml(room){
       if(room && room.image){
@@ -3319,9 +3655,11 @@ if(connectBtn){
       activeRoomId = roomId;
       setView("room");
       renderRoom(roomId);
-      refreshRoomOnchainSnapshot(roomId, { force: true }).then(() => {
-        if(activeRoomId === roomId) renderRoom(roomId);
-      });
+      if(!(state.devSim.active && state.devSim.roomId === roomId)){
+        refreshRoomOnchainSnapshot(roomId, { force: true }).then(() => {
+          if(activeRoomId === roomId) renderRoom(roomId);
+        });
+      }
 
       const h = "#/room/" + encodeURIComponent(roomId);
       if(location.hash !== h) history.replaceState(null,"",h);
@@ -3517,6 +3855,7 @@ if(connectBtn){
       if(!r) return;
 
       maybeAdvance(r);
+      renderDevSimulationPanel(r);
 
       $("roomTitle").textContent = r.name + "  $" + r.ticker;
       const roomMeta = $("roomMeta");
@@ -3889,6 +4228,15 @@ if(connectBtn){
       updatePingAllocationHint(modalRoomId || activeRoomId);
     });
     $("unpingBtn").addEventListener("click", () => openUnpingModal(activeRoomId));
+
+    const devSimStart5Btn = $("devSimStart5");
+    const devSimStart10Btn = $("devSimStart10");
+    const devSimStopBtn = $("devSimStop");
+    const devSimResetBtn = $("devSimReset");
+    if(devSimStart5Btn) devSimStart5Btn.addEventListener("click", () => { if(activeRoomId) startDevSimulation(activeRoomId, 5); });
+    if(devSimStart10Btn) devSimStart10Btn.addEventListener("click", () => { if(activeRoomId) startDevSimulation(activeRoomId, 10); });
+    if(devSimStopBtn) devSimStopBtn.addEventListener("click", () => { if(activeRoomId) { stopDevSimulation(activeRoomId); renderRoom(activeRoomId); } });
+    if(devSimResetBtn) devSimResetBtn.addEventListener("click", () => { if(activeRoomId) resetDevSimulationRoom(activeRoomId); });
     $("pingWalletSmokeTest").addEventListener("click", runWalletSmokeTest);
     function nudgeChange(r, delta){
       r.change_pct = Number(r.change_pct || 0) + delta;
@@ -4218,11 +4566,14 @@ if(connectBtn){
       renderHome();
       updateHeaderWalletUI();
       if(activeRoomId){
-        refreshRoomOnchainSnapshot(activeRoomId);
+        if(!(state.devSim.active && state.devSim.roomId === activeRoomId)) refreshRoomOnchainSnapshot(activeRoomId);
         renderRoom(activeRoomId);
       }
       if(homeView?.classList.contains("on")){
-        for(const room of state.rooms) refreshRoomOnchainSnapshot(room.id);
+        for(const room of state.rooms){
+          if(state.devSim.active && state.devSim.roomId === room.id) continue;
+          refreshRoomOnchainSnapshot(room.id);
+        }
       }
       if(profileView.classList.contains("on") && activeProfileTab === "balances"){
         const wallet = profileRouteWallet();

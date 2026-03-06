@@ -281,6 +281,17 @@
         <div class="muted" id="meLine">—</div>
       </div>
 
+      <div class="panel" id="devSimPanel" style="margin-bottom:8px; display:none;">
+        <div class="tiny" style="margin-bottom:6px;"><b>dev simulator</b> (local-only)</div>
+        <div class="row" style="gap:6px; flex-wrap:wrap;">
+          <button class="btn subtle small" id="devSimStart5">start 5m simulation</button>
+          <button class="btn subtle small" id="devSimStart10">start 10m simulation</button>
+          <button class="btn subtle small" id="devSimStop">stop simulation</button>
+          <button class="btn subtle small" id="devSimReset">reset simulated room state</button>
+        </div>
+        <div class="muted tiny" id="devSimStatus" style="margin-top:6px;">idle</div>
+      </div>
+
       <div class="panel" style="margin-bottom:8px;">
         <button class="btn subtle small" id="pingersToggle">pingers ▸</button>
         <div id="pingersContent" style="display:none; margin-top:8px;">
