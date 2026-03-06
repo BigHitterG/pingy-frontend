@@ -378,13 +378,17 @@ const $ = (id) => document.getElementById(id);
       maxWalletSharePctMax: 20,
     };
 
+    function getCreateLaunchMode(){
+      return String($("newLaunchMode")?.value || "spawn").toLowerCase() === "instant" ? "instant" : "spawn";
+    }
+
     function selectedPresetKey(){
       return String($("newPreset")?.value || "fast").toLowerCase();
     }
 
     function selectedPreset(){
       const key = selectedPresetKey();
-      return PRESETS[key] || PRESETS.balanced;
+      return PRESETS[key] || PRESETS.fast;
     }
 
     function asNumberInputValue(id){
@@ -394,13 +398,28 @@ const $ = (id) => document.getElementById(id);
     }
 
     function getCreateLaunchConfig(){
+      const launchMode = getCreateLaunchMode();
+      if(launchMode === "instant"){
+        return {
+          launchMode: "instant",
+          launchPreset: null,
+          minApprovedWallets: 0,
+          spawnTargetSol: 0,
+          spawnTargetLamports: 0,
+          maxWalletShareBps: 0,
+          maxWalletSharePct: 0,
+          capPerWalletSol: 0,
+        };
+      }
+
       const mode = selectedPresetKey();
       if(mode !== "custom"){
-        const preset = PRESETS[mode] || PRESETS.balanced;
+        const preset = PRESETS[mode] || PRESETS.fast;
         const spawnTargetSol = Number(preset.targetSol || 0);
         const maxWalletShareBps = Number(preset.maxWalletShareBps || 0);
         const maxWalletSharePct = maxWalletShareBps / 100;
         return {
+          launchMode: "spawn",
           launchPreset: preset.key,
           minApprovedWallets: Number(preset.minWallets || 0),
           spawnTargetSol,
@@ -416,6 +435,7 @@ const $ = (id) => document.getElementById(id);
       const maxWalletSharePct = asNumberInputValue("customMaxWalletSharePct");
       const maxWalletShareBps = Math.round(maxWalletSharePct * 100);
       return {
+        launchMode: "spawn",
         launchPreset: "custom",
         minApprovedWallets,
         spawnTargetSol,
@@ -428,6 +448,7 @@ const $ = (id) => document.getElementById(id);
 
     function validateCreateLaunchConfig(config){
       const c = config || {};
+      if(c.launchMode === "instant") return { ok:true, config: c };
       if(!Number.isFinite(c.minApprovedWallets) || !Number.isInteger(c.minApprovedWallets)){
         return { ok:false, message: "Minimum approved wallets must be between 10 and 50." };
       }
@@ -455,16 +476,20 @@ const $ = (id) => document.getElementById(id);
       return { ok:true, config: c };
     }
 
-    function roomLaunchLabel(room){
-      const key = String(room?.launch_preset || "").toLowerCase();
-      if(key === "custom") return "Custom";
-      return (PRESETS[key] || PRESETS.balanced).label;
+    function roomLaunchMode(room){
+      return String(room?.launch_mode || "spawn").toLowerCase() === "instant" ? "instant" : "spawn";
     }
 
+    function roomLaunchLabel(room){
+      if(roomLaunchMode(room) === "instant") return "Instant";
+      const key = String(room?.launch_preset || "").toLowerCase();
+      if(key === "custom") return "Spawn • Custom";
+      return `Spawn • ${(PRESETS[key] || PRESETS.fast).label}`;
+    }
     function roomPreset(room){
       const r = room || {};
       const key = String(r.launch_preset || "fast").toLowerCase();
-      const base = PRESETS[key] || PRESETS.balanced;
+      const base = PRESETS[key] || PRESETS.fast;
       return {
         ...base,
         key: key === "custom" ? "custom" : base.key,
@@ -536,8 +561,22 @@ const $ = (id) => document.getElementById(id);
       hint.textContent = `Cap per wallet: ${capSol.toFixed(3)} SOL (${pct.toFixed(1)}%) • ${launchLine}`;
     }
 
+    function updateCreateLaunchModeUI(){
+      const launchMode = getCreateLaunchMode();
+      const spawnWrap = $("spawnLaunchSettings");
+      const instantHint = $("instantLaunchHint");
+      if(spawnWrap) spawnWrap.style.display = launchMode === "spawn" ? "block" : "none";
+      if(instantHint) instantHint.style.display = launchMode === "instant" ? "block" : "none";
+      const customError = $("customLaunchError");
+      if(launchMode === "instant" && customError){
+        customError.textContent = "";
+        customError.style.display = "none";
+      }
+      if(launchMode === "spawn") updatePresetCapHint();
+    }
+
     function prefillCustomLaunchInputsFromPreset(presetKey){
-      const preset = PRESETS[String(presetKey || "").toLowerCase()] || PRESETS.balanced;
+      const preset = PRESETS[String(presetKey || "").toLowerCase()] || PRESETS.fast;
       if($("customMinWallets")) $("customMinWallets").value = String(preset.minWallets);
       if($("customSpawnTargetSol")) $("customSpawnTargetSol").value = String(preset.targetSol);
       if($("customMaxWalletSharePct")) $("customMaxWalletSharePct").value = String(preset.maxWalletShareBps / 100);
@@ -1478,23 +1517,26 @@ const $ = (id) => document.getElementById(id);
     function mkRoom(id, name, ticker, desc, launchConfig = null){
       const creator_wallet = (Math.random().toString(16).slice(2,10) + '111111111111111111111111111111').slice(0,44);
       const config = launchConfig || getCreateLaunchConfig();
+      const mode = config.launchMode || "spawn";
+      const isInstant = mode === "instant";
       return {
         id, name, ticker, desc,
         creator_wallet,
         socials: { x:'', tg:'', web:'' },
         created_at: nowStamp(),
-        state: "SPAWNING",          // SPAWNING | BONDING | BONDED
-        launch_preset: config.launchPreset,
-        min_approved_wallets: Number(config.minApprovedWallets || 0),
-        spawn_target_sol: Number(config.spawnTargetSol || 0),
-        max_wallet_share_bps: Number(config.maxWalletShareBps || 0),
+        state: isInstant ? "BONDING" : "SPAWNING",          // SPAWNING | BONDING | BONDED
+        launch_mode: isInstant ? "instant" : "spawn",
+        launch_preset: isInstant ? null : config.launchPreset,
+        min_approved_wallets: isInstant ? 0 : Number(config.minApprovedWallets || 0),
+        spawn_target_sol: isInstant ? 0 : Number(config.spawnTargetSol || 0),
+        max_wallet_share_bps: isInstant ? 0 : Number(config.maxWalletShareBps || 0),
         spawn_tokens_total: 0,      // virtual tokens sold in the spawn tranche (pre-token)
         spawn_fee_paid_sol: 0,      // actual spawn fee charged only when spawn executes
         positions: {},              // wallet -> { escrow_sol, bond_sol, spawn_tokens }
         approval: { [creator_wallet]: "approved" },        // wallet => approved|pending|denied
         approverWallets: { [creator_wallet]: true },        // wallet => true
         blockedWallets: {},         // wallet => true
-        market_cap_usd: 0,
+        market_cap_usd: isInstant ? MC_SPAWN : 0,
         change_pct: (Math.random() * 10 - 5),
         token_address: null,
         image: null,
@@ -2239,7 +2281,7 @@ if(connectBtn){
             <div style="min-width:0;">
               <div class="row" style="justify-content:space-between;align-items:baseline;">
                 <div class="name">${escapeText(r.name)} <span class="k">$${escapeText(r.ticker)}</span></div>
-                <span class="k">SPAWNING${roomLaunchLabel(r) === "Custom" ? " • Custom" : ""}</span>
+                <span class="k">SPAWNING • ${roomLaunchLabel(r)}</span>
               </div>
               <div class="tiny subline">${escapeText(r.desc || "prespawn chat open")}</div>
               <div class="bar barActive barSpawn"><i style="width:${pct}%"></i></div>
@@ -2257,7 +2299,7 @@ if(connectBtn){
       const pct = Math.round(p * 100);
       const chg = Number(r.change_pct || 0);
       const chgCls = chg > 0 ? "up" : (chg < 0 ? "down" : "");
-      const chip = (r.state === "BONDING") ? "BONDING" : "BONDED";
+      const chip = (r.state === "BONDING") ? `BONDING • ${roomLaunchLabel(r)}` : `BONDED • ${roomLaunchLabel(r)}`;
       const athRatio = p;
       const isHotBonding = r.state === "BONDING" && athRatio >= 0.9;
       const barClass = isHotBonding ? "bar barActive barBonding barHot" : "bar barActive barBonding";
@@ -2548,14 +2590,17 @@ if(connectBtn){
         return alert(launchConfigResult.message);
       }
       const launchConfig = launchConfigResult.config;
+      const launchMode = launchConfig.launchMode || "spawn";
 
-      const presetCapLamports = configWalletCapLamports(launchConfig);
-      if(commitLamports > presetCapLamports){
-        return alert(`commit exceeds ${roomLaunchLabel({ launch_preset: launchConfig.launchPreset })} cap (${(presetCapLamports / LAMPORTS_PER_SOL).toFixed(3)} SOL max).`);
+      if(launchMode === "spawn"){
+        const presetCapLamports = configWalletCapLamports(launchConfig);
+        if(commitLamports > presetCapLamports){
+          return alert(`commit exceeds ${roomLaunchLabel({ launch_mode: "spawn", launch_preset: launchConfig.launchPreset })} cap (${(presetCapLamports / LAMPORTS_PER_SOL).toFixed(3)} SOL max).`);
+        }
       }
       const id = "r" + Math.random().toString(16).slice(2,6);
 
-      if(shouldUseOnchain()){
+      if(shouldUseOnchain() && launchMode === "spawn"){
         if(commitLamports > 0){
           try {
             await pingWithOptionalThreadInitTx(id, commitLamports, true, launchConfig);
@@ -2583,8 +2628,16 @@ if(connectBtn){
       r.socials = { x: xUrl, tg: tgUrl, web: webUrl };
       if(newImgData) r.image = newImgData;
       if(newBannerData) r.banner = newBannerData;
+      if(launchMode === "instant"){
+        r.token_address = mockTokenAddress(r.ticker || r.name || "PINGY");
+        if(commit > 0){
+          r.positions[connectedWallet] = r.positions[connectedWallet] || {escrow_sol:0, bond_sol:0, spawn_tokens:0};
+          r.positions[connectedWallet].bond_sol = Number(r.positions[connectedWallet].bond_sol || 0) + commit;
+          r.market_cap_usd = Number(r.market_cap_usd || MC_SPAWN) + Math.round(commit * SOL_TO_USD * 12);
+        }
+      }
       state.rooms.unshift(r);
-      state.chat[id] = [{ ts:"—", wallet:"SYSTEM", text:"coin created. waiting for spawn." }];
+      state.chat[id] = [{ ts:"—", wallet:"SYSTEM", text: launchMode === "instant" ? "coin created. live on bonding curve." : "coin created. waiting for spawn." }];
 
       $("newName").value = "";
       $("newTicker").value = "";
@@ -2593,12 +2646,13 @@ if(connectBtn){
       $("newTg").value = "";
       $("newWeb").value = "";
       $("newCommit").value = "";
+      if($("newLaunchMode")) $("newLaunchMode").value = "spawn";
       if($("newPreset")) {
         $("newPreset").value = "fast";
         lastPresetBeforeCustom = "fast";
         prefillCustomLaunchInputsFromPreset("fast");
-        updatePresetCapHint();
       }
+      updateCreateLaunchModeUI();
       const customError = $("customLaunchError");
       if(customError){
         customError.textContent = "";
@@ -2615,7 +2669,7 @@ if(connectBtn){
       renderHome();
       openRoom(id);
 
-      if(shouldUseOnchain()){
+      if(shouldUseOnchain() && launchMode === "spawn"){
         await fetchRoomOnchainSnapshot(id);
         await refreshConnectedWalletEscrowLine(id);
         await fetchConnectedWalletDepositSnapshot();
@@ -2624,6 +2678,9 @@ if(connectBtn){
     }
     $("createCoinBtn").addEventListener("click", createCoinFromForm);
     let lastPresetBeforeCustom = "fast";
+    if($("newLaunchMode")){
+      $("newLaunchMode").addEventListener("change", updateCreateLaunchModeUI);
+    }
     if($("newPreset")){
       $("newPreset").addEventListener("change", () => {
         const next = selectedPresetKey();
@@ -2639,8 +2696,10 @@ if(connectBtn){
         if(!el) return;
         el.addEventListener("input", updatePresetCapHint);
       });
-      updatePresetCapHint();
     }
+    if($("newPreset")) $("newPreset").value = "fast";
+    if($("newLaunchMode")) $("newLaunchMode").value = "spawn";
+    updateCreateLaunchModeUI();
 
     // NOTE: v22 UI removed "newRoomBtn" on explore; keep handler optional
     const newRoomBtn = $("newRoomBtn");
@@ -3274,6 +3333,9 @@ if(connectBtn){
       const pendingList = $("pendingList");
       const pingersList = $("pingersList");
       const approversList = $("approversList");
+      const isInstantLaunch = roomLaunchMode(r) === "instant";
+      const pingersPanel = $("pingersToggle")?.closest(".panel");
+      if(pingersPanel) pingersPanel.style.display = isInstantLaunch ? "none" : "block";
 
       const makeWalletRow = (wallet, walletRow = {}, actions = []) => {
         const row = document.createElement("div");
@@ -3316,7 +3378,7 @@ if(connectBtn){
         return row;
       };
 
-      if(pendingList){
+      if(pendingList && !isInstantLaunch){
         pendingList.innerHTML = "";
         if(!isAdmin){
           const e = document.createElement("span");
@@ -3343,7 +3405,7 @@ if(connectBtn){
         }
       }
 
-      if(pingersList){
+      if(pingersList && !isInstantLaunch){
         pingersList.innerHTML = "";
         if(pingers.length === 0){
           const e = document.createElement("span");
@@ -3361,7 +3423,7 @@ if(connectBtn){
         }
       }
 
-      if(approversList){
+      if(approversList && !isInstantLaunch){
         approversList.innerHTML = "";
         if(approvers.length === 0){
           const e = document.createElement("span");
@@ -3387,7 +3449,7 @@ if(connectBtn){
         }
       }
 
-      updatePingersToggleLabel(roomId);
+      if(!isInstantLaunch) updatePingersToggleLabel(roomId);
 
       // room banner + image (if provided)
       const bannerEl = $("roomBanner");
@@ -3456,8 +3518,8 @@ if(connectBtn){
           progressLine.textContent = `Allocated: ${allocated.toFixed(3)} / ${target.toFixed(3)} SOL • Approved wallets: ${approvedCount} / ${minApproved} • Max per wallet: ${walletCapSol(r).toFixed(3)} SOL`;
         }
       } else if(r.state === "BONDING"){
-        phaseLabel.textContent = "BONDING";
-        statePill.textContent = "BONDING";
+        phaseLabel.textContent = isInstantLaunch ? "Live on bonding curve" : "BONDING";
+        statePill.textContent = isInstantLaunch ? "INSTANT" : "BONDING";
         const bondProgress = bondingProgress01(r);
         const hotBonding = bondProgress >= 0.9;
         phaseBar.style.width = Math.round(bondProgress*100) + "%";
@@ -3495,8 +3557,12 @@ if(connectBtn){
       $("meLine").textContent = connectedWallet ? me : "connect wallet";
       if(connectedWallet && r.state === "SPAWNING") refreshConnectedWalletEscrowLine(roomId);
 
+      const pingBtn = $("pingBtn");
+      const unpingBtn = $("unpingBtn");
+      if(pingBtn) pingBtn.textContent = r.state === "SPAWNING" ? "ping" : "buy";
+      if(unpingBtn) unpingBtn.textContent = r.state === "SPAWNING" ? "unping" : "sell";
       $("pingBtn").disabled = !connectedWallet || !!(connectedWallet && r.blockedWallets && r.blockedWallets[connectedWallet]);
-      $("unpingBtn").disabled = !connectedWallet || r.state !== "SPAWNING";
+      $("unpingBtn").disabled = !connectedWallet;
 
       setComposerState(r);
       renderChat(roomId);
@@ -3562,9 +3628,10 @@ if(connectBtn){
       const r = roomById(rid);
       if(!r) return;
       r.onchain = state.onchain?.[rid] || r.onchain || {};
-      if(r.state !== "SPAWNING") return alert("unping is only available before spawn.");
+      if(r.state === "BONDED") return alert("sell is not available after bonding is complete in this mock.");
       modalRoomId = rid;
-      $("unpingAmount").value = "full withdraw";
+      $("unpingAmount").value = r.state === "SPAWNING" ? "full withdraw" : "sell amount";
+      $("unpingAmount").readOnly = r.state === "SPAWNING";
       $("unpingRoomLine").textContent = `coin: ${r.name}  $${r.ticker}`;
       openModal($("unpingBack"));
     }
@@ -3714,8 +3781,22 @@ if(connectBtn){
         state.chat[r.id] = state.chat[r.id] || [];
         state.chat[r.id].push({ ts: nowStamp(), wallet: connectedWallet, text:`withdrew ${cur.toFixed(3)} SOL (full escrow withdrawal, returned to wallet).` });
 
+      } else if(r.state === "BONDING") {
+        const s = ($("unpingAmount").value||"").trim();
+        const solAmount = Number(s);
+        if(!s || Number.isNaN(solAmount) || solAmount <= 0) return alert("enter a valid SOL amount.");
+        r.positions[connectedWallet] = r.positions[connectedWallet] || {escrow_sol:0, bond_sol:0, spawn_tokens:0};
+        const curBond = Number(r.positions[connectedWallet].bond_sol||0);
+        const sellSol = Math.min(curBond, solAmount);
+        if(sellSol <= 0) return alert("you have no position to sell.");
+        r.positions[connectedWallet].bond_sol = curBond - sellSol;
+        const remove = Math.round(sellSol * SOL_TO_USD * 12);
+        r.market_cap_usd = Math.max(0, Number(r.market_cap_usd||0) - remove);
+        nudgeChange(r, -(Math.random()*3));
+        state.chat[r.id] = state.chat[r.id] || [];
+        state.chat[r.id].push({ ts: nowStamp(), wallet: connectedWallet, text:`sold ${sellSol.toFixed(3)} SOL on curve.` });
       } else {
-        return alert("unping is disabled after spawn.");
+        return alert("sell is unavailable in this state.");
       }
 
       closeModal($("unpingBack"));
@@ -3732,7 +3813,7 @@ if(connectBtn){
       if(!connectedWallet) return showToast("connect wallet first.");
       if(!activeRoomId) return;
       const r = roomById(activeRoomId);
-      if(!canPost(r)) return alert(isDenied(r, connectedWallet) ? "you were denied from chat for this coin." : "ping to post.");
+      if(!canPost(r)) return alert(isDenied(r, connectedWallet) ? "you were denied from chat for this coin." : r.state === "SPAWNING" ? "ping to post." : "buy to post.");
 
       const txt = ($("msgInput").value || "").trim();
       if(!txt) return;
