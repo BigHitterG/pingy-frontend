@@ -256,6 +256,7 @@
       .msg .who{grid-column:1}
       .msg .text{grid-column:1 / span 2}
       .msg .ts{grid-column:2;grid-row:1}
+      .spark{height:180px}
     }
     .ts{color:var(--muted);white-space:nowrap;text-align:right}
     .who{color:var(--muted);overflow:hidden;text-overflow:ellipsis}
@@ -383,7 +384,7 @@
       background:#fff;
     }
     .imgPrev img{width:100%;height:100%;object-fit:cover}
-    .spark{width:100%;height:90px;display:block}
+    .spark{width:100%;height:220px;display:block}
 
     .linkBtn{
       border:1px solid var(--line);
