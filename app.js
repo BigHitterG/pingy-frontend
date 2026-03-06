@@ -61,6 +61,7 @@ const $ = (id) => document.getElementById(id);
 
     // Tuned assumptions
     const SOL_TO_USD = 100; // internal conversion (mock) — for display only
+    const LAMPORTS_PER_SOL = 1_000_000_000;
 
     // Single-curve: virtual tranche before spawn, realized on spawn
     const TOTAL_SUPPLY = 1_000_000_000;
@@ -686,7 +687,6 @@ const $ = (id) => document.getElementById(id);
 
     const ONCHAIN_REFRESH_MS = 7000;
     const WALLET_BAL_REFRESH_MS = 6000;
-    const LAMPORTS_PER_SOL = 1_000_000_000;
     const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 
 
