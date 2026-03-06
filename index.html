@@ -49,33 +49,41 @@
               </div>
               <div class="muted">description</div>
               <textarea id="newDesc" placeholder="what is this coin about?" maxlength="200"></textarea>
-              <div class="muted" style="margin-top:8px;">launch preset</div>
-              <select id="newPreset">
-                <option value="fast" selected>Fast (10 wallets, 3 SOL)</option>
-                <option value="balanced">Balanced (20 wallets, 5 SOL)</option>
-                <option value="high_quality">High Quality (30 wallets, 8 SOL)</option>
-                <option value="custom">Custom</option>
+              <div class="muted" style="margin-top:8px;">launch type</div>
+              <select id="newLaunchMode">
+                <option value="spawn" selected>Spawn</option>
+                <option value="instant">Instant</option>
               </select>
-              <div class="launchConfigPanel" id="customLaunchPanel" style="display:none; margin-top:8px;">
-                <div class="muted tiny">Choose your own launch requirements. Higher wallet minimums and lower caps create broader distribution.</div>
-                <div class="launchConfigGrid">
-                  <div>
-                    <div class="muted">Minimum approved wallets</div>
-                    <input id="customMinWallets" type="number" min="10" max="50" step="1" />
+              <div id="spawnLaunchSettings" style="display:block;">
+                <div class="muted" style="margin-top:8px;">launch preset</div>
+                <select id="newPreset">
+                  <option value="fast" selected>Fast (10 wallets, 3 SOL)</option>
+                  <option value="balanced">Balanced (20 wallets, 5 SOL)</option>
+                  <option value="high_quality">High Quality (30 wallets, 8 SOL)</option>
+                  <option value="custom">Custom</option>
+                </select>
+                <div class="launchConfigPanel" id="customLaunchPanel" style="display:none; margin-top:8px;">
+                  <div class="muted tiny">Choose your own launch requirements. Higher wallet minimums and lower caps create broader distribution.</div>
+                  <div class="launchConfigGrid">
+                    <div>
+                      <div class="muted">Minimum approved wallets</div>
+                      <input id="customMinWallets" type="number" min="10" max="50" step="1" />
+                    </div>
+                    <div>
+                      <div class="muted">Spawn target (SOL)</div>
+                      <input id="customSpawnTargetSol" type="number" min="1" max="100" step="0.1" />
+                    </div>
+                    <div>
+                      <div class="muted">Max wallet share (%)</div>
+                      <input id="customMaxWalletSharePct" type="number" min="2" max="20" step="0.1" />
+                    </div>
                   </div>
-                  <div>
-                    <div class="muted">Spawn target (SOL)</div>
-                    <input id="customSpawnTargetSol" type="number" min="1" max="100" step="0.1" />
-                  </div>
-                  <div>
-                    <div class="muted">Max wallet share (%)</div>
-                    <input id="customMaxWalletSharePct" type="number" min="2" max="20" step="0.1" />
-                  </div>
+                  <div class="fieldError tiny" id="customLaunchError" style="display:none;"></div>
+                  <div class="launchConfigSummary tiny" id="customLaunchSummary"></div>
                 </div>
-                <div class="fieldError tiny" id="customLaunchError" style="display:none;"></div>
-                <div class="launchConfigSummary tiny" id="customLaunchSummary"></div>
+                <div class="muted tiny" id="presetCapHint" style="margin-top:6px;">Cap per wallet: 0.350 SOL (7%) • Launch requires 20 approved wallets and 5.0 SOL.</div>
               </div>
-              <div class="muted tiny" id="presetCapHint" style="margin-top:6px;">Cap per wallet: 0.350 SOL (7%) • Launch requires 20 approved wallets and 5.0 SOL.</div>
+              <div class="muted tiny" id="instantLaunchHint" style="margin-top:6px; display:none;">Launches immediately to bonding curve. No spawn phase.</div>
               <div class="row" style="margin-top:8px; justify-content:space-between;">
                 <div class="muted">coin image</div>
                 <button class="infoIconBtn" id="coinImageInfoBtn" type="button" aria-expanded="false" title="image requirements">i</button>
