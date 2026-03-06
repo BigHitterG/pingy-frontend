@@ -975,6 +975,28 @@ const $ = (id) => document.getElementById(id);
       return roomChart;
     }
 
+    function launchDataToCandles(launchData){
+      if(!Array.isArray(launchData) || !launchData.length) return [];
+
+      return launchData.map((point, index) => {
+        const currentValue = Number(point?.value || 0);
+        const previousValue = index > 0
+          ? Number(launchData[index - 1]?.value || currentValue)
+          : currentValue;
+        const open = previousValue;
+        const close = currentValue;
+        const high = Math.max(open, close);
+        const low = Math.min(open, close);
+        return {
+          time: point.time,
+          open,
+          high,
+          low,
+          close,
+        };
+      });
+    }
+
     function renderRoomChart(room){
       const status = $("roomChartStatus");
       const chart = ensureRoomChart();
@@ -997,8 +1019,10 @@ const $ = (id) => document.getElementById(id);
         };
       });
       const candles = getRoomCandles(room, 60);
+      const spawnCandles = launchDataToCandles(launchData);
       const target = impliedSpawnMarketCapFromGrossSol(spawnTargetSol(room));
       const isSpawning = room?.state === "SPAWNING";
+      const activeCandles = isSpawning ? spawnCandles : candles;
 
       if(roomLaunchSeries && typeof roomLaunchSeries.applyOptions === "function"){
         roomLaunchSeries.applyOptions({ lineWidth: isSpawning ? 4 : 2 });
@@ -1027,8 +1051,8 @@ const $ = (id) => document.getElementById(id);
         }
       }
 
-      if(roomLaunchSeries) roomLaunchSeries.setData(launchData);
-      if(roomCandlesSeries) roomCandlesSeries.setData(candles);
+      if(roomLaunchSeries) roomLaunchSeries.setData([]);
+      if(roomCandlesSeries) roomCandlesSeries.setData(activeCandles);
       if(roomLaunchTargetSeries){
         if(isSpawning && target > 0 && launchData.length){
           const minLaunchTime = launchData[0].time;
@@ -1043,8 +1067,8 @@ const $ = (id) => document.getElementById(id);
         }
       }
 
-      const launchMarkerTime = candles.length
-        ? candles[0].time
+      const launchMarkerTime = activeCandles.length
+        ? activeCandles[0].time
         : (launchData.length ? launchData[launchData.length - 1].time : null);
       const launchMarkers = (!isSpawning && launchMarkerTime != null)
         ? [{
@@ -1059,7 +1083,7 @@ const $ = (id) => document.getElementById(id);
         roomCandlesSeries.setMarkers(launchMarkers);
       }
       if(roomLaunchSeries && typeof roomLaunchSeries.setMarkers === "function"){
-        roomLaunchSeries.setMarkers((!isSpawning && !candles.length) ? launchMarkers : []);
+        roomLaunchSeries.setMarkers([]);
       }
 
       const nextKey = `${room?.id || ""}:lifecycle`;
