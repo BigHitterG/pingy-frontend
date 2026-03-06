@@ -785,12 +785,18 @@ const $ = (id) => document.getElementById(id);
       history.push(next);
     }
 
+    function impliedSpawnMarketCapFromGrossSol(grossSol){
+      const openingBuySol = Math.max(0, Number(grossSol || 0));
+      const feeSol = openingBuySol * (SPAWN_FEE_BPS / BPS_DENOM);
+      const netSol = Math.max(0, openingBuySol - feeSol);
+      const baseCurveState = makeCurveState();
+      const { next: impliedCurveState } = applyCurveBuy(netSol, baseCurveState);
+      return Number(curveMarketCap(impliedCurveState) || 0);
+    }
+
     function impliedSpawnScaleValue(point, room){
       const allocated = Number(point?.allocated_sol_after || 0);
-      const target = Number(point?.target_sol || spawnTargetSol(room) || 0);
-      if(target <= 0 || MC_SPAWN_FLOOR <= 0) return 0;
-      const progress = clamp01(allocated / target);
-      return progress * MC_SPAWN_FLOOR;
+      return impliedSpawnMarketCapFromGrossSol(allocated);
     }
 
     function parseTradeHistoryTs(ts){
@@ -990,7 +996,7 @@ const $ = (id) => document.getElementById(id);
         };
       });
       const candles = getRoomCandles(room, 60);
-      const target = Number(MC_SPAWN_FLOOR || 0);
+      const target = impliedSpawnMarketCapFromGrossSol(spawnTargetSol(room));
       const isSpawning = room?.state === "SPAWNING";
 
       if(roomLaunchSeries) roomLaunchSeries.setData(launchData);
