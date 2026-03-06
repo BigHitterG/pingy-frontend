@@ -1000,6 +1000,10 @@ const $ = (id) => document.getElementById(id);
       const target = impliedSpawnMarketCapFromGrossSol(spawnTargetSol(room));
       const isSpawning = room?.state === "SPAWNING";
 
+      if(roomLaunchSeries && typeof roomLaunchSeries.applyOptions === "function"){
+        roomLaunchSeries.applyOptions({ lineWidth: isSpawning ? 4 : 2 });
+      }
+
       if(!isSpawning){
         const launchTail = launchData.length ? Number(launchData[launchData.length - 1]?.value || 0) : 0;
         const currentMarketCap = Number(room?.market_cap_usd || 0);
