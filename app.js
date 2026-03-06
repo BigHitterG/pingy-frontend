@@ -368,19 +368,96 @@ const $ = (id) => document.getElementById(id);
       balanced: { key: "balanced", label: "Balanced", minWallets: 20, targetSol: 5, maxWalletShareBps: 700 },
       high_quality: { key: "high_quality", label: "High Quality", minWallets: 30, targetSol: 8, maxWalletShareBps: 500 },
     };
+    const CREATE_LIMITS = {
+      minApprovedWalletsMin: 10,
+      minApprovedWalletsMax: 50,
+      spawnTargetSolMin: 1,
+      spawnTargetSolMax: 100,
+      maxWalletSharePctMin: 2,
+      maxWalletSharePctMax: 20,
+    };
+
+    function selectedPresetKey(){
+      return String($("newPreset")?.value || "fast").toLowerCase();
+    }
 
     function selectedPreset(){
-      const key = ($("newPreset")?.value || "fast").toLowerCase();
+      const key = selectedPresetKey();
       return PRESETS[key] || PRESETS.balanced;
     }
 
-    function updatePresetCapHint(){
-      const hint = $("presetCapHint");
-      if(!hint) return;
-      const preset = selectedPreset();
-      const targetSol = Number(preset.targetSol || 0);
-      const capSol = targetSol * (Number(preset.maxWalletShareBps || 0) / 10000);
-      hint.textContent = `Cap per wallet: ${capSol.toFixed(3)} SOL`;
+    function asNumberInputValue(id){
+      const raw = ($(id)?.value || "").trim();
+      if(!raw) return NaN;
+      return Number(raw);
+    }
+
+    function getCreateLaunchConfig(){
+      const mode = selectedPresetKey();
+      if(mode !== "custom"){
+        const preset = PRESETS[mode] || PRESETS.balanced;
+        const spawnTargetSol = Number(preset.targetSol || 0);
+        const maxWalletShareBps = Number(preset.maxWalletShareBps || 0);
+        const maxWalletSharePct = maxWalletShareBps / 100;
+        return {
+          launchPreset: preset.key,
+          minApprovedWallets: Number(preset.minWallets || 0),
+          spawnTargetSol,
+          spawnTargetLamports: Math.round(spawnTargetSol * LAMPORTS_PER_SOL),
+          maxWalletShareBps,
+          maxWalletSharePct,
+          capPerWalletSol: spawnTargetSol * (maxWalletShareBps / 10000),
+        };
+      }
+
+      const minApprovedWallets = asNumberInputValue("customMinWallets");
+      const spawnTargetSol = asNumberInputValue("customSpawnTargetSol");
+      const maxWalletSharePct = asNumberInputValue("customMaxWalletSharePct");
+      const maxWalletShareBps = Math.round(maxWalletSharePct * 100);
+      return {
+        launchPreset: "custom",
+        minApprovedWallets,
+        spawnTargetSol,
+        spawnTargetLamports: Math.round(spawnTargetSol * LAMPORTS_PER_SOL),
+        maxWalletShareBps,
+        maxWalletSharePct,
+        capPerWalletSol: spawnTargetSol * (maxWalletShareBps / 10000),
+      };
+    }
+
+    function validateCreateLaunchConfig(config){
+      const c = config || {};
+      if(!Number.isFinite(c.minApprovedWallets) || !Number.isInteger(c.minApprovedWallets)){
+        return { ok:false, message: "Minimum approved wallets must be between 10 and 50." };
+      }
+      if(c.minApprovedWallets < CREATE_LIMITS.minApprovedWalletsMin || c.minApprovedWallets > CREATE_LIMITS.minApprovedWalletsMax){
+        return { ok:false, message: "Minimum approved wallets must be between 10 and 50." };
+      }
+      if(!Number.isFinite(c.spawnTargetSol)){
+        return { ok:false, message: `Spawn target must be between ${CREATE_LIMITS.spawnTargetSolMin} and ${CREATE_LIMITS.spawnTargetSolMax} SOL.` };
+      }
+      if(c.spawnTargetSol < CREATE_LIMITS.spawnTargetSolMin || c.spawnTargetSol > CREATE_LIMITS.spawnTargetSolMax){
+        return { ok:false, message: `Spawn target must be between ${CREATE_LIMITS.spawnTargetSolMin} and ${CREATE_LIMITS.spawnTargetSolMax} SOL.` };
+      }
+      if(!Number.isFinite(c.maxWalletSharePct)){
+        return { ok:false, message: "Max wallet share must be between 2% and 20%." };
+      }
+      if(c.maxWalletSharePct < CREATE_LIMITS.maxWalletSharePctMin || c.maxWalletSharePct > CREATE_LIMITS.maxWalletSharePctMax){
+        return { ok:false, message: "Max wallet share must be between 2% and 20%." };
+      }
+      if(!Number.isFinite(c.maxWalletShareBps) || c.maxWalletShareBps < 200 || c.maxWalletShareBps > 2000){
+        return { ok:false, message: "Max wallet share must be between 2% and 20%." };
+      }
+      if(!Number.isInteger(c.spawnTargetLamports) || c.spawnTargetLamports <= 0){
+        return { ok:false, message: "Spawn target amount is invalid." };
+      }
+      return { ok:true, config: c };
+    }
+
+    function roomLaunchLabel(room){
+      const key = String(room?.launch_preset || "").toLowerCase();
+      if(key === "custom") return "Custom";
+      return (PRESETS[key] || PRESETS.balanced).label;
     }
 
     function roomPreset(room){
@@ -389,6 +466,8 @@ const $ = (id) => document.getElementById(id);
       const base = PRESETS[key] || PRESETS.balanced;
       return {
         ...base,
+        key: key === "custom" ? "custom" : base.key,
+        label: key === "custom" ? "Custom" : base.label,
         minWallets: Number(r.min_approved_wallets || base.minWallets),
         targetSol: Number(r.spawn_target_sol || base.targetSol),
         maxWalletShareBps: Number(r.max_wallet_share_bps || base.maxWalletShareBps),
@@ -397,11 +476,8 @@ const $ = (id) => document.getElementById(id);
 
     function spawnTargetSol(room){
       const lamports = room?.onchain?.spawn_target_lamports;
-      if (typeof lamports === "number") {
-        return lamports / 1e9;
-      }
-      const fallback = Number(room?.spawn_target_sol || 0);
-      return Number.isFinite(fallback) ? fallback : 0;
+      if (typeof lamports === "number") return lamports / 1e9;
+      return Number(roomPreset(room).targetSol || 0);
     }
 
     function minApprovedWalletsRequired(room){
@@ -412,19 +488,58 @@ const $ = (id) => document.getElementById(id);
       return Number(roomPreset(room).minWallets || 0);
     }
 
+    function roomMaxWalletShareBps(room){
+      const onchainBps = room?.onchain?.max_wallet_share_bps;
+      if(typeof onchainBps === "number" && onchainBps > 0) return onchainBps;
+      return Number(roomPreset(room).maxWalletShareBps || 0);
+    }
+
     function walletCapSol(room){
       const target = spawnTargetSol(room);
-      const bps = room?.onchain?.max_wallet_share_bps;
+      const bps = roomMaxWalletShareBps(room);
       if (!target || !bps) return 0;
       return target * (bps / 10000);
     }
 
-    function presetWalletCapLamports(presetKey){
-      const preset = PRESETS[String(presetKey || "").toLowerCase()] || PRESETS.balanced;
-      const targetLamports = Math.floor(Number(preset.targetSol || 0) * LAMPORTS_PER_SOL);
-      const shareBps = Number(preset.maxWalletShareBps || 0);
+    function configWalletCapLamports(config){
+      const targetLamports = Number(config?.spawnTargetLamports || 0);
+      const shareBps = Number(config?.maxWalletShareBps || 0);
       if(targetLamports <= 0 || shareBps <= 0) return 0;
       return Math.floor((targetLamports * shareBps) / BPS_DENOM);
+    }
+
+    function updatePresetCapHint(){
+      const hint = $("presetCapHint");
+      const panel = $("customLaunchPanel");
+      const summary = $("customLaunchSummary");
+      const error = $("customLaunchError");
+      if(!hint) return;
+      const config = getCreateLaunchConfig();
+      const capSol = Number(config.capPerWalletSol || 0);
+      const pct = Number(config.maxWalletSharePct || 0);
+      const wallets = Number(config.minApprovedWallets || 0);
+      const target = Number(config.spawnTargetSol || 0);
+      const launchLine = `Launch requires ${wallets} approved wallets and ${target.toFixed(1)} SOL.`;
+      if(config.launchPreset === "custom"){
+        if(panel) panel.style.display = "block";
+        if(summary){
+          const capHint = capSol >= 1
+            ? "Higher cap = fewer large wallets can fill the raise."
+            : "Lower cap = broader initial distribution.";
+          summary.innerHTML = `Cap per wallet: ${capSol.toFixed(3)} SOL (${pct.toFixed(1)}%)<br>${launchLine}<br><span class="muted">${capHint}</span>`;
+        }
+      } else {
+        if(panel) panel.style.display = "none";
+      }
+      if(error) error.style.display = "none";
+      hint.textContent = `Cap per wallet: ${capSol.toFixed(3)} SOL (${pct.toFixed(1)}%) • ${launchLine}`;
+    }
+
+    function prefillCustomLaunchInputsFromPreset(presetKey){
+      const preset = PRESETS[String(presetKey || "").toLowerCase()] || PRESETS.balanced;
+      if($("customMinWallets")) $("customMinWallets").value = String(preset.minWallets);
+      if($("customSpawnTargetSol")) $("customSpawnTargetSol").value = String(preset.targetSol);
+      if($("customMaxWalletSharePct")) $("customMaxWalletSharePct").value = String(preset.maxWalletShareBps / 100);
     }
 
     function applySpawnCommit(r, wallet, solIn){
@@ -865,7 +980,7 @@ const $ = (id) => document.getElementById(id);
       }));
     }
 
-    async function pingWithOptionalThreadInitTx(roomId, amountLamports, includeThreadInit){
+    async function pingWithOptionalThreadInitTx(roomId, amountLamports, includeThreadInit, createConfig = null){
       const rid = String(roomId || "");
       const lamports = Number(amountLamports);
       if(!Number.isInteger(lamports) || lamports <= 0){
@@ -878,6 +993,7 @@ const $ = (id) => document.getElementById(id);
       const [threadEscrowPda] = await deriveThreadEscrowPda(rid);
 
       const instructions = [];
+      const config = createConfig || getCreateLaunchConfig();
       if(includeThreadInit){
         instructions.push(new TransactionInstruction({
           programId: PROGRAM_ID,
@@ -889,7 +1005,7 @@ const $ = (id) => document.getElementById(id);
             { pubkey: (await deriveFeeVaultPda())[0], isSigner: false, isWritable: true },
             { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
           ],
-          data: concatBytes(await anchorDiscriminator("initialize_thread"), encodeStringArg(rid), encodeU32Arg(minApprovedWalletsRequired()), encodeU64Arg(Math.floor(Number(selectedPreset().targetSol || 0) * LAMPORTS_PER_SOL)), encodeU16Arg(selectedPreset().maxWalletShareBps)),
+          data: concatBytes(await anchorDiscriminator("initialize_thread"), encodeStringArg(rid), encodeU32Arg(Number(config.minApprovedWallets || 0)), encodeU64Arg(Number(config.spawnTargetLamports || 0)), encodeU16Arg(Number(config.maxWalletShareBps || 0))),
         }));
       }
 
@@ -914,14 +1030,14 @@ const $ = (id) => document.getElementById(id);
       return sendProgramInstructions(instructions);
     }
 
-    async function initializeThreadTx(threadId){
+    async function initializeThreadTx(threadId, createConfig = null){
       const rid = String(threadId || "");
       const adminPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
       const [threadPda] = await deriveThreadPda(rid);
       const [spawnPoolPda] = await deriveSpawnPoolPda(rid);
       const discriminator = await anchorDiscriminator("initialize_thread");
-      const preset = selectedPreset();
-      const data = concatBytes(discriminator, encodeStringArg(rid), encodeU32Arg(preset.minWallets), encodeU64Arg(Math.floor(preset.targetSol * LAMPORTS_PER_SOL)), encodeU16Arg(preset.maxWalletShareBps));
+      const config = createConfig || getCreateLaunchConfig();
+      const data = concatBytes(discriminator, encodeStringArg(rid), encodeU32Arg(Number(config.minApprovedWallets || 0)), encodeU64Arg(Number(config.spawnTargetLamports || 0)), encodeU16Arg(Number(config.maxWalletShareBps || 0)));
       const keys = [
         { pubkey: adminPk, isSigner: true, isWritable: true },
         { pubkey: threadPda, isSigner: false, isWritable: true },
@@ -1359,19 +1475,19 @@ const $ = (id) => document.getElementById(id);
       }
     });
 
-    function mkRoom(id, name, ticker, desc, presetKey = "fast"){
+    function mkRoom(id, name, ticker, desc, launchConfig = null){
       const creator_wallet = (Math.random().toString(16).slice(2,10) + '111111111111111111111111111111').slice(0,44);
-      const preset = PRESETS[presetKey] || PRESETS.balanced;
+      const config = launchConfig || getCreateLaunchConfig();
       return {
         id, name, ticker, desc,
         creator_wallet,
         socials: { x:'', tg:'', web:'' },
         created_at: nowStamp(),
         state: "SPAWNING",          // SPAWNING | BONDING | BONDED
-        launch_preset: preset.key,
-        min_approved_wallets: preset.minWallets,
-        spawn_target_sol: preset.targetSol,
-        max_wallet_share_bps: preset.maxWalletShareBps,
+        launch_preset: config.launchPreset,
+        min_approved_wallets: Number(config.minApprovedWallets || 0),
+        spawn_target_sol: Number(config.spawnTargetSol || 0),
+        max_wallet_share_bps: Number(config.maxWalletShareBps || 0),
         spawn_tokens_total: 0,      // virtual tokens sold in the spawn tranche (pre-token)
         spawn_fee_paid_sol: 0,      // actual spawn fee charged only when spawn executes
         positions: {},              // wallet -> { escrow_sol, bond_sol, spawn_tokens }
@@ -2123,7 +2239,7 @@ if(connectBtn){
             <div style="min-width:0;">
               <div class="row" style="justify-content:space-between;align-items:baseline;">
                 <div class="name">${escapeText(r.name)} <span class="k">$${escapeText(r.ticker)}</span></div>
-                <span class="k">SPAWNING</span>
+                <span class="k">SPAWNING${roomLaunchLabel(r) === "Custom" ? " • Custom" : ""}</span>
               </div>
               <div class="tiny subline">${escapeText(r.desc || "prespawn chat open")}</div>
               <div class="bar barActive barSpawn"><i style="width:${pct}%"></i></div>
@@ -2422,17 +2538,27 @@ if(connectBtn){
       const commitLamports = Math.floor(commit * LAMPORTS_PER_SOL);
       if(commit > 0 && commitLamports <= 0) return alert("commit must be at least 1 lamport.");
 
-      const preset = selectedPreset();
-      const presetCapLamports = presetWalletCapLamports(preset.key);
+      const launchConfigResult = validateCreateLaunchConfig(getCreateLaunchConfig());
+      if(!launchConfigResult.ok){
+        const customError = $("customLaunchError");
+        if(customError){
+          customError.textContent = launchConfigResult.message;
+          customError.style.display = "block";
+        }
+        return alert(launchConfigResult.message);
+      }
+      const launchConfig = launchConfigResult.config;
+
+      const presetCapLamports = configWalletCapLamports(launchConfig);
       if(commitLamports > presetCapLamports){
-        return alert(`commit exceeds ${preset.label} cap (${(presetCapLamports / LAMPORTS_PER_SOL).toFixed(3)} SOL max).`);
+        return alert(`commit exceeds ${roomLaunchLabel({ launch_preset: launchConfig.launchPreset })} cap (${(presetCapLamports / LAMPORTS_PER_SOL).toFixed(3)} SOL max).`);
       }
       const id = "r" + Math.random().toString(16).slice(2,6);
 
       if(shouldUseOnchain()){
         if(commitLamports > 0){
           try {
-            await pingWithOptionalThreadInitTx(id, commitLamports, true);
+            await pingWithOptionalThreadInitTx(id, commitLamports, true, launchConfig);
           } catch(e){
             if(isWalletTxRejected(e)) showToast("Create cancelled — no coin or commit was submitted.");
             else reportTxError(e, "initialize + ping_deposit transaction failed on create");
@@ -2440,7 +2566,7 @@ if(connectBtn){
           }
         } else {
           try {
-            await initializeThreadTx(id);
+            await initializeThreadTx(id, launchConfig);
           } catch (e){
             reportTxError(e, "initialize_thread transaction failed");
             return;
@@ -2448,7 +2574,7 @@ if(connectBtn){
         }
       }
 
-      const r = mkRoom(id, name, ticker, desc, preset.key);
+      const r = mkRoom(id, name, ticker, desc, launchConfig);
       r.creator_wallet = connectedWallet;
       r.approval = { [connectedWallet]: "approved" };
       r.approverWallets = r.approverWallets || {};
@@ -2469,7 +2595,14 @@ if(connectBtn){
       $("newCommit").value = "";
       if($("newPreset")) {
         $("newPreset").value = "fast";
+        lastPresetBeforeCustom = "fast";
+        prefillCustomLaunchInputsFromPreset("fast");
         updatePresetCapHint();
+      }
+      const customError = $("customLaunchError");
+      if(customError){
+        customError.textContent = "";
+        customError.style.display = "none";
       }
       $("newImg").value = "";
       newImgData = null;
@@ -2490,8 +2623,22 @@ if(connectBtn){
       }
     }
     $("createCoinBtn").addEventListener("click", createCoinFromForm);
+    let lastPresetBeforeCustom = "fast";
     if($("newPreset")){
-      $("newPreset").addEventListener("change", updatePresetCapHint);
+      $("newPreset").addEventListener("change", () => {
+        const next = selectedPresetKey();
+        if(next === "custom"){
+          prefillCustomLaunchInputsFromPreset(lastPresetBeforeCustom);
+        } else {
+          lastPresetBeforeCustom = next;
+        }
+        updatePresetCapHint();
+      });
+      ["customMinWallets", "customSpawnTargetSol", "customMaxWalletSharePct"].forEach((id) => {
+        const el = $(id);
+        if(!el) return;
+        el.addEventListener("input", updatePresetCapHint);
+      });
       updatePresetCapHint();
     }
 
@@ -3083,7 +3230,7 @@ if(connectBtn){
         navigateHash("profile/" + encodeURIComponent(r.creator_wallet));
       });
       roomMeta.appendChild(creatorLink);
-      roomMeta.appendChild(document.createTextNode(` • created: ${r.created_at}`));
+      roomMeta.appendChild(document.createTextNode(` • created: ${r.created_at} • launch: ${roomLaunchLabel(r)}`));
 
       // coin info panel
       $("roomDescOut").textContent = r.desc ? r.desc : "—";
@@ -3361,7 +3508,10 @@ if(connectBtn){
     function computeMaxPingLamports(room, userDeposit = {}){
       const targetLamports = Number(room?.onchain?.spawn_target_lamports || 0);
       const totalAllocatedLamports = Number(room?.onchain?.total_allocated_lamports || 0);
-      const presetCapLamports = presetWalletCapLamports(room?.launch_preset);
+      const presetCapLamports = configWalletCapLamports({
+        spawnTargetLamports: targetLamports,
+        maxWalletShareBps: roomMaxWalletShareBps(room),
+      });
       const userAllocatedLamports = Number(userDeposit?.allocated_lamports || 0);
       if(targetLamports <= 0 || presetCapLamports <= 0) return 0;
       const need = Math.max(0, targetLamports - totalAllocatedLamports);
