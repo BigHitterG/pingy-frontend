@@ -717,13 +717,46 @@ const $ = (id) => document.getElementById(id);
 
     let roomChart = null;
     let roomCandlesSeries = null;
+    let roomLaunchSeries = null;
+    let roomLaunchTargetSeries = null;
     let roomChartContainerEl = null;
+    let roomChartMode = null;
+    let roomChartContextKey = "";
 
     function roomChartDims(el){
       return {
         width: Math.max(1, Number(el?.clientWidth) || 300),
-        height: Math.max(1, Number(el?.clientHeight) || 90),
+        height: Math.max(1, Number(el?.clientHeight) || 220),
       };
+    }
+
+    function ensureLaunchHistory(room){
+      if(!room) return [];
+      if(!Array.isArray(room.launch_history)) room.launch_history = [];
+      return room.launch_history;
+    }
+
+    function launchPointForRoom(room, ts = nowStamp()){
+      const snapshot = getRoomEscrowSnapshot(room);
+      return {
+        ts,
+        allocated_sol_after: Number(countedEscrowSol(room) || 0),
+        target_sol: Number(spawnTargetSol(room) || 0),
+        approved_wallets_after: Number((snapshot.approvedWallets || []).length || 0),
+      };
+    }
+
+    function appendLaunchHistoryPoint(room, ts = nowStamp()){
+      if(!room || room.state !== "SPAWNING") return;
+      const history = ensureLaunchHistory(room);
+      const next = launchPointForRoom(room, ts);
+      const prev = history.length ? history[history.length - 1] : null;
+      const unchanged = prev
+        && Number(prev.allocated_sol_after || 0) === Number(next.allocated_sol_after || 0)
+        && Number(prev.target_sol || 0) === Number(next.target_sol || 0)
+        && Number(prev.approved_wallets_after || 0) === Number(next.approved_wallets_after || 0);
+      if(unchanged) return;
+      history.push(next);
     }
 
     function parseTradeHistoryTs(ts){
@@ -783,13 +816,17 @@ const $ = (id) => document.getElementById(id);
       return Array.from(buckets.values()).sort((a,b)=>a.time-b.time);
     }
 
-    function ensureRoomChart(){
+    function ensureRoomChart(mode = "candles"){
       const chartEl = $("roomChart");
       if(!chartEl){
         if(roomChart && typeof roomChart.remove === "function") roomChart.remove();
         roomChart = null;
         roomCandlesSeries = null;
+        roomLaunchSeries = null;
+        roomLaunchTargetSeries = null;
         roomChartContainerEl = null;
+        roomChartMode = null;
+        roomChartContextKey = "";
         return null;
       }
 
@@ -799,53 +836,85 @@ const $ = (id) => document.getElementById(id);
         if(typeof roomChart.remove === "function") roomChart.remove();
         roomChart = null;
         roomCandlesSeries = null;
+        roomLaunchSeries = null;
+        roomLaunchTargetSeries = null;
         roomChartContainerEl = null;
+        roomChartMode = null;
       }
 
-      if(roomChart) return roomChart;
       const api = window.LightweightCharts;
       if(!api || typeof api.createChart !== "function") return null;
 
-      const dims = roomChartDims(chartEl);
-      roomChart = api.createChart(chartEl, {
-        width: dims.width,
-        height: dims.height,
-        layout: {
-          background: { color: "transparent" },
-          textColor: "#9aa0ad",
-        },
-        rightPriceScale: {
-          borderVisible: false,
-        },
-        timeScale: {
-          borderVisible: false,
-          timeVisible: true,
-          secondsVisible: false,
-        },
-        grid: {
-          vertLines: { visible: false },
-          horzLines: { visible: false },
-        },
-        crosshair: {
-          vertLine: { visible: false },
-          horzLine: { visible: false },
-        },
-      });
-
-      const { CandlestickSeries } = api;
-      if(CandlestickSeries && typeof roomChart.addSeries === "function"){
-        roomCandlesSeries = roomChart.addSeries(CandlestickSeries, {
-          upColor: "#46d36f",
-          downColor: "#ff6eb1",
-          wickUpColor: "#46d36f",
-          wickDownColor: "#ff6eb1",
-          borderVisible: false,
+      if(!roomChart){
+        const dims = roomChartDims(chartEl);
+        roomChart = api.createChart(chartEl, {
+          width: dims.width,
+          height: dims.height,
+          layout: {
+            background: { color: "transparent" },
+            textColor: "#9aa0ad",
+          },
+          rightPriceScale: {
+            borderVisible: false,
+          },
+          timeScale: {
+            borderVisible: false,
+            timeVisible: true,
+            secondsVisible: false,
+          },
+          grid: {
+            vertLines: { visible: false },
+            horzLines: { visible: false },
+          },
+          crosshair: {
+            vertLine: { visible: false },
+            horzLine: { visible: false },
+          },
         });
-      } else {
-        roomCandlesSeries = null;
+        roomChartContainerEl = chartEl;
       }
 
-      roomChartContainerEl = chartEl;
+      if(roomChartMode !== mode || (!roomCandlesSeries && !roomLaunchSeries && !roomLaunchTargetSeries)){
+        if(roomCandlesSeries && typeof roomChart.removeSeries === "function") roomChart.removeSeries(roomCandlesSeries);
+        if(roomLaunchSeries && typeof roomChart.removeSeries === "function") roomChart.removeSeries(roomLaunchSeries);
+        if(roomLaunchTargetSeries && typeof roomChart.removeSeries === "function") roomChart.removeSeries(roomLaunchTargetSeries);
+        roomCandlesSeries = null;
+        roomLaunchSeries = null;
+        roomLaunchTargetSeries = null;
+
+        if(mode === "launch"){
+          const { AreaSeries, LineSeries, LineStyle } = api;
+          if(AreaSeries && typeof roomChart.addSeries === "function"){
+            roomLaunchSeries = roomChart.addSeries(AreaSeries, {
+              lineColor: "#84d4ff",
+              topColor: "rgba(132, 212, 255, 0.35)",
+              bottomColor: "rgba(132, 212, 255, 0.08)",
+              lineWidth: 2,
+            });
+          }
+          if(LineSeries && typeof roomChart.addSeries === "function"){
+            roomLaunchTargetSeries = roomChart.addSeries(LineSeries, {
+              color: "#ff6eb1",
+              lineWidth: 2,
+              lineStyle: (LineStyle && LineStyle.Dashed) ? LineStyle.Dashed : 2,
+              lastValueVisible: false,
+              priceLineVisible: false,
+            });
+          }
+        } else {
+          const { CandlestickSeries } = api;
+          if(CandlestickSeries && typeof roomChart.addSeries === "function"){
+            roomCandlesSeries = roomChart.addSeries(CandlestickSeries, {
+              upColor: "#46d36f",
+              downColor: "#ff6eb1",
+              wickUpColor: "#46d36f",
+              wickDownColor: "#ff6eb1",
+              borderVisible: false,
+            });
+          }
+        }
+        roomChartMode = mode;
+      }
 
       if(!window.__pingyRoomChartResizeBound){
         window.addEventListener("resize", () => {
@@ -853,7 +922,7 @@ const $ = (id) => document.getElementById(id);
           if(!roomChart || !el) return;
           roomChart.applyOptions({
             width: el.clientWidth || 300,
-            height: el.clientHeight || 90,
+            height: el.clientHeight || 220,
           });
         });
         window.__pingyRoomChartResizeBound = true;
@@ -864,8 +933,44 @@ const $ = (id) => document.getElementById(id);
 
     function renderRoomChart(room){
       const status = $("roomChartStatus");
-      const chart = ensureRoomChart();
-      if(!chart || !roomCandlesSeries){
+      const isLaunchMode = room?.state === "SPAWNING";
+      const mode = isLaunchMode ? "launch" : "candles";
+      const chart = ensureRoomChart(mode);
+      if(!chart){
+        if(status) status.textContent = "chart unavailable";
+        return;
+      }
+
+      if(isLaunchMode){
+        appendLaunchHistoryPoint(room);
+        const history = ensureLaunchHistory(room);
+        const launchData = history.map((point, index) => {
+          const tsMs = parseTradeHistoryTs(point.ts);
+          const fallbackTimeSec = index * 60;
+          return {
+            time: tsMs == null ? fallbackTimeSec : Math.floor(tsMs / 1000),
+            value: Number(point.allocated_sol_after || 0),
+          };
+        });
+        const target = Number(spawnTargetSol(room) || 0);
+
+        if(roomLaunchSeries) roomLaunchSeries.setData(launchData);
+        if(roomLaunchTargetSeries){
+          const targetData = launchData.map((point) => ({ time: point.time, value: target }));
+          roomLaunchTargetSeries.setData(targetData);
+        }
+
+        const nextKey = `${room.id}:launch`;
+        if(nextKey !== roomChartContextKey){
+          chart.timeScale().fitContent();
+          roomChartContextKey = nextKey;
+        }
+
+        if(status) status.textContent = "launch formation chart";
+        return;
+      }
+
+      if(!roomCandlesSeries){
         if(status) status.textContent = "chart unavailable";
         return;
       }
@@ -873,17 +978,17 @@ const $ = (id) => document.getElementById(id);
       const candles = getRoomCandles(room, 60);
       if(!candles.length){
         roomCandlesSeries.setData([]);
-        if(status) status.textContent = "waiting for trades";
+        if(status) status.textContent = room?.state === "BONDED" ? "bonded market chart" : "bonding curve market chart";
         return;
       }
 
       roomCandlesSeries.setData(candles);
-      chart.timeScale().fitContent();
-      if(candles.length === 1){
-        if(status) status.textContent = "1 candle from room trade history";
-        return;
+      const nextKey = `${room.id}:${room.state}:candles`;
+      if(nextKey !== roomChartContextKey){
+        chart.timeScale().fitContent();
+        roomChartContextKey = nextKey;
       }
-      if(status) status.textContent = `${candles.length} candles from room trade history`;
+      if(status) status.textContent = room?.state === "BONDED" ? "bonded market chart" : "bonding curve market chart";
     }
 
 
@@ -1746,6 +1851,8 @@ const $ = (id) => document.getElementById(id);
         r.approval[r.creator_wallet] = "approved";
         r.approverWallets[r.creator_wallet] = true;
       }
+      ensureLaunchHistory(r);
+      appendLaunchHistoryPoint(r);
     });
 
     function mkRoom(id, name, ticker, desc, launchConfig = null){
@@ -1770,6 +1877,7 @@ const $ = (id) => document.getElementById(id);
         positions: {},              // wallet -> { escrow_sol, net_sol_in, spawn_tokens, token_balance }
         curve_state: makeCurveState(),
         trade_history: [],          // chronological bonding-curve trade events
+        launch_history: [],         // chronological spawn-formation points
         approval: { [creator_wallet]: "approved" },        // wallet => approved|pending|denied
         approverWallets: { [creator_wallet]: true },        // wallet => true
         blockedWallets: {},         // wallet => true
@@ -2545,6 +2653,7 @@ if(connectBtn){
         positions: r.positions || {},
         curve_state: r.curve_state || makeCurveState(),
         trade_history: r.trade_history || [],
+        launch_history: r.launch_history || [],
         approval: r.approval || {},
         approverWallets: r.approverWallets || {},
         blockedWallets: r.blockedWallets || {},
@@ -2571,6 +2680,7 @@ if(connectBtn){
       r.positions = data.positions || {};
       r.curve_state = data.curve_state || makeCurveState();
       r.trade_history = Array.isArray(data.trade_history) ? data.trade_history : [];
+      r.launch_history = Array.isArray(data.launch_history) ? data.launch_history : [];
       r.approval = data.approval || {};
       r.approverWallets = data.approverWallets || {};
       r.blockedWallets = data.blockedWallets || {};
@@ -2779,8 +2889,10 @@ if(connectBtn){
         room: cloneRoomForDevSim(room)
       };
       room.state = "SPAWNING";
-      room.positions = room.positions || {};
+      room.positions = {};
       room.trade_history = [];
+      room.launch_history = [];
+      appendLaunchHistoryPoint(room);
       room.protocol_fees_sol = 0;
       room.spawn_tokens_total = 0;
       room.spawn_fee_paid_sol = 0;
@@ -4056,21 +4168,18 @@ if(connectBtn){
         }
       }
 
-      // market + chart (only post-spawn)
+      // market + chart
       const marketPanel = $("marketPanel");
       if(marketPanel){
-        const postSpawn = (r.state === "BONDING" || r.state === "BONDED");
-        marketPanel.style.display = postSpawn ? "block" : "none";
-        if(postSpawn){
-          const mc = Number(r.market_cap_usd || 0);
-          $("marketCapBig").textContent = fmtUsd(mc);
-          const chg = Number(r.change_pct || 0);
-          const arrow = signArrow(chg);
-          $("marketChange").innerHTML = `<span class="${chg>0?'up':(chg<0?'down':'')}">${arrow}</span>`;
-          $("tokenAddrPill").textContent = r.token_address || "—";
-          $("copyTokenBtn").onclick = () => copyToClipboard(r.token_address || "");
-          renderRoomChart(r);
-        }
+        marketPanel.style.display = "block";
+        const mc = Number(r.market_cap_usd || 0);
+        $("marketCapBig").textContent = fmtUsd(mc);
+        const chg = Number(r.change_pct || 0);
+        const arrow = signArrow(chg);
+        $("marketChange").innerHTML = `<span class="${chg>0?'up':(chg<0?'down':'')}">${arrow}</span>`;
+        $("tokenAddrPill").textContent = r.token_address || "—";
+        $("copyTokenBtn").onclick = () => copyToClipboard(r.token_address || "");
+        renderRoomChart(r);
       }
 
 
