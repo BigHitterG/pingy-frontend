@@ -268,7 +268,7 @@ pub mod pingy_spawn {
             PingyError::MinApprovedWalletsNotReached
         );
 
-        let use_amt = thread.spawn_target_lamports;
+        let use_amt = thread.total_allocated_lamports;
         let fee = use_amt
             .checked_mul(SPAWN_FEE_BPS)
             .ok_or(PingyError::AmountOverflow)?

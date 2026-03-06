@@ -63,18 +63,12 @@ const $ = (id) => document.getElementById(id);
     const SOL_TO_USD = 100; // internal conversion (mock) — for display only
     const LAMPORTS_PER_SOL = 1_000_000_000;
 
-    // Single-curve: virtual tranche before spawn, realized on spawn
+    // Single-curve launch model (opening buy initializes live curve)
     const TOTAL_SUPPLY = 1_000_000_000;
-    const SPAWN_PERCENT = 0.10;
-    const SPAWN_TRANCHE_TOKENS = TOTAL_SUPPLY * SPAWN_PERCENT; // first 10% of supply
-
-    // Per-wallet cap at spawn: ≤0.5% of total supply (i.e., ≤5% of the spawn tranche)
-    const MAX_WALLET_PCT_TOTAL = 0.005;
-    const MAX_TOKENS_PER_WALLET = TOTAL_SUPPLY * MAX_WALLET_PCT_TOTAL; // 5,000,000
-
-
-    const MC_SPAWN = 6600;
-    const MC_BONDED = 66000;
+    const VIRTUAL_SOL_RESERVE_INITIAL = 30;
+    const VIRTUAL_TOKEN_RESERVE_INITIAL = TOTAL_SUPPLY;
+    const MC_SPAWN_FLOOR = 6600;
+    const GRADUATION_MARKET_CAP = 66000;
     const SPAWN_FEE_BPS = 100;
     const POST_SPAWN_TRADING_FEE_BPS = 100;
     const BPS_DENOM = 10_000;
@@ -353,14 +347,85 @@ const $ = (id) => document.getElementById(id);
     function clamp01(x){ return Math.max(0, Math.min(1, Number(x||0))); }
 
     // ----------------------------
-    // Virtual spawn curve helpers (pre-token)
+    // Curve + position helpers
     // ----------------------------
+    function makeCurveState(){
+      return {
+        virtual_sol_reserve: VIRTUAL_SOL_RESERVE_INITIAL,
+        virtual_token_reserve: VIRTUAL_TOKEN_RESERVE_INITIAL,
+        opening_buy_sol: 0,
+        opening_buy_tokens: 0,
+      };
+    }
+
+    function curveBuyTokens(solIn, curveState){
+      const s = Math.max(0, Number(solIn || 0));
+      const x = Math.max(1e-9, Number(curveState?.virtual_sol_reserve || VIRTUAL_SOL_RESERVE_INITIAL));
+      const y = Math.max(1e-9, Number(curveState?.virtual_token_reserve || VIRTUAL_TOKEN_RESERVE_INITIAL));
+      if(s <= 0) return 0;
+      const k = x * y;
+      const nextY = k / (x + s);
+      return Math.max(0, Math.min(y, y - nextY));
+    }
+
+    function curvePrice(curveState){
+      const x = Math.max(1e-9, Number(curveState?.virtual_sol_reserve || VIRTUAL_SOL_RESERVE_INITIAL));
+      const y = Math.max(1e-9, Number(curveState?.virtual_token_reserve || VIRTUAL_TOKEN_RESERVE_INITIAL));
+      return x / y;
+    }
+
+    function curveMarketCap(curveState){
+      const priceSol = curvePrice(curveState);
+      return priceSol * TOTAL_SUPPLY * SOL_TO_USD;
+    }
+
+    function applyCurveBuy(solIn, curveState){
+      const buySol = Math.max(0, Number(solIn || 0));
+      const current = curveState || makeCurveState();
+      const tokensOut = curveBuyTokens(buySol, current);
+      const next = {
+        ...current,
+        virtual_sol_reserve: Number(current.virtual_sol_reserve || 0) + buySol,
+        virtual_token_reserve: Math.max(0, Number(current.virtual_token_reserve || 0) - tokensOut),
+      };
+      return { next, tokensOut };
+    }
+
+    function curveSellSol(tokenIn, curveState){
+      const t = Math.max(0, Number(tokenIn || 0));
+      const x = Math.max(1e-9, Number(curveState?.virtual_sol_reserve || VIRTUAL_SOL_RESERVE_INITIAL));
+      const y = Math.max(1e-9, Number(curveState?.virtual_token_reserve || VIRTUAL_TOKEN_RESERVE_INITIAL));
+      if(t <= 0) return 0;
+      const k = x * y;
+      const nextX = k / (y + t);
+      return Math.max(0, Math.min(x, x - nextX));
+    }
+
+    function applyCurveSell(tokenIn, curveState){
+      const sellTokens = Math.max(0, Number(tokenIn || 0));
+      const current = curveState || makeCurveState();
+      const solOut = curveSellSol(sellTokens, current);
+      const next = {
+        ...current,
+        virtual_sol_reserve: Math.max(0, Number(current.virtual_sol_reserve || 0) - solOut),
+        virtual_token_reserve: Number(current.virtual_token_reserve || 0) + sellTokens,
+      };
+      return { next, solOut };
+    }
+
+    function syncRoomMarketCap(r){
+      if(!r) return;
+      if(!r.curve_state) r.curve_state = makeCurveState();
+      r.market_cap_usd = curveMarketCap(r.curve_state);
+    }
+
     function ensurePos(r, wallet){
       r.positions = r.positions || {};
-      if(!r.positions[wallet]) r.positions[wallet] = { escrow_sol:0, bond_sol:0, spawn_tokens:0 };
+      if(!r.positions[wallet]) r.positions[wallet] = { escrow_sol:0, net_sol_in:0, spawn_tokens:0, token_balance:0 };
       if(r.positions[wallet].spawn_tokens == null) r.positions[wallet].spawn_tokens = 0;
       if(r.positions[wallet].escrow_sol == null) r.positions[wallet].escrow_sol = 0;
-      if(r.positions[wallet].bond_sol == null) r.positions[wallet].bond_sol = 0;
+      if(r.positions[wallet].net_sol_in == null) r.positions[wallet].net_sol_in = 0;
+      if(r.positions[wallet].token_balance == null) r.positions[wallet].token_balance = 0;
       return r.positions[wallet];
     }
 
@@ -1530,13 +1595,14 @@ const $ = (id) => document.getElementById(id);
         min_approved_wallets: isInstant ? 0 : Number(config.minApprovedWallets || 0),
         spawn_target_sol: isInstant ? 0 : Number(config.spawnTargetSol || 0),
         max_wallet_share_bps: isInstant ? 0 : Number(config.maxWalletShareBps || 0),
-        spawn_tokens_total: 0,      // virtual tokens sold in the spawn tranche (pre-token)
+        spawn_tokens_total: 0,      // tokens bought by opening buy at spawn execution
         spawn_fee_paid_sol: 0,      // actual spawn fee charged only when spawn executes
-        positions: {},              // wallet -> { escrow_sol, bond_sol, spawn_tokens }
+        positions: {},              // wallet -> { escrow_sol, net_sol_in, spawn_tokens, token_balance }
+        curve_state: makeCurveState(),
         approval: { [creator_wallet]: "approved" },        // wallet => approved|pending|denied
         approverWallets: { [creator_wallet]: true },        // wallet => true
         blockedWallets: {},         // wallet => true
-        market_cap_usd: isInstant ? MC_SPAWN : 0,
+        market_cap_usd: isInstant ? curveMarketCap(makeCurveState()) : 0,
         change_pct: (Math.random() * 10 - 5),
         token_address: null,
         image: null,
@@ -1596,14 +1662,14 @@ const $ = (id) => document.getElementById(id);
         return Math.max(0, Number(row.escrow_sol || 0));
       }
       const r = roomById(roomId);
-      const p = r.positions[connectedWallet] || {escrow_sol:0, bond_sol:0, spawn_tokens:0};
+      const p = r.positions[connectedWallet] || {escrow_sol:0, net_sol_in:0, spawn_tokens:0, token_balance:0};
       return Number(p.escrow_sol||0);
     }
     function myBond(roomId){
       if(!connectedWallet) return 0;
       const r = roomById(roomId);
-      const p = r.positions[connectedWallet] || {escrow_sol:0, bond_sol:0, spawn_tokens:0};
-      return Number(p.bond_sol||0);
+      const p = r.positions[connectedWallet] || {escrow_sol:0, net_sol_in:0, spawn_tokens:0, token_balance:0};
+      return Number(p.token_balance||0);
     }
 
 
@@ -2178,53 +2244,43 @@ if(connectBtn){
       return clamp01(countedEscrowSol(r) / target);
     }
     function bondingProgress01(r){
+      syncRoomMarketCap(r);
       const MC = Number(r.market_cap_usd || 0);
-      return clamp01((MC - MC_SPAWN) / (MC_BONDED - MC_SPAWN));
+      return clamp01((MC - MC_SPAWN_FLOOR) / (GRADUATION_MARKET_CAP - MC_SPAWN_FLOOR));
     }
 
     function maybeAdvance(r){
+      if(r.state === "BONDING" || r.state === "BONDED") syncRoomMarketCap(r);
       if(r.state === "SPAWNING"){
         const total = countedEscrowSol(r);
         const target = spawnTargetSol(r);
         if(target > 0 && total >= target && getRoomEscrowSnapshot(r).approvedWallets.length >= minApprovedWalletsRequired(r)){
           const pos = r.positions || {};
           const capSol = walletCapSol(r);
-          let remainingTokens = SPAWN_TRANCHE_TOKENS;
+          const contributions = {};
+          let openingBuySol = 0;
 
           for(const w of Object.keys(pos)){
             const p = ensurePos(r, w);
             p.spawn_tokens = 0;
+            if(!isApproved(r, w)) continue;
+            const escrow = Math.max(0, Number(p.escrow_sol || 0));
+            const counted = Math.min(escrow, capSol);
+            if(counted <= 0) continue;
+            contributions[w] = counted;
+            openingBuySol += counted;
           }
 
-          let rounds = 0;
-          let active = Object.keys(pos).filter(w => {
-            if(!isApproved(r, w)) return false;
-            const escrow = Math.max(0, Number((pos[w]||{}).escrow_sol || 0));
-            return Math.min(escrow, capSol) > 0;
-          });
-          while(remainingTokens > 1e-6 && active.length > 0 && rounds < 6){
-            let activeSol = 0;
-            for(const w of active){
-              const escrow = Math.max(0, Number((pos[w]||{}).escrow_sol || 0));
-              activeSol += Math.min(escrow, capSol);
-            }
-            if(activeSol <= 0) break;
+          const feeSol = openingBuySol * (SPAWN_FEE_BPS / BPS_DENOM);
+          const netSol = Math.max(0, openingBuySol - feeSol);
+          const curveInit = r.curve_state || makeCurveState();
+          const { next: curveNext, tokensOut } = applyCurveBuy(netSol, curveInit);
 
-            const nextActive = [];
-            for(const w of active){
-              const p = ensurePos(r, w);
-              const escrow = Math.max(0, Number(p.escrow_sol || 0));
-              const wSol = Math.min(escrow, capSol);
-              const roomShare = wSol / activeSol;
-              const addTokens = remainingTokens * roomShare;
-              const capRemain = Math.max(0, MAX_TOKENS_PER_WALLET - Number(p.spawn_tokens||0));
-              const granted = Math.min(addTokens, capRemain);
-              p.spawn_tokens = Number(p.spawn_tokens||0) + granted;
-              remainingTokens -= granted;
-              if(capRemain - granted > 1e-6) nextActive.push(w);
-            }
-            active = nextActive;
-            rounds += 1;
+          for(const w of Object.keys(contributions)){
+            const p = ensurePos(r, w);
+            const share = openingBuySol > 0 ? (Number(contributions[w] || 0) / openingBuySol) : 0;
+            p.spawn_tokens = tokensOut * share;
+            p.token_balance = Number(p.token_balance || 0) + p.spawn_tokens;
           }
 
           let refundedPending = false;
@@ -2235,23 +2291,26 @@ if(connectBtn){
             if(isApproved(r, w)){
               const counted = Math.min(e, capSol);
               const excess = Math.max(0, e - counted);
-              if(excess > 0) p.bond_sol = Number(p.bond_sol||0) + excess;
+              if(excess > 0) p.net_sol_in = Number(p.net_sol_in||0) + excess;
             } else {
               refundedPending = true;
             }
             p.escrow_sol = 0;
           }
           if(refundedPending) addSystemEvent(r.id, "spawn triggered — pending escrow refunded");
-          r.spawn_tokens_total = SPAWN_TRANCHE_TOKENS - Math.max(0, remainingTokens);
-          const feeSol = total * (SPAWN_FEE_BPS / BPS_DENOM);
-          const netSol = Math.max(0, total - feeSol);
+          r.spawn_tokens_total = tokensOut;
           r.spawn_fee_paid_sol = feeSol;
+          r.curve_state = {
+            ...curveNext,
+            opening_buy_sol: netSol,
+            opening_buy_tokens: tokensOut,
+          };
           addSystemEvent(r.id, `spawn fee paid: ${feeSol.toFixed(3)} SOL (1%), net used: ${netSol.toFixed(3)} SOL`);
 
           r.state = "BONDING";
-          r.market_cap_usd = Math.max(Number(r.market_cap_usd || 0), MC_SPAWN);
+          syncRoomMarketCap(r);
           if(!r.token_address) r.token_address = mockTokenAddress(r.ticker || r.name || "PINGY");
-          addSystemEvent(r.id, "spawn complete: token + curve created, first 10% bought, now bonding.");
+          addSystemEvent(r.id, "spawn complete: opening buy executed, curve now live.");
         }
       }
       if(r.state === "BONDING"){
@@ -2631,9 +2690,12 @@ if(connectBtn){
       if(launchMode === "instant"){
         r.token_address = mockTokenAddress(r.ticker || r.name || "PINGY");
         if(commit > 0){
-          r.positions[connectedWallet] = r.positions[connectedWallet] || {escrow_sol:0, bond_sol:0, spawn_tokens:0};
-          r.positions[connectedWallet].bond_sol = Number(r.positions[connectedWallet].bond_sol || 0) + commit;
-          r.market_cap_usd = Number(r.market_cap_usd || MC_SPAWN) + Math.round(commit * SOL_TO_USD * 12);
+          r.positions[connectedWallet] = r.positions[connectedWallet] || {escrow_sol:0, net_sol_in:0, spawn_tokens:0, token_balance:0};
+          const buy = applyCurveBuy(commit, r.curve_state || makeCurveState());
+          r.curve_state = buy.next;
+          r.positions[connectedWallet].token_balance = Number(r.positions[connectedWallet].token_balance || 0) + buy.tokensOut;
+          r.positions[connectedWallet].net_sol_in = Number(r.positions[connectedWallet].net_sol_in || 0) + commit;
+          syncRoomMarketCap(r);
         }
       }
       state.rooms.unshift(r);
@@ -3553,7 +3615,7 @@ if(connectBtn){
       const me =
         (r.state === "SPAWNING")
           ? `you: ${myEscrow(roomId).toFixed(3)} SOL escrow`
-          : `you: ${myBond(roomId).toFixed(3)} SOL position`;
+           : `you: ${myBond(roomId).toFixed(3)} tokens on curve`;
       $("meLine").textContent = connectedWallet ? me : "connect wallet";
       if(connectedWallet && r.state === "SPAWNING") refreshConnectedWalletEscrowLine(roomId);
 
@@ -3630,7 +3692,7 @@ if(connectBtn){
       r.onchain = state.onchain?.[rid] || r.onchain || {};
       if(r.state === "BONDED") return alert("sell is not available after bonding is complete in this mock.");
       modalRoomId = rid;
-      $("unpingAmount").value = r.state === "SPAWNING" ? "full withdraw" : "sell amount";
+      $("unpingAmount").value = r.state === "SPAWNING" ? "full withdraw" : "sell token amount";
       $("unpingAmount").readOnly = r.state === "SPAWNING";
       $("unpingRoomLine").textContent = `coin: ${r.name}  $${r.ticker}`;
       openModal($("unpingBack"));
@@ -3735,17 +3797,18 @@ if(connectBtn){
         maybeAdvance(r);
 
       } else if(r.state === "BONDING") {
-        r.positions[connectedWallet] = r.positions[connectedWallet] || {escrow_sol:0, bond_sol:0, spawn_tokens:0};
-        r.positions[connectedWallet].bond_sol = Number(r.positions[connectedWallet].bond_sol||0) + solAmount;
-
-        const add = Math.round(solAmount * SOL_TO_USD * 12);
-        r.market_cap_usd = Number(r.market_cap_usd||0) + add;
+        r.positions[connectedWallet] = r.positions[connectedWallet] || {escrow_sol:0, net_sol_in:0, spawn_tokens:0, token_balance:0};
+        const buy = applyCurveBuy(solAmount, r.curve_state || makeCurveState());
+        r.curve_state = buy.next;
+        r.positions[connectedWallet].token_balance = Number(r.positions[connectedWallet].token_balance || 0) + buy.tokensOut;
+        r.positions[connectedWallet].net_sol_in = Number(r.positions[connectedWallet].net_sol_in || 0) + solAmount;
+        syncRoomMarketCap(r);
         nudgeChange(r, Math.random()*3);
 
         maybeAdvance(r);
 
         state.chat[r.id] = state.chat[r.id] || [];
-        state.chat[r.id].push({ ts: nowStamp(), wallet: connectedWallet, text:`bought ${solAmount.toFixed(3)} SOL on curve.` });
+        state.chat[r.id].push({ ts: nowStamp(), wallet: connectedWallet, text:`bought ${buy.tokensOut.toFixed(3)} tokens for ${solAmount.toFixed(3)} SOL on curve.` });
       }
 
       closeModal($("pingBack"));
@@ -3783,18 +3846,20 @@ if(connectBtn){
 
       } else if(r.state === "BONDING") {
         const s = ($("unpingAmount").value||"").trim();
-        const solAmount = Number(s);
-        if(!s || Number.isNaN(solAmount) || solAmount <= 0) return alert("enter a valid SOL amount.");
-        r.positions[connectedWallet] = r.positions[connectedWallet] || {escrow_sol:0, bond_sol:0, spawn_tokens:0};
-        const curBond = Number(r.positions[connectedWallet].bond_sol||0);
-        const sellSol = Math.min(curBond, solAmount);
-        if(sellSol <= 0) return alert("you have no position to sell.");
-        r.positions[connectedWallet].bond_sol = curBond - sellSol;
-        const remove = Math.round(sellSol * SOL_TO_USD * 12);
-        r.market_cap_usd = Math.max(0, Number(r.market_cap_usd||0) - remove);
+        const tokenAmount = Number(s);
+        if(!s || Number.isNaN(tokenAmount) || tokenAmount <= 0) return alert("enter a valid token amount.");
+        r.positions[connectedWallet] = r.positions[connectedWallet] || {escrow_sol:0, net_sol_in:0, spawn_tokens:0, token_balance:0};
+        const curTokens = Number(r.positions[connectedWallet].token_balance || 0);
+        const sellTokens = Math.min(curTokens, tokenAmount);
+        if(sellTokens <= 0) return alert("you have no tokens to sell.");
+        const sell = applyCurveSell(sellTokens, r.curve_state || makeCurveState());
+        r.curve_state = sell.next;
+        r.positions[connectedWallet].token_balance = curTokens - sellTokens;
+        r.positions[connectedWallet].net_sol_in = Number(r.positions[connectedWallet].net_sol_in || 0) - sell.solOut;
+        syncRoomMarketCap(r);
         nudgeChange(r, -(Math.random()*3));
         state.chat[r.id] = state.chat[r.id] || [];
-        state.chat[r.id].push({ ts: nowStamp(), wallet: connectedWallet, text:`sold ${sellSol.toFixed(3)} SOL on curve.` });
+        state.chat[r.id].push({ ts: nowStamp(), wallet: connectedWallet, text:`sold ${sellTokens.toFixed(3)} tokens for ${sell.solOut.toFixed(3)} SOL on curve.` });
       } else {
         return alert("sell is unavailable in this state.");
       }
