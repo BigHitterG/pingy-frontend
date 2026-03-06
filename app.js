@@ -391,6 +391,13 @@ const $ = (id) => document.getElementById(id);
       return { next, tokensOut };
     }
 
+    function applyTradingFeeToBuySol(solIn){
+      const grossSol = Math.max(0, Number(solIn || 0));
+      const feeSol = grossSol * (POST_SPAWN_TRADING_FEE_BPS / BPS_DENOM);
+      const netSol = Math.max(0, grossSol - feeSol);
+      return { grossSol, feeSol, netSol };
+    }
+
     function curveSellSol(tokenIn, curveState){
       const t = Math.max(0, Number(tokenIn || 0));
       const x = Math.max(1e-9, Number(curveState?.virtual_sol_reserve || VIRTUAL_SOL_RESERVE_INITIAL));
@@ -404,13 +411,20 @@ const $ = (id) => document.getElementById(id);
     function applyCurveSell(tokenIn, curveState){
       const sellTokens = Math.max(0, Number(tokenIn || 0));
       const current = curveState || makeCurveState();
-      const solOut = curveSellSol(sellTokens, current);
+      const grossSolOut = curveSellSol(sellTokens, current);
       const next = {
         ...current,
-        virtual_sol_reserve: Math.max(0, Number(current.virtual_sol_reserve || 0) - solOut),
+        virtual_sol_reserve: Math.max(0, Number(current.virtual_sol_reserve || 0) - grossSolOut),
         virtual_token_reserve: Number(current.virtual_token_reserve || 0) + sellTokens,
       };
-      return { next, solOut };
+      return { next, grossSolOut };
+    }
+
+    function applyTradingFeeToSellSol(solOut){
+      const grossSol = Math.max(0, Number(solOut || 0));
+      const feeSol = grossSol * (POST_SPAWN_TRADING_FEE_BPS / BPS_DENOM);
+      const netSol = Math.max(0, grossSol - feeSol);
+      return { grossSol, feeSol, netSol };
     }
 
     function syncRoomMarketCap(r){
@@ -1597,6 +1611,7 @@ const $ = (id) => document.getElementById(id);
         max_wallet_share_bps: isInstant ? 0 : Number(config.maxWalletShareBps || 0),
         spawn_tokens_total: 0,      // tokens bought by opening buy at spawn execution
         spawn_fee_paid_sol: 0,      // actual spawn fee charged only when spawn executes
+        protocol_fees_sol: 0,      // cumulative post-spawn trading fees collected
         positions: {},              // wallet -> { escrow_sol, net_sol_in, spawn_tokens, token_balance }
         curve_state: makeCurveState(),
         approval: { [creator_wallet]: "approved" },        // wallet => approved|pending|denied
@@ -3597,7 +3612,7 @@ if(connectBtn){
           if(!hotBonding && sparkEl) sparkEl.remove();
         }
         const progressLine = $("spawnProgressLine");
-        if(progressLine) progressLine.textContent = `trading fee: ${POST_SPAWN_TRADING_FEE_BPS / 100}% (displayed only; enforcement depends on trade routing)`;
+        if(progressLine) progressLine.textContent = `trading fee: ${POST_SPAWN_TRADING_FEE_BPS / 100}% applied to bonding buys/sells`;
       } else {
         phaseLabel.textContent = "BONDED";
         statePill.textContent = "BONDED";
@@ -3609,7 +3624,7 @@ if(connectBtn){
           if(sparkEl) sparkEl.remove();
         }
         const progressLine = $("spawnProgressLine");
-        if(progressLine) progressLine.textContent = `trading fee: ${POST_SPAWN_TRADING_FEE_BPS / 100}% (displayed only; enforcement depends on trade routing)`;
+        if(progressLine) progressLine.textContent = `trading fee: ${POST_SPAWN_TRADING_FEE_BPS / 100}% applied to bonding buys/sells`;
       }
 
       const me =
@@ -3798,17 +3813,20 @@ if(connectBtn){
 
       } else if(r.state === "BONDING") {
         r.positions[connectedWallet] = r.positions[connectedWallet] || {escrow_sol:0, net_sol_in:0, spawn_tokens:0, token_balance:0};
-        const buy = applyCurveBuy(solAmount, r.curve_state || makeCurveState());
+        const buyFee = applyTradingFeeToBuySol(solAmount);
+        const buy = applyCurveBuy(buyFee.netSol, r.curve_state || makeCurveState());
         r.curve_state = buy.next;
         r.positions[connectedWallet].token_balance = Number(r.positions[connectedWallet].token_balance || 0) + buy.tokensOut;
-        r.positions[connectedWallet].net_sol_in = Number(r.positions[connectedWallet].net_sol_in || 0) + solAmount;
+        r.positions[connectedWallet].net_sol_in = Number(r.positions[connectedWallet].net_sol_in || 0) + buyFee.grossSol;
+        r.protocol_fees_sol = Number(r.protocol_fees_sol || 0) + buyFee.feeSol;
+        console.debug("[ping-debug] protocol fee accrual (buy)", { roomId: r.id, tradeFeeSol: buyFee.feeSol, protocolFeesSol: r.protocol_fees_sol });
         syncRoomMarketCap(r);
         nudgeChange(r, Math.random()*3);
 
         maybeAdvance(r);
 
         state.chat[r.id] = state.chat[r.id] || [];
-        state.chat[r.id].push({ ts: nowStamp(), wallet: connectedWallet, text:`bought ${buy.tokensOut.toFixed(3)} tokens for ${solAmount.toFixed(3)} SOL on curve.` });
+        state.chat[r.id].push({ ts: nowStamp(), wallet: connectedWallet, text:`bought ${buy.tokensOut.toFixed(3)} tokens for ${buyFee.grossSol.toFixed(3)} SOL gross (${buyFee.feeSol.toFixed(3)} fee, ${buyFee.netSol.toFixed(3)} net to curve).` });
       }
 
       closeModal($("pingBack"));
@@ -3853,13 +3871,16 @@ if(connectBtn){
         const sellTokens = Math.min(curTokens, tokenAmount);
         if(sellTokens <= 0) return alert("you have no tokens to sell.");
         const sell = applyCurveSell(sellTokens, r.curve_state || makeCurveState());
+        const sellFee = applyTradingFeeToSellSol(sell.grossSolOut);
         r.curve_state = sell.next;
         r.positions[connectedWallet].token_balance = curTokens - sellTokens;
-        r.positions[connectedWallet].net_sol_in = Number(r.positions[connectedWallet].net_sol_in || 0) - sell.solOut;
+        r.positions[connectedWallet].net_sol_in = Number(r.positions[connectedWallet].net_sol_in || 0) - sellFee.netSol;
+        r.protocol_fees_sol = Number(r.protocol_fees_sol || 0) + sellFee.feeSol;
+        console.debug("[ping-debug] protocol fee accrual (sell)", { roomId: r.id, tradeFeeSol: sellFee.feeSol, protocolFeesSol: r.protocol_fees_sol });
         syncRoomMarketCap(r);
         nudgeChange(r, -(Math.random()*3));
         state.chat[r.id] = state.chat[r.id] || [];
-        state.chat[r.id].push({ ts: nowStamp(), wallet: connectedWallet, text:`sold ${sellTokens.toFixed(3)} tokens for ${sell.solOut.toFixed(3)} SOL on curve.` });
+        state.chat[r.id].push({ ts: nowStamp(), wallet: connectedWallet, text:`sold ${sellTokens.toFixed(3)} tokens for ${sellFee.grossSol.toFixed(3)} SOL gross (${sellFee.feeSol.toFixed(3)} fee, ${sellFee.netSol.toFixed(3)} net received).` });
       } else {
         return alert("sell is unavailable in this state.");
       }
