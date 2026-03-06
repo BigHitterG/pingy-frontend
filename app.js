@@ -816,7 +816,7 @@ const $ = (id) => document.getElementById(id);
       const buckets = new Map();
       const ordered = events
         .map((event, index) => ({ event, index }))
-        .filter(({ event }) => Number.isFinite(Number(event?.price_after)))
+        .filter(({ event }) => Number.isFinite(Number(event?.market_cap_after)))
         .sort((a, b) => {
           const ta = parseTradeHistoryTs(a.event?.ts);
           const tb = parseTradeHistoryTs(b.event?.ts);
@@ -830,7 +830,7 @@ const $ = (id) => document.getElementById(id);
       if(!ordered.length) return [];
 
       ordered.forEach(({ event, index }) => {
-        const price = Number(event.price_after);
+        const marketCap = Number(event.market_cap_after);
         const tsMs = parseTradeHistoryTs(event.ts);
         const fallbackTimeSec = index * interval;
         const eventTimeSec = tsMs == null
@@ -841,16 +841,16 @@ const $ = (id) => document.getElementById(id);
         if(!existing){
           buckets.set(bucketTime, {
             time: bucketTime,
-            open: price,
-            high: price,
-            low: price,
-            close: price,
+            open: marketCap,
+            high: marketCap,
+            low: marketCap,
+            close: marketCap,
           });
           return;
         }
-        existing.high = Math.max(existing.high, price);
-        existing.low = Math.min(existing.low, price);
-        existing.close = price;
+        existing.high = Math.max(existing.high, marketCap);
+        existing.low = Math.min(existing.low, marketCap);
+        existing.close = marketCap;
       });
 
       return Array.from(buckets.values()).sort((a,b)=>a.time-b.time);
@@ -914,18 +914,19 @@ const $ = (id) => document.getElementById(id);
       }
 
       if(!roomLaunchSeries){
-        const { HistogramSeries, AreaSeries } = api;
-        if(HistogramSeries && typeof roomChart.addSeries === "function"){
-          roomLaunchSeries = roomChart.addSeries(HistogramSeries, {
-            color: "rgba(132, 212, 255, 0.92)",
-            priceLineVisible: false,
-            lastValueVisible: false,
-          });
-        } else if(AreaSeries && typeof roomChart.addSeries === "function"){
+        const { AreaSeries, LineSeries } = api;
+        if(AreaSeries && typeof roomChart.addSeries === "function"){
           roomLaunchSeries = roomChart.addSeries(AreaSeries, {
             lineColor: "#84d4ff",
             topColor: "rgba(132, 212, 255, 0.35)",
             bottomColor: "rgba(132, 212, 255, 0.08)",
+            lineWidth: 2,
+            priceLineVisible: false,
+            lastValueVisible: false,
+          });
+        } else if(LineSeries && typeof roomChart.addSeries === "function"){
+          roomLaunchSeries = roomChart.addSeries(LineSeries, {
+            color: "#84d4ff",
             lineWidth: 2,
             priceLineVisible: false,
             lastValueVisible: false,
