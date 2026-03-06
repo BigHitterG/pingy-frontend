@@ -1000,6 +1000,29 @@ const $ = (id) => document.getElementById(id);
       const target = impliedSpawnMarketCapFromGrossSol(spawnTargetSol(room));
       const isSpawning = room?.state === "SPAWNING";
 
+      if(!isSpawning){
+        const launchTail = launchData.length ? Number(launchData[launchData.length - 1]?.value || 0) : 0;
+        const currentMarketCap = Number(room?.market_cap_usd || 0);
+        const anchorValue = Math.max(launchTail, currentMarketCap);
+        const firstCandle = candles.length ? candles[0] : null;
+        const needsAnchor = anchorValue > 0 && (!firstCandle || Number(firstCandle.close || 0) <= 0);
+        if(needsAnchor){
+          const fallbackTime = launchData.length
+            ? Number(launchData[launchData.length - 1].time || 0)
+            : Math.max(0, Math.floor(Date.now() / 1000) - 60);
+          const anchorTime = firstCandle
+            ? Math.max(0, Number(firstCandle.time || 0) - 60)
+            : fallbackTime;
+          candles.unshift({
+            time: anchorTime,
+            open: anchorValue,
+            high: anchorValue,
+            low: anchorValue,
+            close: anchorValue,
+          });
+        }
+      }
+
       if(roomLaunchSeries) roomLaunchSeries.setData(launchData);
       if(roomCandlesSeries) roomCandlesSeries.setData(candles);
       if(roomLaunchTargetSeries){
