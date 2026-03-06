@@ -737,12 +737,39 @@ const $ = (id) => document.getElementById(id);
     }
 
     function launchPointForRoom(room, ts = nowStamp()){
-      const snapshot = getRoomEscrowSnapshot(room);
+      const r = room || {};
+      const onchain = r.onchain || {};
+      const approvedWallets = [];
+
+      if(onchain && onchain.byWallet){
+        for(const wallet of Object.keys(onchain.byWallet)){
+          const status = String(onchain.byWallet[wallet]?.status || "").toLowerCase();
+          if(status === "approved" || status === "swept") approvedWallets.push(wallet);
+        }
+      } else {
+        const positions = r.positions || {};
+        for(const wallet of Object.keys(positions)){
+          if(Number(positions[wallet]?.escrow_sol || 0) > 0) approvedWallets.push(wallet);
+        }
+      }
+
+      let allocated = 0;
+      if(Number(onchain.spawn_target_lamports || 0) > 0){
+        allocated = Number(onchain.total_allocated_lamports || 0) / LAMPORTS_PER_SOL;
+      } else {
+        const capSol = Number(walletCapSol(r) || 0);
+        const positions = r.positions || {};
+        for(const wallet of approvedWallets){
+          const escrow = Math.max(0, Number(positions[wallet]?.escrow_sol || 0));
+          allocated += capSol > 0 ? Math.min(escrow, capSol) : escrow;
+        }
+      }
+
       return {
         ts,
-        allocated_sol_after: Number(countedEscrowSol(room) || 0),
-        target_sol: Number(spawnTargetSol(room) || 0),
-        approved_wallets_after: Number((snapshot.approvedWallets || []).length || 0),
+        allocated_sol_after: Number(allocated || 0),
+        target_sol: Number(spawnTargetSol(r) || 0),
+        approved_wallets_after: Number(approvedWallets.length || 0),
       };
     }
 
