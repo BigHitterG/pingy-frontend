@@ -712,45 +712,167 @@ const $ = (id) => document.getElementById(id);
       return "$" + v.toLocaleString(undefined, { maximumFractionDigits: 0 });
     }
 
-    // Simple placeholder sparkline for post-spawn rooms (no external data)
-    function renderSparkline(room){
-      const svg = $("sparkSvg");
-      const path = $("sparkPath");
-      if(!svg || !path) return;
+    let roomChart = null;
+    let roomCandlesSeries = null;
+    let roomChartContainerEl = null;
 
-      // deterministic-ish seed from room id
-      let seed = 0;
-      for(const ch of String(room.id||"")) seed = (seed * 31 + ch.charCodeAt(0)) >>> 0;
-      function rnd(){
-        // xorshift32
-        seed ^= (seed << 13) >>> 0;
-        seed ^= (seed >> 17) >>> 0;
-        seed ^= (seed << 5) >>> 0;
-        return (seed >>> 0) / 4294967296;
-      }
+    function roomChartDims(el){
+      return {
+        width: Math.max(1, Number(el?.clientWidth) || 300),
+        height: Math.max(1, Number(el?.clientHeight) || 90),
+      };
+    }
 
-      const W = 300, H = 90, N = 48;
-      const base = 0.45 + rnd()*0.1;
-      const trend = (Number(room.change_pct||0) >= 0 ? 1 : -1) * (0.18 + rnd()*0.12);
+    function parseTradeHistoryTs(ts){
+      if(typeof ts === "number" && Number.isFinite(ts)) return ts;
+      if(typeof ts !== "string") return null;
+      const isoCandidate = ts.includes("T") ? ts : ts.replace(" ", "T");
+      const parsed = Date.parse(isoCandidate);
+      if(Number.isFinite(parsed)) return parsed;
+      return null;
+    }
 
-      const ys = [];
-      let y = base;
-      for(let i=0;i<N;i++){
-        const noise = (rnd()-0.5) * 0.10;
-        y = Math.min(0.98, Math.max(0.02, y + noise + trend/(N-1)));
-        ys.push(y);
-      }
-      const minY = Math.min(...ys), maxY = Math.max(...ys);
-      const span = Math.max(1e-6, (maxY - minY));
+    function getRoomCandles(room, intervalSeconds = 60){
+      const events = ensureTradeHistory(room);
+      if(!events.length) return [];
 
-      const pts = ys.map((v,i)=>{
-        const x = (i/(N-1))*W;
-        const yy = H - ((v - minY)/span)*H;
-        return [x, yy];
+      const interval = Math.max(1, Number(intervalSeconds) || 60);
+      const buckets = new Map();
+      const ordered = events
+        .map((event, index) => ({ event, index }))
+        .filter(({ event }) => Number.isFinite(Number(event?.price_after)))
+        .sort((a, b) => {
+          const ta = parseTradeHistoryTs(a.event?.ts);
+          const tb = parseTradeHistoryTs(b.event?.ts);
+          if(ta == null && tb == null) return a.index - b.index;
+          if(ta == null) return 1;
+          if(tb == null) return -1;
+          if(ta !== tb) return ta - tb;
+          return a.index - b.index;
+        });
+
+      if(!ordered.length) return [];
+
+      ordered.forEach(({ event, index }) => {
+        const price = Number(event.price_after);
+        const tsMs = parseTradeHistoryTs(event.ts);
+        const fallbackTimeSec = index * interval;
+        const eventTimeSec = tsMs == null
+          ? fallbackTimeSec
+          : Math.floor(tsMs / 1000);
+        const bucketTime = Math.floor(eventTimeSec / interval) * interval;
+        const existing = buckets.get(bucketTime);
+        if(!existing){
+          buckets.set(bucketTime, {
+            time: bucketTime,
+            open: price,
+            high: price,
+            low: price,
+            close: price,
+          });
+          return;
+        }
+        existing.high = Math.max(existing.high, price);
+        existing.low = Math.min(existing.low, price);
+        existing.close = price;
       });
 
-      const d = pts.map((p,i)=> (i===0 ? `M ${p[0].toFixed(2)} ${p[1].toFixed(2)}` : `L ${p[0].toFixed(2)} ${p[1].toFixed(2)}`)).join(" ");
-      path.setAttribute("d", d);
+      return Array.from(buckets.values()).sort((a,b)=>a.time-b.time);
+    }
+
+    function ensureRoomChart(){
+      const chartEl = $("roomChart");
+      if(!chartEl) return null;
+
+      const chartContainerChanged = roomChart && roomChartContainerEl && roomChartContainerEl !== chartEl;
+      const chartContainerMissing = roomChart && roomChartContainerEl && !roomChartContainerEl.isConnected;
+      if(roomChart && (chartContainerChanged || chartContainerMissing)){
+        if(typeof roomChart.remove === "function") roomChart.remove();
+        roomChart = null;
+        roomCandlesSeries = null;
+        roomChartContainerEl = null;
+      }
+
+      if(roomChart) return roomChart;
+      const api = window.LightweightCharts;
+      if(!api || typeof api.createChart !== "function") return null;
+
+      const dims = roomChartDims(chartEl);
+      roomChart = api.createChart(chartEl, {
+        width: dims.width,
+        height: dims.height,
+        layout: {
+          background: { color: "transparent" },
+          textColor: "#9aa0ad",
+        },
+        rightPriceScale: {
+          borderVisible: false,
+        },
+        timeScale: {
+          borderVisible: false,
+          timeVisible: true,
+          secondsVisible: false,
+        },
+        grid: {
+          vertLines: { visible: false },
+          horzLines: { visible: false },
+        },
+        crosshair: {
+          vertLine: { visible: false },
+          horzLine: { visible: false },
+        },
+      });
+
+      const { CandlestickSeries } = api;
+      if(CandlestickSeries && typeof roomChart.addSeries === "function"){
+        roomCandlesSeries = roomChart.addSeries(CandlestickSeries, {
+          upColor: "#46d36f",
+          downColor: "#ff6eb1",
+          wickUpColor: "#46d36f",
+          wickDownColor: "#ff6eb1",
+          borderVisible: false,
+        });
+      } else {
+        roomCandlesSeries = null;
+      }
+
+      roomChartContainerEl = chartEl;
+
+      if(!window.__pingyRoomChartResizeBound){
+        window.addEventListener("resize", () => {
+          const el = $("roomChart");
+          if(!roomChart || !el) return;
+          const nextDims = roomChartDims(el);
+          roomChart.applyOptions({ width: nextDims.width, height: nextDims.height });
+        });
+        window.__pingyRoomChartResizeBound = true;
+      }
+
+      return roomChart;
+    }
+
+    function renderRoomChart(room){
+      const status = $("roomChartStatus");
+      const chart = ensureRoomChart();
+      if(!chart || !roomCandlesSeries){
+        if(status) status.textContent = "chart unavailable";
+        return;
+      }
+
+      const candles = getRoomCandles(room, 60);
+      if(!candles.length){
+        roomCandlesSeries.setData([]);
+        if(status) status.textContent = "waiting for trades";
+        return;
+      }
+
+      roomCandlesSeries.setData(candles);
+      chart.timeScale().fitContent();
+      if(candles.length === 1){
+        if(status) status.textContent = "1 candle from room trade history";
+        return;
+      }
+      if(status) status.textContent = `${candles.length} candles from room trade history`;
     }
 
 
@@ -3600,7 +3722,7 @@ if(connectBtn){
           $("marketChange").innerHTML = `<span class="${chg>0?'up':(chg<0?'down':'')}">${arrow}</span>`;
           $("tokenAddrPill").textContent = r.token_address || "—";
           $("copyTokenBtn").onclick = () => copyToClipboard(r.token_address || "");
-          renderSparkline(r);
+          renderRoomChart(r);
         }
       }
 
