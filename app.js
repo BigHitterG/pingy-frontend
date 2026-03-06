@@ -785,6 +785,14 @@ const $ = (id) => document.getElementById(id);
       history.push(next);
     }
 
+    function impliedSpawnScaleValue(point, room){
+      const allocated = Number(point?.allocated_sol_after || 0);
+      const target = Number(point?.target_sol || spawnTargetSol(room) || 0);
+      if(target <= 0 || MC_SPAWN_FLOOR <= 0) return 0;
+      const progress = clamp01(allocated / target);
+      return progress * MC_SPAWN_FLOOR;
+    }
+
     function parseTradeHistoryTs(ts){
       if(typeof ts === "number" && Number.isFinite(ts)) return ts;
       if(typeof ts !== "string") return null;
@@ -978,11 +986,11 @@ const $ = (id) => document.getElementById(id);
         const fallbackTimeSec = index * 60;
         return {
           time: tsMs == null ? fallbackTimeSec : Math.floor(tsMs / 1000),
-          value: Number(point.allocated_sol_after || 0),
+          value: impliedSpawnScaleValue(point, room),
         };
       });
       const candles = getRoomCandles(room, 60);
-      const target = Number(spawnTargetSol(room) || 0);
+      const target = Number(MC_SPAWN_FLOOR || 0);
       const isSpawning = room?.state === "SPAWNING";
 
       if(roomLaunchSeries) roomLaunchSeries.setData(launchData);
