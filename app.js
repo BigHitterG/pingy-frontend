@@ -433,6 +433,17 @@ const $ = (id) => document.getElementById(id);
       r.market_cap_usd = curveMarketCap(r.curve_state);
     }
 
+    function ensureTradeHistory(r){
+      if(!r) return [];
+      if(!Array.isArray(r.trade_history)) r.trade_history = [];
+      return r.trade_history;
+    }
+
+    function appendBondingTradeEvent(r, event){
+      if(!r || !event) return;
+      ensureTradeHistory(r).push(event);
+    }
+
     function ensurePos(r, wallet){
       r.positions = r.positions || {};
       if(!r.positions[wallet]) r.positions[wallet] = { escrow_sol:0, net_sol_in:0, spawn_tokens:0, token_balance:0 };
@@ -1587,6 +1598,7 @@ const $ = (id) => document.getElementById(id);
       r.approval = r.approval || {};
       r.approverWallets = r.approverWallets || {};
       r.blockedWallets = r.blockedWallets || {};
+      ensureTradeHistory(r);
       if(r.creator_wallet){
         r.approval[r.creator_wallet] = "approved";
         r.approverWallets[r.creator_wallet] = true;
@@ -1614,6 +1626,7 @@ const $ = (id) => document.getElementById(id);
         protocol_fees_sol: 0,      // cumulative post-spawn trading fees collected
         positions: {},              // wallet -> { escrow_sol, net_sol_in, spawn_tokens, token_balance }
         curve_state: makeCurveState(),
+        trade_history: [],          // chronological bonding-curve trade events
         approval: { [creator_wallet]: "approved" },        // wallet => approved|pending|denied
         approverWallets: { [creator_wallet]: true },        // wallet => true
         blockedWallets: {},         // wallet => true
@@ -2324,6 +2337,17 @@ if(connectBtn){
 
           r.state = "BONDING";
           syncRoomMarketCap(r);
+          appendBondingTradeEvent(r, {
+            ts: nowStamp(),
+            wallet: "SYSTEM",
+            side: "spawn_opening_buy",
+            gross_sol: openingBuySol,
+            fee_sol: feeSol,
+            net_sol: netSol,
+            tokens_out: tokensOut,
+            price_after: curvePrice(r.curve_state),
+            market_cap_after: Number(r.market_cap_usd || 0),
+          });
           if(!r.token_address) r.token_address = mockTokenAddress(r.ticker || r.name || "PINGY");
           addSystemEvent(r.id, "spawn complete: opening buy executed, curve now live.");
         }
@@ -2706,11 +2730,24 @@ if(connectBtn){
         r.token_address = mockTokenAddress(r.ticker || r.name || "PINGY");
         if(commit > 0){
           r.positions[connectedWallet] = r.positions[connectedWallet] || {escrow_sol:0, net_sol_in:0, spawn_tokens:0, token_balance:0};
-          const buy = applyCurveBuy(commit, r.curve_state || makeCurveState());
+          const buyFee = applyTradingFeeToBuySol(commit);
+          const buy = applyCurveBuy(buyFee.netSol, r.curve_state || makeCurveState());
           r.curve_state = buy.next;
           r.positions[connectedWallet].token_balance = Number(r.positions[connectedWallet].token_balance || 0) + buy.tokensOut;
-          r.positions[connectedWallet].net_sol_in = Number(r.positions[connectedWallet].net_sol_in || 0) + commit;
+          r.positions[connectedWallet].net_sol_in = Number(r.positions[connectedWallet].net_sol_in || 0) + buyFee.grossSol;
+          r.protocol_fees_sol = Number(r.protocol_fees_sol || 0) + buyFee.feeSol;
           syncRoomMarketCap(r);
+          appendBondingTradeEvent(r, {
+            ts: nowStamp(),
+            wallet: connectedWallet,
+            side: "buy",
+            gross_sol: buyFee.grossSol,
+            fee_sol: buyFee.feeSol,
+            net_sol: buyFee.netSol,
+            tokens_out: buy.tokensOut,
+            price_after: curvePrice(r.curve_state),
+            market_cap_after: Number(r.market_cap_usd || 0),
+          });
         }
       }
       state.rooms.unshift(r);
@@ -3821,6 +3858,17 @@ if(connectBtn){
         r.protocol_fees_sol = Number(r.protocol_fees_sol || 0) + buyFee.feeSol;
         console.debug("[ping-debug] protocol fee accrual (buy)", { roomId: r.id, tradeFeeSol: buyFee.feeSol, protocolFeesSol: r.protocol_fees_sol });
         syncRoomMarketCap(r);
+        appendBondingTradeEvent(r, {
+          ts: nowStamp(),
+          wallet: connectedWallet,
+          side: "buy",
+          gross_sol: buyFee.grossSol,
+          fee_sol: buyFee.feeSol,
+          net_sol: buyFee.netSol,
+          tokens_out: buy.tokensOut,
+          price_after: curvePrice(r.curve_state),
+          market_cap_after: Number(r.market_cap_usd || 0),
+        });
         nudgeChange(r, Math.random()*3);
 
         maybeAdvance(r);
@@ -3878,6 +3926,17 @@ if(connectBtn){
         r.protocol_fees_sol = Number(r.protocol_fees_sol || 0) + sellFee.feeSol;
         console.debug("[ping-debug] protocol fee accrual (sell)", { roomId: r.id, tradeFeeSol: sellFee.feeSol, protocolFeesSol: r.protocol_fees_sol });
         syncRoomMarketCap(r);
+        appendBondingTradeEvent(r, {
+          ts: nowStamp(),
+          wallet: connectedWallet,
+          side: "sell",
+          tokens_in: sellTokens,
+          gross_sol_out: sellFee.grossSol,
+          fee_sol: sellFee.feeSol,
+          net_sol_out: sellFee.netSol,
+          price_after: curvePrice(r.curve_state),
+          market_cap_after: Number(r.market_cap_usd || 0),
+        });
         nudgeChange(r, -(Math.random()*3));
         state.chat[r.id] = state.chat[r.id] || [];
         state.chat[r.id].push({ ts: nowStamp(), wallet: connectedWallet, text:`sold ${sellTokens.toFixed(3)} tokens for ${sellFee.grossSol.toFixed(3)} SOL gross (${sellFee.feeSol.toFixed(3)} fee, ${sellFee.netSol.toFixed(3)} net received).` });
