@@ -720,7 +720,6 @@ const $ = (id) => document.getElementById(id);
     let roomLaunchSeries = null;
     let roomLaunchTargetSeries = null;
     let roomChartContainerEl = null;
-    let roomChartMode = null;
     let roomChartContextKey = "";
 
     function roomChartDims(el){
@@ -843,7 +842,7 @@ const $ = (id) => document.getElementById(id);
       return Array.from(buckets.values()).sort((a,b)=>a.time-b.time);
     }
 
-    function ensureRoomChart(mode = "candles"){
+    function ensureRoomChart(){
       const chartEl = $("roomChart");
       if(!chartEl){
         if(roomChart && typeof roomChart.remove === "function") roomChart.remove();
@@ -852,7 +851,6 @@ const $ = (id) => document.getElementById(id);
         roomLaunchSeries = null;
         roomLaunchTargetSeries = null;
         roomChartContainerEl = null;
-        roomChartMode = null;
         roomChartContextKey = "";
         return null;
       }
@@ -866,7 +864,7 @@ const $ = (id) => document.getElementById(id);
         roomLaunchSeries = null;
         roomLaunchTargetSeries = null;
         roomChartContainerEl = null;
-        roomChartMode = null;
+        roomChartContextKey = "";
       }
 
       const api = window.LightweightCharts;
@@ -901,46 +899,50 @@ const $ = (id) => document.getElementById(id);
         roomChartContainerEl = chartEl;
       }
 
-      if(roomChartMode !== mode || (!roomCandlesSeries && !roomLaunchSeries && !roomLaunchTargetSeries)){
-        if(roomCandlesSeries && typeof roomChart.removeSeries === "function") roomChart.removeSeries(roomCandlesSeries);
-        if(roomLaunchSeries && typeof roomChart.removeSeries === "function") roomChart.removeSeries(roomLaunchSeries);
-        if(roomLaunchTargetSeries && typeof roomChart.removeSeries === "function") roomChart.removeSeries(roomLaunchTargetSeries);
-        roomCandlesSeries = null;
-        roomLaunchSeries = null;
-        roomLaunchTargetSeries = null;
-
-        if(mode === "launch"){
-          const { AreaSeries, LineSeries, LineStyle } = api;
-          if(AreaSeries && typeof roomChart.addSeries === "function"){
-            roomLaunchSeries = roomChart.addSeries(AreaSeries, {
-              lineColor: "#84d4ff",
-              topColor: "rgba(132, 212, 255, 0.35)",
-              bottomColor: "rgba(132, 212, 255, 0.08)",
-              lineWidth: 2,
-            });
-          }
-          if(LineSeries && typeof roomChart.addSeries === "function"){
-            roomLaunchTargetSeries = roomChart.addSeries(LineSeries, {
-              color: "#ff6eb1",
-              lineWidth: 2,
-              lineStyle: (LineStyle && LineStyle.Dashed) ? LineStyle.Dashed : 2,
-              lastValueVisible: false,
-              priceLineVisible: false,
-            });
-          }
-        } else {
-          const { CandlestickSeries } = api;
-          if(CandlestickSeries && typeof roomChart.addSeries === "function"){
-            roomCandlesSeries = roomChart.addSeries(CandlestickSeries, {
-              upColor: "#46d36f",
-              downColor: "#ff6eb1",
-              wickUpColor: "#46d36f",
-              wickDownColor: "#ff6eb1",
-              borderVisible: false,
-            });
-          }
+      if(!roomLaunchSeries){
+        const { HistogramSeries, AreaSeries } = api;
+        if(HistogramSeries && typeof roomChart.addSeries === "function"){
+          roomLaunchSeries = roomChart.addSeries(HistogramSeries, {
+            color: "rgba(132, 212, 255, 0.92)",
+            priceLineVisible: false,
+            lastValueVisible: false,
+          });
+        } else if(AreaSeries && typeof roomChart.addSeries === "function"){
+          roomLaunchSeries = roomChart.addSeries(AreaSeries, {
+            lineColor: "#84d4ff",
+            topColor: "rgba(132, 212, 255, 0.35)",
+            bottomColor: "rgba(132, 212, 255, 0.08)",
+            lineWidth: 2,
+            priceLineVisible: false,
+            lastValueVisible: false,
+          });
         }
-        roomChartMode = mode;
+      }
+
+      if(!roomLaunchTargetSeries){
+        const { LineSeries, LineStyle } = api;
+        if(LineSeries && typeof roomChart.addSeries === "function"){
+          roomLaunchTargetSeries = roomChart.addSeries(LineSeries, {
+            color: "#ff6eb1",
+            lineWidth: 2,
+            lineStyle: (LineStyle && LineStyle.Dashed) ? LineStyle.Dashed : 2,
+            lastValueVisible: false,
+            priceLineVisible: false,
+          });
+        }
+      }
+
+      if(!roomCandlesSeries){
+        const { CandlestickSeries } = api;
+        if(CandlestickSeries && typeof roomChart.addSeries === "function"){
+          roomCandlesSeries = roomChart.addSeries(CandlestickSeries, {
+            upColor: "#46d36f",
+            downColor: "#ff6eb1",
+            wickUpColor: "#46d36f",
+            wickDownColor: "#ff6eb1",
+            borderVisible: false,
+          });
+        }
       }
 
       if(!window.__pingyRoomChartResizeBound){
@@ -960,62 +962,75 @@ const $ = (id) => document.getElementById(id);
 
     function renderRoomChart(room){
       const status = $("roomChartStatus");
-      const isLaunchMode = room?.state === "SPAWNING";
-      const mode = isLaunchMode ? "launch" : "candles";
-      const chart = ensureRoomChart(mode);
+      const chart = ensureRoomChart();
       if(!chart){
         if(status) status.textContent = "chart unavailable";
         return;
       }
 
-      if(isLaunchMode){
+      if(room?.state === "SPAWNING"){
         appendLaunchHistoryPoint(room);
-        const history = ensureLaunchHistory(room);
-        const launchData = history.map((point, index) => {
-          const tsMs = parseTradeHistoryTs(point.ts);
-          const fallbackTimeSec = index * 60;
-          return {
-            time: tsMs == null ? fallbackTimeSec : Math.floor(tsMs / 1000),
-            value: Number(point.allocated_sol_after || 0),
-          };
-        });
-        const target = Number(spawnTargetSol(room) || 0);
-
-        if(roomLaunchSeries) roomLaunchSeries.setData(launchData);
-        if(roomLaunchTargetSeries){
-          const targetData = launchData.map((point) => ({ time: point.time, value: target }));
-          roomLaunchTargetSeries.setData(targetData);
-        }
-
-        const nextKey = `${room.id}:launch`;
-        if(nextKey !== roomChartContextKey){
-          chart.timeScale().fitContent();
-          roomChartContextKey = nextKey;
-        }
-
-        if(status) status.textContent = "launch formation chart";
-        return;
       }
 
-      if(!roomCandlesSeries){
-        if(status) status.textContent = "chart unavailable";
-        return;
-      }
-
+      const history = ensureLaunchHistory(room);
+      const launchData = history.map((point, index) => {
+        const tsMs = parseTradeHistoryTs(point.ts);
+        const fallbackTimeSec = index * 60;
+        return {
+          time: tsMs == null ? fallbackTimeSec : Math.floor(tsMs / 1000),
+          value: Number(point.allocated_sol_after || 0),
+        };
+      });
       const candles = getRoomCandles(room, 60);
-      if(!candles.length){
-        roomCandlesSeries.setData([]);
-        if(status) status.textContent = room?.state === "BONDED" ? "bonded market chart" : "bonding curve market chart";
-        return;
+      const target = Number(spawnTargetSol(room) || 0);
+      const isSpawning = room?.state === "SPAWNING";
+
+      if(roomLaunchSeries) roomLaunchSeries.setData(launchData);
+      if(roomCandlesSeries) roomCandlesSeries.setData(candles);
+      if(roomLaunchTargetSeries){
+        if(isSpawning && target > 0 && launchData.length){
+          const minLaunchTime = launchData[0].time;
+          const maxLaunchTime = launchData[launchData.length - 1].time;
+          const lineEnd = Math.max(maxLaunchTime, minLaunchTime + 60);
+          roomLaunchTargetSeries.setData([
+            { time: minLaunchTime, value: target },
+            { time: lineEnd, value: target },
+          ]);
+        } else {
+          roomLaunchTargetSeries.setData([]);
+        }
       }
 
-      roomCandlesSeries.setData(candles);
-      const nextKey = `${room.id}:${room.state}:candles`;
+      const launchMarkerTime = candles.length
+        ? candles[0].time
+        : (launchData.length ? launchData[launchData.length - 1].time : null);
+      const launchMarkers = (!isSpawning && launchMarkerTime != null)
+        ? [{
+            time: launchMarkerTime,
+            position: "belowBar",
+            color: "#ff6eb1",
+            shape: "arrowUp",
+            text: "spawn live",
+          }]
+        : [];
+      if(roomCandlesSeries && typeof roomCandlesSeries.setMarkers === "function"){
+        roomCandlesSeries.setMarkers(launchMarkers);
+      }
+      if(roomLaunchSeries && typeof roomLaunchSeries.setMarkers === "function"){
+        roomLaunchSeries.setMarkers((!isSpawning && !candles.length) ? launchMarkers : []);
+      }
+
+      const nextKey = `${room?.id || ""}:lifecycle`;
       if(nextKey !== roomChartContextKey){
         chart.timeScale().fitContent();
         roomChartContextKey = nextKey;
       }
-      if(status) status.textContent = room?.state === "BONDED" ? "bonded market chart" : "bonding curve market chart";
+
+      if(status){
+        if(room?.state === "SPAWNING") status.textContent = "spawn accumulation lifecycle chart";
+        else if(room?.state === "BONDED") status.textContent = "bonded lifecycle chart";
+        else status.textContent = "spawn to market lifecycle chart";
+      }
     }
 
 
