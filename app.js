@@ -720,6 +720,9 @@ const $ = (id) => document.getElementById(id);
     let roomLaunchTargetSeries = null;
     let roomChartContainerEl = null;
     let roomChartContextKey = "";
+    const ROOM_CHART_UP_COLOR = "#46d36f";
+    const ROOM_CHART_DOWN_COLOR = "#ef5350";
+    const ROOM_CHART_SPAWN_COLOR = "#ff6eb1";
 
     function roomChartDims(el){
       return {
@@ -914,7 +917,7 @@ const $ = (id) => document.getElementById(id);
         const { LineSeries, LineStyle } = api;
         if(LineSeries && typeof roomChart.addSeries === "function"){
           roomLaunchTargetSeries = roomChart.addSeries(LineSeries, {
-            color: "#ff6eb1",
+            color: ROOM_CHART_SPAWN_COLOR,
             lineWidth: 2,
             lineStyle: (LineStyle && LineStyle.Dashed) ? LineStyle.Dashed : 2,
             lastValueVisible: false,
@@ -927,10 +930,10 @@ const $ = (id) => document.getElementById(id);
         const { CandlestickSeries } = api;
         if(CandlestickSeries && typeof roomChart.addSeries === "function"){
           roomCandlesSeries = roomChart.addSeries(CandlestickSeries, {
-            upColor: "#46d36f",
-            downColor: "#ff6eb1",
-            wickUpColor: "#46d36f",
-            wickDownColor: "#ff6eb1",
+            upColor: ROOM_CHART_UP_COLOR,
+            downColor: ROOM_CHART_DOWN_COLOR,
+            wickUpColor: ROOM_CHART_UP_COLOR,
+            wickDownColor: ROOM_CHART_DOWN_COLOR,
             borderVisible: false,
           });
         }
@@ -1039,8 +1042,19 @@ const $ = (id) => document.getElementById(id);
       }
 
       const activeCandles = isSpawning
-        ? spawnCandles
-        : [...spawnCandles, ...bondCandles];
+        ? spawnCandles.map((candle) => ({
+            ...candle,
+            color: ROOM_CHART_SPAWN_COLOR,
+            wickColor: ROOM_CHART_SPAWN_COLOR,
+          }))
+        : [
+            ...spawnCandles.map((candle) => ({
+              ...candle,
+              color: ROOM_CHART_SPAWN_COLOR,
+              wickColor: ROOM_CHART_SPAWN_COLOR,
+            })),
+            ...bondCandles,
+          ];
 
       if(roomCandlesSeries) roomCandlesSeries.setData(activeCandles);
       if(roomLaunchTargetSeries){
@@ -1064,7 +1078,7 @@ const $ = (id) => document.getElementById(id);
         ? [{
             time: launchMarkerTime,
             position: "belowBar",
-            color: "#ff6eb1",
+            color: ROOM_CHART_SPAWN_COLOR,
             shape: "arrowUp",
             text: "spawn live",
           }]
