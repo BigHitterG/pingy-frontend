@@ -2768,10 +2768,32 @@ if(connectBtn){
       if(e.key === "Enter"){ e.preventDefault(); saveUsername(); }
     });
 
-    function addSystemEvent(roomId, text){
+    function addSystemEvent(roomId, text, options = {}){
       if(!roomId) return;
       state.chat[roomId] = state.chat[roomId] || [];
-      state.chat[roomId].push({ ts: nowStamp(), wallet:"SYSTEM", text });
+      state.chat[roomId].push({
+        ts: nowStamp(),
+        wallet:"SYSTEM",
+        text,
+        kind: options.kind || "system_activity",
+        approvedWallet: options.approvedWallet || "",
+      });
+    }
+
+    function addApprovalSystemEvent(roomId, wallet){
+      if(!roomId || !wallet) return;
+      state.chat[roomId] = state.chat[roomId] || [];
+      const exists = state.chat[roomId].some((m) => (
+        m
+        && m.wallet === "SYSTEM"
+        && m.kind === "system_approval"
+        && m.approvedWallet === wallet
+      ));
+      if(exists) return;
+      addSystemEvent(roomId, `${displayName(wallet)} was approved as a pinger`, {
+        kind: "system_approval",
+        approvedWallet: wallet,
+      });
     }
 
     function walletUsdInRoom(r, wallet){
@@ -3141,7 +3163,7 @@ if(connectBtn){
       const existing = normalizeDepositStatus(room.approval[wallet]);
       const wasApproved = existing === "approved";
       room.approval[wallet] = approvedNow ? "approved" : (wasApproved ? "approved" : "pending");
-      if(approvedNow && !wasApproved) addSystemEvent(room.id, `@${shortWallet(wallet)} approved — now a PINGER`);
+      if(approvedNow && !wasApproved) addApprovalSystemEvent(room.id, wallet);
       else if(!existing) addSystemEvent(room.id, `@${shortWallet(wallet)} pinged ${amount.toFixed(3)} SOL (pending)`);
       room._lastActivity = Date.now();
       room._pulseUntil = Date.now() + 600;
@@ -3170,7 +3192,7 @@ if(connectBtn){
         const wallet = snapshot.pendingWallets[Math.floor(rand() * snapshot.pendingWallets.length)];
         const wasApproved = normalizeDepositStatus(room.approval?.[wallet]) === "approved";
         room.approval[wallet] = "approved";
-        if(!wasApproved) addSystemEvent(room.id, `@${shortWallet(wallet)} approved — now a PINGER`);
+        if(!wasApproved) addApprovalSystemEvent(room.id, wallet);
         snapshot = getRoomEscrowSnapshot(room);
       }
 
@@ -4215,7 +4237,29 @@ if(connectBtn){
       const msgs = state.chat[roomId] || [];
       const r = roomById(roomId);
 
-      msgs.forEach((m) => {
+      const isApprovalSystemMessage = (m) => (
+        !!m
+        && m.wallet === "SYSTEM"
+        && m.kind === "system_approval"
+        && !!m.approvedWallet
+      );
+      const isTradeActivityText = (text) => {
+        const t = String(text || "");
+        if(!t) return false;
+        if(/^bought .* tokens for .* SOL gross/i.test(t)) return true;
+        if(/^sold .* tokens for .* SOL gross/i.test(t)) return true;
+        if(/^withdrew .* SOL \(full escrow withdrawal, returned to wallet\)\.?$/i.test(t)) return true;
+        return false;
+      };
+      const isMainChatMessage = (m) => {
+        if(!m) return false;
+        if(m.wallet === "SYSTEM") return isApprovalSystemMessage(m);
+        if(m.kind === "activity") return false;
+        if(isTradeActivityText(m.text)) return false;
+        return true;
+      };
+
+      msgs.filter(isMainChatMessage).forEach((m) => {
         const row = document.createElement("div");
         row.className = "msg";
 
@@ -4241,6 +4285,7 @@ if(connectBtn){
           }
         }
 
+        const systemClass = isApprovalSystemMessage(m) ? "sysApprovalLine" : "";
         row.innerHTML = `
           <div class="who">
             <div class="whoTop">
@@ -4249,7 +4294,7 @@ if(connectBtn){
               ${extras}
             </div>
           </div>
-          <div class="text ${isSys ? "sysLine" : ""}">${escapeText(m.text)}</div>
+          <div class="text ${isSys ? "sysLine" : ""} ${systemClass}">${escapeText(m.text)}</div>
           <div class="ts">${escapeText(m.ts)}</div>
         `;
 
@@ -4263,6 +4308,20 @@ if(connectBtn){
             btn.textContent = displayName(m.wallet);
             btn.addEventListener("click", () => openProfile(m.wallet));
             whoName.appendChild(btn);
+          }
+        }
+
+        if(isApprovalSystemMessage(m)){
+          const textNode = row.querySelector(".text");
+          if(textNode){
+            textNode.innerHTML = "";
+            const whoBtn = document.createElement("button");
+            whoBtn.type = "button";
+            whoBtn.className = "walletLink";
+            whoBtn.textContent = displayName(m.approvedWallet);
+            whoBtn.addEventListener("click", () => openProfile(m.approvedWallet));
+            textNode.appendChild(whoBtn);
+            textNode.appendChild(document.createTextNode(" was approved as a pinger"));
           }
         }
 
@@ -4302,7 +4361,7 @@ if(connectBtn){
         return;
       }
 
-      addSystemEvent(roomId, `@${shortWallet(wallet)} approved — now a PINGER`);
+      addApprovalSystemEvent(roomId, wallet);
       await refreshRoomOnchainSnapshot(roomId, { force: true });
       await refreshConnectedWalletEscrowLine(roomId);
       renderRoom(roomId);
@@ -4834,7 +4893,7 @@ if(connectBtn){
 
         state.chat[r.id] = state.chat[r.id] || [];
         const statusText = isApproved(r, connectedWallet) ? "approved" : "pending approval";
-        state.chat[r.id].push({ ts: nowStamp(), wallet: "SYSTEM", text:`@${shortWallet(connectedWallet)} pinged ${solAmount.toFixed(3)} SOL (${statusText})` });
+        state.chat[r.id].push({ ts: nowStamp(), wallet: "SYSTEM", text:`@${shortWallet(connectedWallet)} pinged ${solAmount.toFixed(3)} SOL (${statusText})`, kind: "system_activity" });
 
         maybeAdvance(r);
 
@@ -4864,7 +4923,7 @@ if(connectBtn){
         maybeAdvance(r);
 
         state.chat[r.id] = state.chat[r.id] || [];
-        state.chat[r.id].push({ ts: nowStamp(), wallet: connectedWallet, text:`bought ${buy.tokensOut.toFixed(3)} tokens for ${buyFee.grossSol.toFixed(3)} SOL gross (${buyFee.feeSol.toFixed(3)} fee, ${buyFee.netSol.toFixed(3)} net to curve).` });
+        state.chat[r.id].push({ ts: nowStamp(), wallet: connectedWallet, text:`bought ${buy.tokensOut.toFixed(3)} tokens for ${buyFee.grossSol.toFixed(3)} SOL gross (${buyFee.feeSol.toFixed(3)} fee, ${buyFee.netSol.toFixed(3)} net to curve).`, kind: "activity" });
       }
 
       closeModal($("pingBack"));
@@ -4898,7 +4957,7 @@ if(connectBtn){
         }
 
         state.chat[r.id] = state.chat[r.id] || [];
-        state.chat[r.id].push({ ts: nowStamp(), wallet: connectedWallet, text:`withdrew ${cur.toFixed(3)} SOL (full escrow withdrawal, returned to wallet).` });
+        state.chat[r.id].push({ ts: nowStamp(), wallet: connectedWallet, text:`withdrew ${cur.toFixed(3)} SOL (full escrow withdrawal, returned to wallet).`, kind: "activity" });
 
       } else if(r.state === "BONDING") {
         const s = ($("unpingAmount").value||"").trim();
@@ -4929,7 +4988,7 @@ if(connectBtn){
         });
         nudgeChange(r, -(Math.random()*3));
         state.chat[r.id] = state.chat[r.id] || [];
-        state.chat[r.id].push({ ts: nowStamp(), wallet: connectedWallet, text:`sold ${sellTokens.toFixed(3)} tokens for ${sellFee.grossSol.toFixed(3)} SOL gross (${sellFee.feeSol.toFixed(3)} fee, ${sellFee.netSol.toFixed(3)} net received).` });
+        state.chat[r.id].push({ ts: nowStamp(), wallet: connectedWallet, text:`sold ${sellTokens.toFixed(3)} tokens for ${sellFee.grossSol.toFixed(3)} SOL gross (${sellFee.feeSol.toFixed(3)} fee, ${sellFee.netSol.toFixed(3)} net received).`, kind: "activity" });
       } else {
         return alert("sell is unavailable in this state.");
       }
@@ -4954,7 +5013,7 @@ if(connectBtn){
       if(!txt) return;
 
       state.chat[activeRoomId] = state.chat[activeRoomId] || [];
-      state.chat[activeRoomId].push({ ts: nowStamp(), wallet: connectedWallet, text: txt });
+      state.chat[activeRoomId].push({ ts: nowStamp(), wallet: connectedWallet, text: txt, kind: "chat" });
       $("msgInput").value = "";
       renderChat(activeRoomId);
     });
