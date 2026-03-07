@@ -717,7 +717,6 @@ const $ = (id) => document.getElementById(id);
 
     let roomChart = null;
     let roomCandlesSeries = null;
-    let roomLaunchSeries = null;
     let roomLaunchTargetSeries = null;
     let roomChartContainerEl = null;
     let roomChartContextKey = "";
@@ -862,7 +861,6 @@ const $ = (id) => document.getElementById(id);
         if(roomChart && typeof roomChart.remove === "function") roomChart.remove();
         roomChart = null;
         roomCandlesSeries = null;
-        roomLaunchSeries = null;
         roomLaunchTargetSeries = null;
         roomChartContainerEl = null;
         roomChartContextKey = "";
@@ -875,7 +873,6 @@ const $ = (id) => document.getElementById(id);
         if(typeof roomChart.remove === "function") roomChart.remove();
         roomChart = null;
         roomCandlesSeries = null;
-        roomLaunchSeries = null;
         roomLaunchTargetSeries = null;
         roomChartContainerEl = null;
         roomChartContextKey = "";
@@ -911,27 +908,6 @@ const $ = (id) => document.getElementById(id);
           },
         });
         roomChartContainerEl = chartEl;
-      }
-
-      if(!roomLaunchSeries){
-        const { AreaSeries, LineSeries } = api;
-        if(AreaSeries && typeof roomChart.addSeries === "function"){
-          roomLaunchSeries = roomChart.addSeries(AreaSeries, {
-            lineColor: "#84d4ff",
-            topColor: "rgba(132, 212, 255, 0.35)",
-            bottomColor: "rgba(132, 212, 255, 0.08)",
-            lineWidth: 2,
-            priceLineVisible: false,
-            lastValueVisible: false,
-          });
-        } else if(LineSeries && typeof roomChart.addSeries === "function"){
-          roomLaunchSeries = roomChart.addSeries(LineSeries, {
-            color: "#84d4ff",
-            lineWidth: 2,
-            priceLineVisible: false,
-            lastValueVisible: false,
-          });
-        }
       }
 
       if(!roomLaunchTargetSeries){
@@ -1022,18 +998,7 @@ const $ = (id) => document.getElementById(id);
       const spawnCandles = launchDataToCandles(launchData);
       const target = impliedSpawnMarketCapFromGrossSol(spawnTargetSol(room));
       const isSpawning = room?.state === "SPAWNING";
-      const activeCandles = isSpawning
-        ? spawnCandles
-        : [...spawnCandles, ...candles]
-            .sort((a, b) => Number(a.time || 0) - Number(b.time || 0))
-            .filter((candle, index, all) => {
-              if(index === 0) return true;
-              return Number(candle.time || 0) !== Number(all[index - 1].time || 0);
-            });
-
-      if(roomLaunchSeries && typeof roomLaunchSeries.applyOptions === "function"){
-        roomLaunchSeries.applyOptions({ lineWidth: isSpawning ? 4 : 2 });
-      }
+      let bondCandles = candles.map((candle) => ({ ...candle }));
 
       if(!isSpawning){
         const launchTail = launchData.length ? Number(launchData[launchData.length - 1]?.value || 0) : 0;
@@ -1048,7 +1013,7 @@ const $ = (id) => document.getElementById(id);
           const anchorTime = firstCandle
             ? Math.max(0, Number(firstCandle.time || 0) - 60)
             : fallbackTime;
-          candles.unshift({
+          bondCandles.unshift({
             time: anchorTime,
             open: anchorValue,
             high: anchorValue,
@@ -1058,7 +1023,25 @@ const $ = (id) => document.getElementById(id);
         }
       }
 
-      if(roomLaunchSeries) roomLaunchSeries.setData([]);
+      if(spawnCandles.length && bondCandles.length){
+        const lastSpawnTime = Number(spawnCandles[spawnCandles.length - 1].time || 0);
+        const minBondTime = lastSpawnTime + 60;
+        let previousTime = minBondTime - 60;
+        bondCandles = bondCandles.map((candle) => {
+          const originalTime = Number(candle.time || 0);
+          const nextTime = Math.max(originalTime, previousTime + 60, minBondTime);
+          previousTime = nextTime;
+          return {
+            ...candle,
+            time: nextTime,
+          };
+        });
+      }
+
+      const activeCandles = isSpawning
+        ? spawnCandles
+        : [...spawnCandles, ...bondCandles];
+
       if(roomCandlesSeries) roomCandlesSeries.setData(activeCandles);
       if(roomLaunchTargetSeries){
         if(isSpawning && target > 0 && launchData.length){
@@ -1074,8 +1057,8 @@ const $ = (id) => document.getElementById(id);
         }
       }
 
-      const launchMarkerTime = candles.length
-        ? candles[0].time
+      const launchMarkerTime = bondCandles.length
+        ? bondCandles[0].time
         : (launchData.length ? launchData[launchData.length - 1].time : null);
       const launchMarkers = (!isSpawning && launchMarkerTime != null)
         ? [{
@@ -1088,9 +1071,6 @@ const $ = (id) => document.getElementById(id);
         : [];
       if(roomCandlesSeries && typeof roomCandlesSeries.setMarkers === "function"){
         roomCandlesSeries.setMarkers(launchMarkers);
-      }
-      if(roomLaunchSeries && typeof roomLaunchSeries.setMarkers === "function"){
-        roomLaunchSeries.setMarkers([]);
       }
 
       const nextKey = `${room?.id || ""}:lifecycle`;
