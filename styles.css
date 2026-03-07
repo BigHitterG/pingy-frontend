@@ -300,6 +300,10 @@
       color:var(--muted);
       font-style:italic;
     }
+    .sysApprovalLine{
+      color:#5f6672;
+      font-style:normal;
+    }
 
     /* Modals */
     .modalBack{
