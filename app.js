@@ -2547,12 +2547,31 @@ if(connectBtn){
       return "";
     }
     function isApproved(r, wallet){ return walletStatus(r, wallet) === "approved"; }
+    function getRoomApproverWallets(r){
+      if(!r) return [];
+      r.approverWallets = r.approverWallets || {};
+      if(r.creator_wallet) r.approverWallets[r.creator_wallet] = true;
+
+      const out = new Set();
+      if(r.creator_wallet) out.add(r.creator_wallet);
+
+      const onchainApprovers = state.onchain?.[r.id]?.approverWallets || r.onchain?.approverWallets || [];
+      onchainApprovers.forEach((w) => { if(w) out.add(w); });
+      Object.keys(r.approverWallets).forEach((w) => { if(r.approverWallets[w]) out.add(w); });
+
+      for(const wallet of Array.from(out)){
+        if(wallet !== r.creator_wallet && !isApproved(r, wallet)){
+          out.delete(wallet);
+          if(r.approverWallets[wallet]) delete r.approverWallets[wallet];
+        }
+      }
+
+      if(r.creator_wallet) r.approverWallets[r.creator_wallet] = true;
+      return Array.from(out);
+    }
     function isApprover(r, wallet){
       if(!wallet) return false;
-      const snapshot = getRoomEscrowSnapshot(r);
-      const onchainApprovers = snapshot.approverWallets || [];
-      if(onchainApprovers.length > 0) return onchainApprovers.includes(wallet);
-      return isCreator(r, wallet) || !!(r.approverWallets && r.approverWallets[wallet]);
+      return getRoomApproverWallets(r).includes(wallet);
     }
     function isDenied(r, wallet){
       const status = walletStatus(r, wallet);
@@ -4057,16 +4076,18 @@ if(connectBtn){
       const r = roomById(roomId);
       if(!r || !wallet) return;
       if(!isCreator(r, connectedWallet)) return;
-      if(!isApproved(r, wallet)) return;
+      if(wallet === r.creator_wallet) return;
       r.approverWallets = r.approverWallets || {};
       if(r.approverWallets[wallet]){
         delete r.approverWallets[wallet];
         addSystemEvent(roomId, `@${shortWallet(wallet)} removed as approver`);
       } else {
+        if(!isApproved(r, wallet)) return;
         r.approverWallets[wallet] = true;
         addSystemEvent(roomId, `@${shortWallet(wallet)} is now an approver`);
       }
-      await refreshRoomOnchainSnapshot(roomId, { force: true });
+      getRoomApproverWallets(r);
+      ensureRoomLocalSnapshot(roomId);
       renderRoom(roomId);
       renderHome();
     }
@@ -4124,7 +4145,7 @@ if(connectBtn){
       const snapshot = getRoomEscrowSnapshot(r);
       const pending = (snapshot.pendingWallets || []).slice();
       const pingers = (snapshot.approvedWallets || []).slice();
-      const approvers = (snapshot.approverWallets || []).filter((w) => isApprover(r, w));
+      const approvers = getRoomApproverWallets(r);
       const thread = state.onchain?.[roomId] || {};
       r.onchain = thread;
       if(thread.spawn_target_lamports) r.spawn_target_sol = Number(thread.spawn_target_lamports || 0) / LAMPORTS_PER_SOL;
@@ -4133,6 +4154,7 @@ if(connectBtn){
       const threadAdminPubkey = thread.admin_pubkey || thread.admin;
       const walletPubkey = connectedWallet;
       const isAdmin = !!threadAdminPubkey && !!walletPubkey && toBase58String(threadAdminPubkey) === toBase58String(walletPubkey);
+      const canModerateApprovals = isApprover(r, connectedWallet);
 
       const pendingList = $("pendingList");
       const pingersList = $("pingersList");
@@ -4184,10 +4206,10 @@ if(connectBtn){
 
       if(pendingList && !isInstantLaunch){
         pendingList.innerHTML = "";
-        if(!isAdmin){
+        if(!canModerateApprovals){
           const e = document.createElement("span");
           e.className = "muted tiny";
-          e.textContent = "admin only";
+          e.textContent = "creator/approver only";
           pendingList.appendChild(e);
         } else if(pending.length === 0){
           const e = document.createElement("span");
@@ -4221,6 +4243,12 @@ if(connectBtn){
             const actions = [];
             if(isAdmin){
               actions.push({ label: "Remove from spawn", onClick: () => removeApprovedFromSpawn(roomId, w) });
+              if(!isCreator(r, w)){
+                actions.push({
+                  label: isApprover(r, w) ? "remove approver" : "make approver",
+                  onClick: () => toggleApproverWallet(roomId, w)
+                });
+              }
             }
             pingersList.appendChild(makeWalletRow(w, snapshot.byWallet?.[w] || {}, actions));
           });
@@ -4242,14 +4270,6 @@ if(connectBtn){
             }
             approversList.appendChild(makeWalletRow(w, snapshot.byWallet?.[w] || {}, actions));
           });
-        }
-        if(isCreator(r, connectedWallet)){
-          const soon = document.createElement("button");
-          soon.className = "btn subtle small";
-          soon.textContent = "add approver (coming soon)";
-          soon.disabled = true;
-          soon.style.marginTop = "6px";
-          approversList.appendChild(soon);
         }
       }
 
