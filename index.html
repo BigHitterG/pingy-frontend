@@ -267,7 +267,45 @@
             </div>
           </div>
           <div style="flex:1; min-width:240px;">
-            <div class="spark" id="roomChart" aria-label="price chart"></div>
+            <div class="roomChartShell" aria-label="room chart shell">
+              <div class="roomChartToolbar">
+                <div class="roomChartToolbarLeft">
+                  <div class="roomChartStatMain" id="chartCurrentMetric">Current MC: $0</div>
+                  <div class="btnGroup" id="chartMetricMode" aria-label="metric mode">
+                    <button class="btn subtle small chartToggle active" id="chartMetricMcap" data-chart-metric="mcap">MCap</button>
+                    <button class="btn subtle small chartToggle" id="chartMetricPrice" data-chart-metric="price">Price</button>
+                  </div>
+                  <div class="btnGroup" id="chartDenomMode" aria-label="denomination mode">
+                    <button class="btn subtle small chartToggle active" id="chartDenomUsd" data-chart-denom="usd">USD</button>
+                    <button class="btn subtle small chartToggle" id="chartDenomSol" data-chart-denom="sol">SOL</button>
+                  </div>
+                </div>
+                <div class="roomChartToolbarRight">
+                  <div class="chartDisplayMode">Candles</div>
+                  <div class="roomChartAth" id="chartAth">ATH: $0</div>
+                </div>
+              </div>
+              <div class="roomChartTopStats" id="roomChartTopStats"></div>
+              <div class="roomChartSubToolbar">
+                <div class="chartToolRail" aria-hidden="true">
+                  <span class="chartToolDot"></span>
+                  <span class="chartToolDot"></span>
+                  <span class="chartToolDot"></span>
+                </div>
+                <div class="btnGroup" id="chartTimeframes" aria-label="chart timeframe">
+                  <button class="btn subtle small chartTfBtn active" data-tf="1m">1m</button>
+                  <button class="btn subtle small chartTfBtn" data-tf="5m">5m</button>
+                  <button class="btn subtle small chartTfBtn" data-tf="15m">15m</button>
+                  <button class="btn subtle small chartTfBtn" data-tf="1h">1h</button>
+                  <button class="btn subtle small chartTfBtn" data-tf="4h">4h</button>
+                  <button class="btn subtle small chartTfBtn" data-tf="1d">1d</button>
+                </div>
+              </div>
+              <div class="roomChartWrap">
+                <div class="spark" id="roomChart" aria-label="price chart"></div>
+                <div class="roomChartTooltip" id="roomChartTooltip" hidden>—</div>
+              </div>
+            </div>
             <div class="muted" id="roomChartStatus" style="margin-top:6px;">launch formation chart</div>
             <div class="muted tiny" style="margin-top:4px;">Charting by <a href="https://www.tradingview.com/lightweight-charts/" target="_blank" rel="noopener noreferrer">TradingView Lightweight Charts</a></div>
           </div>
