@@ -1022,7 +1022,14 @@ const $ = (id) => document.getElementById(id);
       const spawnCandles = launchDataToCandles(launchData);
       const target = impliedSpawnMarketCapFromGrossSol(spawnTargetSol(room));
       const isSpawning = room?.state === "SPAWNING";
-      const activeCandles = isSpawning ? spawnCandles : candles;
+      const activeCandles = isSpawning
+        ? spawnCandles
+        : [...spawnCandles, ...candles]
+            .sort((a, b) => Number(a.time || 0) - Number(b.time || 0))
+            .filter((candle, index, all) => {
+              if(index === 0) return true;
+              return Number(candle.time || 0) !== Number(all[index - 1].time || 0);
+            });
 
       if(roomLaunchSeries && typeof roomLaunchSeries.applyOptions === "function"){
         roomLaunchSeries.applyOptions({ lineWidth: isSpawning ? 4 : 2 });
@@ -1067,8 +1074,8 @@ const $ = (id) => document.getElementById(id);
         }
       }
 
-      const launchMarkerTime = activeCandles.length
-        ? activeCandles[0].time
+      const launchMarkerTime = candles.length
+        ? candles[0].time
         : (launchData.length ? launchData[launchData.length - 1].time : null);
       const launchMarkers = (!isSpawning && launchMarkerTime != null)
         ? [{
