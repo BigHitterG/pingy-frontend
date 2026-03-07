@@ -720,9 +720,26 @@ const $ = (id) => document.getElementById(id);
     let roomLaunchTargetSeries = null;
     let roomChartContainerEl = null;
     let roomChartContextKey = "";
+    let roomChartActiveCandles = [];
+    let roomChartActiveCandlesRaw = [];
+    let roomChartCrosshairHandler = null;
+    let roomChartCrosshairBoundChart = null;
     const ROOM_CHART_UP_COLOR = "#46d36f";
-    const ROOM_CHART_DOWN_COLOR = "#ef5350";
+    const ROOM_CHART_DOWN_COLOR = "#f06a6a";
     const ROOM_CHART_SPAWN_COLOR = "#ff6eb1";
+    const ROOM_CHART_TF_SECONDS = {
+      "1m": 60,
+      "5m": 300,
+      "15m": 900,
+      "1h": 3600,
+      "4h": 14400,
+      "1d": 86400,
+    };
+    const roomChartUi = {
+      timeframe: "1m",
+      metric: "mcap",
+      denom: "usd",
+    };
 
     function roomChartDims(el){
       return {
@@ -858,9 +875,160 @@ const $ = (id) => document.getElementById(id);
       return Array.from(buckets.values()).sort((a,b)=>a.time-b.time);
     }
 
+    // Aggregates OHLC candles into larger timeframe buckets while preserving chronological order.
+    function aggregateCandlesByInterval(candles, intervalSeconds){
+      if(!Array.isArray(candles) || !candles.length) return [];
+      const interval = Math.max(60, Number(intervalSeconds) || 60);
+      if(interval <= 60) return candles.map((c) => ({ ...c }));
+      const buckets = new Map();
+
+      candles.forEach((candle, index) => {
+        const timeSec = Math.max(0, Number(candle?.time || 0));
+        const bucketTime = Math.floor(timeSec / interval) * interval;
+        const open = Number(candle?.open || 0);
+        const high = Number(candle?.high || open);
+        const low = Number(candle?.low || open);
+        const close = Number(candle?.close || open);
+        const existing = buckets.get(bucketTime);
+        if(!existing){
+          buckets.set(bucketTime, {
+            time: bucketTime,
+            open,
+            high,
+            low,
+            close,
+            __index: index,
+          });
+          return;
+        }
+        if(index < existing.__index) existing.open = open;
+        existing.__index = Math.min(existing.__index, index);
+        existing.high = Math.max(existing.high, high, open, close);
+        existing.low = Math.min(existing.low, low, open, close);
+        existing.close = close;
+      });
+
+      return Array.from(buckets.values())
+        .sort((a, b) => a.time - b.time)
+        .map(({ __index, ...candle }) => candle);
+    }
+
+    function chartValueFromMarketCapUsd(marketCapUsd){
+      const capUsd = Math.max(0, Number(marketCapUsd || 0));
+      const metricIsPrice = roomChartUi.metric === "price";
+      const baseValueUsd = metricIsPrice ? (capUsd / TOTAL_SUPPLY) : capUsd;
+      if(roomChartUi.denom === "sol") return baseValueUsd / SOL_TO_USD;
+      return baseValueUsd;
+    }
+
+    function formatChartMetricValue(value){
+      const numeric = Math.max(0, Number(value || 0));
+      const metricIsPrice = roomChartUi.metric === "price";
+      const denomIsSol = roomChartUi.denom === "sol";
+      if(metricIsPrice){
+        return denomIsSol
+          ? `${numeric.toExponential(3)} SOL`
+          : `$${numeric.toExponential(3)}`;
+      }
+      if(denomIsSol) return `${(numeric).toLocaleString(undefined, { maximumFractionDigits: 2 })} SOL`;
+      return fmtUsd(numeric);
+    }
+
+    function formatChartDateTime(timeSec){
+      if(!Number.isFinite(Number(timeSec))) return "—";
+      const d = new Date(Number(timeSec) * 1000);
+      if(Number.isNaN(d.getTime())) return "—";
+      return d.toLocaleString(undefined, { month:"short", day:"numeric", hour:"2-digit", minute:"2-digit" });
+    }
+
+    function setActiveChartButton(selector, activeValue, attr){
+      document.querySelectorAll(selector).forEach((btn) => {
+        const selected = String(btn.getAttribute(attr) || "") === String(activeValue);
+        btn.classList.toggle("active", selected);
+      });
+    }
+
+    function detachRoomChartCrosshair(){
+      if(roomChartCrosshairBoundChart && roomChartCrosshairHandler && typeof roomChartCrosshairBoundChart.unsubscribeCrosshairMove === "function"){
+        roomChartCrosshairBoundChart.unsubscribeCrosshairMove(roomChartCrosshairHandler);
+      }
+      roomChartCrosshairHandler = null;
+      roomChartCrosshairBoundChart = null;
+      const tooltip = $("roomChartTooltip");
+      if(tooltip) tooltip.hidden = true;
+    }
+
+    // Binds tooltip behavior to the active chart instance and safely rebinds on chart recreation.
+    function bindRoomChartCrosshair(chart){
+      if(!chart || !roomCandlesSeries) return;
+      if(roomChartCrosshairBoundChart === chart && roomChartCrosshairHandler) return;
+      detachRoomChartCrosshair();
+      roomChartCrosshairHandler = (param) => {
+        const tooltip = $("roomChartTooltip");
+        const chartWrap = document.querySelector(".roomChartWrap");
+        if(!tooltip || !chartWrap || !roomCandlesSeries){
+          return;
+        }
+        const point = param?.point;
+        const data = param?.seriesData?.get?.(roomCandlesSeries);
+        if(!point || !data || point.x < 0 || point.y < 0){
+          tooltip.hidden = true;
+          return;
+        }
+
+        const room = roomById(activeRoomId);
+        const isSpawning = room?.state === "SPAWNING";
+        const metricLabel = isSpawning
+          ? (roomChartUi.metric === "mcap" ? "Projected MCap" : "Projected Price")
+          : (roomChartUi.metric === "mcap" ? "Market Cap" : "Price");
+        const displayOpen = Number(data.open || 0);
+        const displayHigh = Number(data.high || 0);
+        const displayLow = Number(data.low || 0);
+        const displayClose = Number(data.close || 0);
+
+        tooltip.innerHTML = [
+          `<b>${formatChartDateTime(Number(data.time || 0))}</b>`,
+          `O: ${formatChartMetricValue(displayOpen)}`,
+          `H: ${formatChartMetricValue(displayHigh)}`,
+          `L: ${formatChartMetricValue(displayLow)}`,
+          `C: ${formatChartMetricValue(displayClose)}`,
+          `${metricLabel}: ${formatChartMetricValue(displayClose)}`,
+        ].join("<br>");
+
+        const maxLeft = Math.max(0, chartWrap.clientWidth - tooltip.offsetWidth - 8);
+        const maxTop = Math.max(0, chartWrap.clientHeight - tooltip.offsetHeight - 8);
+        const left = Math.min(maxLeft, Math.max(8, point.x + 14));
+        const top = Math.min(maxTop, Math.max(8, point.y + 14));
+        tooltip.style.left = `${left}px`;
+        tooltip.style.top = `${top}px`;
+        tooltip.hidden = false;
+      };
+      chart.subscribeCrosshairMove(roomChartCrosshairHandler);
+      roomChartCrosshairBoundChart = chart;
+    }
+
+    // Sums positive escrow allocation deltas over the last 24h for pre-spawn lifecycle stats.
+    function computeSpawnEscrowInflow24hSol(history){
+      if(!Array.isArray(history) || history.length < 2) return 0;
+      const nowSec = Math.floor(Date.now() / 1000);
+      const lookbackSec = nowSec - (24 * 3600);
+      let inflowSol = 0;
+      for(let i = 1; i < history.length; i += 1){
+        const cur = history[i];
+        const prev = history[i - 1];
+        const tsMs = parseTradeHistoryTs(cur?.ts);
+        const eventSec = tsMs == null ? null : Math.floor(tsMs / 1000);
+        if(eventSec != null && eventSec < lookbackSec) continue;
+        const delta = Number(cur?.allocated_sol_after || 0) - Number(prev?.allocated_sol_after || 0);
+        if(delta > 0) inflowSol += delta;
+      }
+      return Math.max(0, inflowSol);
+    }
+
     function ensureRoomChart(){
       const chartEl = $("roomChart");
       if(!chartEl){
+        detachRoomChartCrosshair();
         if(roomChart && typeof roomChart.remove === "function") roomChart.remove();
         roomChart = null;
         roomCandlesSeries = null;
@@ -873,6 +1041,7 @@ const $ = (id) => document.getElementById(id);
       const chartContainerChanged = roomChart && roomChartContainerEl !== chartEl;
       const chartContainerMissing = roomChart && (!roomChartContainerEl || !roomChartContainerEl.isConnected);
       if(roomChart && (chartContainerChanged || chartContainerMissing)){
+        detachRoomChartCrosshair();
         if(typeof roomChart.remove === "function") roomChart.remove();
         roomChart = null;
         roomCandlesSeries = null;
@@ -890,24 +1059,27 @@ const $ = (id) => document.getElementById(id);
           width: dims.width,
           height: dims.height,
           layout: {
-            background: { color: "transparent" },
-            textColor: "#9aa0ad",
+            background: { color: "#0f131b" },
+            textColor: "#9aa8be",
           },
           rightPriceScale: {
-            borderVisible: false,
+            borderVisible: true,
+            borderColor: "#1f2736",
           },
           timeScale: {
-            borderVisible: false,
+            borderVisible: true,
+            borderColor: "#1f2736",
             timeVisible: true,
             secondsVisible: false,
           },
           grid: {
-            vertLines: { visible: false },
-            horzLines: { visible: false },
+            vertLines: { visible: true, color: "rgba(169,180,202,0.08)" },
+            horzLines: { visible: true, color: "rgba(169,180,202,0.08)" },
           },
           crosshair: {
-            vertLine: { visible: false },
-            horzLine: { visible: false },
+            mode: 1,
+            vertLine: { visible: true, color: "rgba(180,190,210,0.28)", width: 1, style: 2 },
+            horzLine: { visible: true, color: "rgba(180,190,210,0.28)", width: 1, style: 2 },
           },
         });
         roomChartContainerEl = chartEl;
@@ -934,10 +1106,14 @@ const $ = (id) => document.getElementById(id);
             downColor: ROOM_CHART_DOWN_COLOR,
             wickUpColor: ROOM_CHART_UP_COLOR,
             wickDownColor: ROOM_CHART_DOWN_COLOR,
-            borderVisible: false,
+            borderUpColor: ROOM_CHART_UP_COLOR,
+            borderDownColor: ROOM_CHART_DOWN_COLOR,
+            borderVisible: true,
           });
         }
       }
+
+      bindRoomChartCrosshair(roomChart);
 
       if(!window.__pingyRoomChartResizeBound){
         window.addEventListener("resize", () => {
@@ -1002,6 +1178,7 @@ const $ = (id) => document.getElementById(id);
       const target = impliedSpawnMarketCapFromGrossSol(spawnTargetSol(room));
       const isSpawning = room?.state === "SPAWNING";
       let bondCandles = candles.map((candle) => ({ ...candle }));
+      const timeframeSec = ROOM_CHART_TF_SECONDS[roomChartUi.timeframe] || 60;
 
       if(!isSpawning){
         const launchTail = launchData.length ? Number(launchData[launchData.length - 1]?.value || 0) : 0;
@@ -1041,7 +1218,7 @@ const $ = (id) => document.getElementById(id);
         });
       }
 
-      const activeCandles = isSpawning
+      const mergedCandles = isSpawning
         ? spawnCandles.map((candle) => ({
             ...candle,
             color: ROOM_CHART_SPAWN_COLOR,
@@ -1056,15 +1233,27 @@ const $ = (id) => document.getElementById(id);
             ...bondCandles,
           ];
 
+      const activeCandlesRaw = aggregateCandlesByInterval(mergedCandles, timeframeSec);
+      const activeCandles = activeCandlesRaw.map((candle) => ({
+        ...candle,
+        open: chartValueFromMarketCapUsd(candle.open),
+        high: chartValueFromMarketCapUsd(candle.high),
+        low: chartValueFromMarketCapUsd(candle.low),
+        close: chartValueFromMarketCapUsd(candle.close),
+      }));
+      roomChartActiveCandles = activeCandles.map((c) => ({ ...c }));
+      roomChartActiveCandlesRaw = activeCandlesRaw.map((c) => ({ ...c }));
+
       if(roomCandlesSeries) roomCandlesSeries.setData(activeCandles);
       if(roomLaunchTargetSeries){
         if(isSpawning && target > 0 && launchData.length){
           const minLaunchTime = launchData[0].time;
           const maxLaunchTime = launchData[launchData.length - 1].time;
           const lineEnd = Math.max(maxLaunchTime, minLaunchTime + 60);
+          const targetDisplay = chartValueFromMarketCapUsd(target);
           roomLaunchTargetSeries.setData([
-            { time: minLaunchTime, value: target },
-            { time: lineEnd, value: target },
+            { time: minLaunchTime, value: targetDisplay },
+            { time: lineEnd, value: targetDisplay },
           ]);
         } else {
           roomLaunchTargetSeries.setData([]);
@@ -1098,6 +1287,90 @@ const $ = (id) => document.getElementById(id);
         else if(room?.state === "BONDED") status.textContent = "bonded lifecycle chart";
         else status.textContent = "spawn to market lifecycle chart";
       }
+
+      const latestLifecycleCloseUsd = roomChartActiveCandlesRaw.length
+        ? Number(roomChartActiveCandlesRaw[roomChartActiveCandlesRaw.length - 1].close || 0)
+        : 0;
+      const currentSourceUsd = room?.state === "SPAWNING"
+        ? (latestLifecycleCloseUsd > 0 ? latestLifecycleCloseUsd : Number(room?.market_cap_usd || 0))
+        : (Number(room?.market_cap_usd || 0) > 0 ? Number(room?.market_cap_usd || 0) : latestLifecycleCloseUsd);
+      const displayCurrent = chartValueFromMarketCapUsd(currentSourceUsd);
+      const athUsd = roomChartActiveCandlesRaw.length
+        ? Math.max(...roomChartActiveCandlesRaw.map((c) => Number(c.high || 0)))
+        : Number(room?.market_cap_usd || 0);
+      const athDisplay = chartValueFromMarketCapUsd(athUsd);
+
+      const currentMetricEl = $("chartCurrentMetric");
+      if(currentMetricEl){
+        const prefix = room?.state === "SPAWNING" ? "Projected" : "Current";
+        const label = roomChartUi.metric === "mcap" ? "MC" : "Price";
+        currentMetricEl.textContent = `${prefix} ${label}: ${formatChartMetricValue(displayCurrent)}`;
+      }
+      const athEl = $("chartAth");
+      if(athEl){
+        const label = roomChartUi.metric === "mcap" ? "ATH" : "Peak";
+        athEl.textContent = `${label}: ${formatChartMetricValue(athDisplay)}`;
+      }
+
+      const topStats = $("roomChartTopStats");
+      if(topStats){
+        const nowSec = Math.floor(Date.now() / 1000);
+        const lookbackSec = 24 * 3600;
+        const firstInLookback = roomChartActiveCandlesRaw.find((c) => Number(c.time || 0) >= (nowSec - lookbackSec));
+        const latestCandle = roomChartActiveCandlesRaw.length ? roomChartActiveCandlesRaw[roomChartActiveCandlesRaw.length - 1] : null;
+        const change24h = (firstInLookback && latestCandle && Number(firstInLookback.open || 0) > 0)
+          ? ((Number(latestCandle.close || 0) - Number(firstInLookback.open || 0)) / Number(firstInLookback.open || 0)) * 100
+          : Number(room?.change_pct || 0);
+        const volume24hUsd = ensureTradeHistory(room)
+          .filter((event) => {
+            const ts = parseTradeHistoryTs(event?.ts);
+            return ts != null && (Math.floor(ts / 1000) >= (nowSec - lookbackSec));
+          })
+          .reduce((sum, event) => sum + (Math.abs(Number(event?.gross_sol || 0)) * SOL_TO_USD), 0);
+        const inflow24hSol = computeSpawnEscrowInflow24hSol(history);
+        const spawningLabel = room?.state === "SPAWNING" ? " (implied)" : "";
+        const volumeLabel = room?.state === "SPAWNING" ? "24h Escrow Inflow" : "24h Volume";
+        const volumeValue = room?.state === "SPAWNING"
+          ? (inflow24hSol > 0 ? `${inflow24hSol.toFixed(3)} SOL` : "—")
+          : (volume24hUsd > 0 ? fmtUsd(volume24hUsd) : "—");
+
+        topStats.innerHTML = `
+          <div class="roomChartTopStat"><div class="label">Current${spawningLabel}</div><div class="value">${formatChartMetricValue(displayCurrent)}</div></div>
+          <div class="roomChartTopStat"><div class="label">24h Change</div><div class="value ${change24h>0?"up":(change24h<0?"down":"")}">${signArrow(change24h)}</div></div>
+          <div class="roomChartTopStat"><div class="label">${volumeLabel}</div><div class="value">${volumeValue}</div></div>
+          <div class="roomChartTopStat"><div class="label">ATH${spawningLabel}</div><div class="value">${formatChartMetricValue(athDisplay)}</div></div>
+        `;
+      }
+    }
+
+    function bindRoomChartControls(){
+      document.querySelectorAll(".chartTfBtn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const tf = String(btn.getAttribute("data-tf") || "1m");
+          if(!ROOM_CHART_TF_SECONDS[tf]) return;
+          roomChartUi.timeframe = tf;
+          setActiveChartButton(".chartTfBtn", tf, "data-tf");
+          if(activeRoomId) renderRoom(activeRoomId);
+        });
+      });
+
+      document.querySelectorAll("[data-chart-metric]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const metric = String(btn.getAttribute("data-chart-metric") || "mcap");
+          roomChartUi.metric = metric === "price" ? "price" : "mcap";
+          setActiveChartButton("[data-chart-metric]", roomChartUi.metric, "data-chart-metric");
+          if(activeRoomId) renderRoom(activeRoomId);
+        });
+      });
+
+      document.querySelectorAll("[data-chart-denom]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const denom = String(btn.getAttribute("data-chart-denom") || "usd");
+          roomChartUi.denom = denom === "sol" ? "sol" : "usd";
+          setActiveChartButton("[data-chart-denom]", roomChartUi.denom, "data-chart-denom");
+          if(activeRoomId) renderRoom(activeRoomId);
+        });
+      });
     }
 
 
@@ -3355,6 +3628,7 @@ if(connectBtn){
     $("searchInput").addEventListener("keydown", (e) => {
       if(e.key === "Enter"){ e.preventDefault(); runExploreSearch(); }
     });
+    bindRoomChartControls();
 
     async function createCoinFromForm(){
       if(!connectedWallet) return showToast("connect wallet first.");
