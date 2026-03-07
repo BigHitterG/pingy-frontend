@@ -973,6 +973,19 @@ const $ = (id) => document.getElementById(id);
       });
     }
 
+    function ensureSequentialCandleTimes(candles, minTime = 0){
+      let previousTime = Math.max(0, Number(minTime || 0) - 60);
+      return (candles || []).map((candle) => {
+        const originalTime = Number(candle?.time || 0);
+        const nextTime = Math.max(originalTime, previousTime + 60, Number(minTime || 0));
+        previousTime = nextTime;
+        return {
+          ...candle,
+          time: nextTime,
+        };
+      });
+    }
+
     function renderRoomChart(room){
       const status = $("roomChartStatus");
       const chart = ensureRoomChart();
@@ -1000,47 +1013,14 @@ const $ = (id) => document.getElementById(id);
       const isSpawning = room?.state === "SPAWNING";
       let bondCandles = candles.map((candle) => ({ ...candle }));
 
-      if(!isSpawning){
-        const launchTail = launchData.length ? Number(launchData[launchData.length - 1]?.value || 0) : 0;
-        const currentMarketCap = Number(room?.market_cap_usd || 0);
-        const anchorValue = Math.max(launchTail, currentMarketCap);
-        const firstCandle = candles.length ? candles[0] : null;
-        const needsAnchor = anchorValue > 0 && (!firstCandle || Number(firstCandle.close || 0) <= 0);
-        if(needsAnchor){
-          const fallbackTime = launchData.length
-            ? Number(launchData[launchData.length - 1].time || 0)
-            : Math.max(0, Math.floor(Date.now() / 1000) - 60);
-          const anchorTime = firstCandle
-            ? Math.max(0, Number(firstCandle.time || 0) - 60)
-            : fallbackTime;
-          bondCandles.unshift({
-            time: anchorTime,
-            open: anchorValue,
-            high: anchorValue,
-            low: anchorValue,
-            close: anchorValue,
-          });
-        }
-      }
-
       if(spawnCandles.length && bondCandles.length){
         const lastSpawnTime = Number(spawnCandles[spawnCandles.length - 1].time || 0);
-        const minBondTime = lastSpawnTime + 60;
-        let previousTime = minBondTime - 60;
-        bondCandles = bondCandles.map((candle) => {
-          const originalTime = Number(candle.time || 0);
-          const nextTime = Math.max(originalTime, previousTime + 60, minBondTime);
-          previousTime = nextTime;
-          return {
-            ...candle,
-            time: nextTime,
-          };
-        });
+        bondCandles = ensureSequentialCandleTimes(bondCandles, lastSpawnTime + 60);
       }
 
-      const activeCandles = isSpawning
-        ? spawnCandles
-        : [...spawnCandles, ...bondCandles];
+      const lifecycleCandles = [...spawnCandles, ...bondCandles]
+        .sort((a, b) => Number(a.time || 0) - Number(b.time || 0));
+      const activeCandles = isSpawning ? spawnCandles : lifecycleCandles;
 
       if(roomCandlesSeries) roomCandlesSeries.setData(activeCandles);
       if(roomLaunchTargetSeries){
