@@ -84,6 +84,7 @@ const $ = (id) => document.getElementById(id);
 
     const DEV_SIMULATION = !!(window?.location?.hostname === "localhost" || window?.location?.hostname === "127.0.0.1" || window?.location?.hostname === "0.0.0.0" || window?.location?.hostname?.endsWith?.(".local") || window?.location?.search?.includes("devsim=1"));
     const DEV_SIM_DEFAULT_SEED = 1337;
+    const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
 
 
     let homeView;
@@ -1702,6 +1703,13 @@ const $ = (id) => document.getElementById(id);
       return sendProgramInstructions([ix]);
     }
 
+    async function deriveAssociatedTokenAddress(owner, mint){
+      return PublicKey.findProgramAddress(
+        [owner.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mint.toBuffer()],
+        ASSOCIATED_TOKEN_PROGRAM_ID,
+      );
+    }
+
     async function pingDepositTx(roomId, amountLamports){
       const rid = String(roomId || "");
       const lamports = Number(amountLamports);
@@ -1958,6 +1966,45 @@ const $ = (id) => document.getElementById(id);
       ];
 
       const data = concatBytes(await anchorDiscriminator("execute_spawn"), encodeStringArg(rid));
+      return sendProgramInstruction(new TransactionInstruction({ programId: PROGRAM_ID, keys, data }));
+    }
+
+    async function buyTx(roomId, amountLamports){
+      const rid = String(roomId || "");
+      const lamports = Number(amountLamports);
+      if(!Number.isInteger(lamports) || lamports <= 0){
+        throw new Error("amountLamports must be a positive integer");
+      }
+      const userPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
+      const [threadPda] = await deriveThreadPda(rid);
+      const [curvePda] = await deriveCurvePda(rid);
+      const [curveAuthorityPda] = await deriveCurveAuthorityPda(rid);
+      const [mintPda] = await deriveMintPda(rid);
+      const [curveTokenVaultPda] = await deriveCurveTokenVaultPda(rid);
+      const [userTokenAta] = await deriveAssociatedTokenAddress(userPk, mintPda);
+      const [spawnPoolPda] = await deriveSpawnPoolPda(rid);
+      const [feeVaultPda] = await deriveFeeVaultPda();
+
+      const keys = [
+        { pubkey: userPk, isSigner: true, isWritable: true },
+        { pubkey: threadPda, isSigner: false, isWritable: false },
+        { pubkey: curvePda, isSigner: false, isWritable: true },
+        { pubkey: curveAuthorityPda, isSigner: false, isWritable: false },
+        { pubkey: mintPda, isSigner: false, isWritable: true },
+        { pubkey: curveTokenVaultPda, isSigner: false, isWritable: true },
+        { pubkey: userTokenAta, isSigner: false, isWritable: true },
+        { pubkey: spawnPoolPda, isSigner: false, isWritable: true },
+        { pubkey: feeVaultPda, isSigner: false, isWritable: true },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      ];
+
+      const data = concatBytes(
+        await anchorDiscriminator("buy"),
+        encodeStringArg(rid),
+        encodeU64Arg(lamports)
+      );
       return sendProgramInstruction(new TransactionInstruction({ programId: PROGRAM_ID, keys, data }));
     }
 
@@ -5000,37 +5047,51 @@ if(connectBtn){
         maybeAdvance(r);
 
       } else if(r.state === "BONDING") {
-        r.positions[connectedWallet] = r.positions[connectedWallet] || {escrow_sol:0, net_sol_in:0, spawn_tokens:0, token_balance:0};
-        const buyFee = applyTradingFeeToBuySol(solAmount);
-        const buy = applyCurveBuy(buyFee.netSol, r.curve_state || makeCurveState());
-        r.curve_state = buy.next;
-        r.positions[connectedWallet].token_balance = Number(r.positions[connectedWallet].token_balance || 0) + buy.tokensOut;
-        r.positions[connectedWallet].net_sol_in = Number(r.positions[connectedWallet].net_sol_in || 0) + buyFee.grossSol;
-        r.protocol_fees_sol = Number(r.protocol_fees_sol || 0) + buyFee.feeSol;
-        console.debug("[ping-debug] protocol fee accrual (buy)", { roomId: r.id, tradeFeeSol: buyFee.feeSol, protocolFeesSol: r.protocol_fees_sol });
-        syncRoomMarketCap(r);
-        appendBondingTradeEvent(r, {
-          ts: nowStamp(),
-          wallet: connectedWallet,
-          side: "buy",
-          gross_sol: buyFee.grossSol,
-          fee_sol: buyFee.feeSol,
-          net_sol: buyFee.netSol,
-          tokens_out: buy.tokensOut,
-          price_after: curvePrice(r.curve_state),
-          market_cap_after: Number(r.market_cap_usd || 0),
-        });
-        nudgeChange(r, Math.random()*3);
+        if(shouldUseOnchain()){
+          const amountLamports = Math.round(solAmount * LAMPORTS_PER_SOL);
+          if(!Number.isInteger(amountLamports) || amountLamports <= 0) return alert("enter at least 1 lamport.");
+          try {
+            await buyTx(rid, amountLamports);
+          } catch(e){
+            reportTxError(e, "buy transaction failed");
+            return;
+          }
+          state.chat[r.id] = state.chat[r.id] || [];
+          state.chat[r.id].push({ ts: nowStamp(), wallet: "SYSTEM", text:`@${shortWallet(connectedWallet)} submitted a buy tx on-chain (${solAmount.toFixed(3)} SOL).`, kind: "system_activity" });
+        } else {
+          r.positions[connectedWallet] = r.positions[connectedWallet] || {escrow_sol:0, net_sol_in:0, spawn_tokens:0, token_balance:0};
+          const buyFee = applyTradingFeeToBuySol(solAmount);
+          const buy = applyCurveBuy(buyFee.netSol, r.curve_state || makeCurveState());
+          r.curve_state = buy.next;
+          r.positions[connectedWallet].token_balance = Number(r.positions[connectedWallet].token_balance || 0) + buy.tokensOut;
+          r.positions[connectedWallet].net_sol_in = Number(r.positions[connectedWallet].net_sol_in || 0) + buyFee.grossSol;
+          r.protocol_fees_sol = Number(r.protocol_fees_sol || 0) + buyFee.feeSol;
+          console.debug("[ping-debug] protocol fee accrual (buy)", { roomId: r.id, tradeFeeSol: buyFee.feeSol, protocolFeesSol: r.protocol_fees_sol });
+          syncRoomMarketCap(r);
+          appendBondingTradeEvent(r, {
+            ts: nowStamp(),
+            wallet: connectedWallet,
+            side: "buy",
+            gross_sol: buyFee.grossSol,
+            fee_sol: buyFee.feeSol,
+            net_sol: buyFee.netSol,
+            tokens_out: buy.tokensOut,
+            price_after: curvePrice(r.curve_state),
+            market_cap_after: Number(r.market_cap_usd || 0),
+          });
+          nudgeChange(r, Math.random()*3);
 
-        maybeAdvance(r);
+          maybeAdvance(r);
 
-        state.chat[r.id] = state.chat[r.id] || [];
-        state.chat[r.id].push({ ts: nowStamp(), wallet: connectedWallet, text:`bought ${buy.tokensOut.toFixed(3)} tokens for ${buyFee.grossSol.toFixed(3)} SOL gross (${buyFee.feeSol.toFixed(3)} fee, ${buyFee.netSol.toFixed(3)} net to curve).`, kind: "activity" });
+          state.chat[r.id] = state.chat[r.id] || [];
+          state.chat[r.id].push({ ts: nowStamp(), wallet: connectedWallet, text:`bought ${buy.tokensOut.toFixed(3)} tokens for ${buyFee.grossSol.toFixed(3)} SOL gross (${buyFee.feeSol.toFixed(3)} fee, ${buyFee.netSol.toFixed(3)} net to curve).`, kind: "activity" });
+        }
       }
 
       closeModal($("pingBack"));
       await fetchRoomOnchainSnapshot(rid);
       await fetchConnectedWalletDepositSnapshot();
+      if(connectedWallet) await fetchWalletBalancesSnapshot(connectedWallet);
       renderRoom(rid);
       r._pulseUntil = Date.now() + 900;
       r._lastActivity = Date.now();

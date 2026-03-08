@@ -413,6 +413,78 @@
           "type": "string"
         }
       ]
+    },
+    {
+      "name": "buy",
+      "discriminator": [
+        102,
+        6,
+        61,
+        18,
+        1,
+        218,
+        235,
+        234
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "thread"
+        },
+        {
+          "name": "curve",
+          "writable": true
+        },
+        {
+          "name": "curveAuthority"
+        },
+        {
+          "name": "mint",
+          "writable": true
+        },
+        {
+          "name": "curveTokenVault",
+          "writable": true
+        },
+        {
+          "name": "userTokenAccount",
+          "writable": true
+        },
+        {
+          "name": "spawnPool",
+          "writable": true
+        },
+        {
+          "name": "feeVault",
+          "writable": true
+        },
+        {
+          "name": "tokenProgram",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "associatedTokenProgram",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "threadId",
+          "type": "string"
+        },
+        {
+          "name": "amountLamports",
+          "type": "u64"
+        }
+      ]
     }
   ],
   "accounts": [
@@ -796,6 +868,41 @@
           "index": false
         }
       ]
+    },
+    {
+      "name": "buyExecuted",
+      "fields": [
+        {
+          "name": "threadId",
+          "type": "string",
+          "index": false
+        },
+        {
+          "name": "user",
+          "type": "pubkey",
+          "index": false
+        },
+        {
+          "name": "grossSol",
+          "type": "u64",
+          "index": false
+        },
+        {
+          "name": "feeSol",
+          "type": "u64",
+          "index": false
+        },
+        {
+          "name": "netSol",
+          "type": "u64",
+          "index": false
+        },
+        {
+          "name": "tokensOut",
+          "type": "u64",
+          "index": false
+        }
+      ]
     }
   ],
   "errors": [
@@ -928,6 +1035,11 @@
       "code": 6025,
       "name": "InvalidCurveState",
       "msg": "Curve state does not allow this operation"
+    },
+    {
+      "code": 6026,
+      "name": "InsufficientSpawnPoolBalance",
+      "msg": "Spawn pool has insufficient available lamports"
     }
   ]
 }
