@@ -1987,6 +1987,35 @@ const $ = (id) => document.getElementById(id);
       return sendProgramInstruction(new TransactionInstruction({ programId: PROGRAM_ID, keys, data }));
     }
 
+    async function claimSpawnTokensTx(roomId){
+      const rid = String(roomId || "");
+      const userPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
+      const [threadPda] = await deriveThreadPda(rid);
+      const [curvePda] = await deriveCurvePda(rid);
+      const [depositPda] = await deriveDepositPda(rid, userPk);
+      const [curveAuthorityPda] = await deriveCurveAuthorityPda(rid);
+      const [mintPda] = await deriveMintPda(rid);
+      const [curveTokenVaultPda] = await deriveCurveTokenVaultPda(rid);
+      const [userTokenAta] = await deriveAssociatedTokenAddress(userPk, mintPda);
+
+      const keys = [
+        { pubkey: userPk, isSigner: true, isWritable: true },
+        { pubkey: threadPda, isSigner: false, isWritable: false },
+        { pubkey: curvePda, isSigner: false, isWritable: false },
+        { pubkey: depositPda, isSigner: false, isWritable: true },
+        { pubkey: curveAuthorityPda, isSigner: false, isWritable: false },
+        { pubkey: mintPda, isSigner: false, isWritable: false },
+        { pubkey: curveTokenVaultPda, isSigner: false, isWritable: true },
+        { pubkey: userTokenAta, isSigner: false, isWritable: true },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      ];
+
+      const data = concatBytes(await anchorDiscriminator("claim_spawn_tokens"), encodeStringArg(rid));
+      return sendProgramInstruction(new TransactionInstruction({ programId: PROGRAM_ID, keys, data }));
+    }
+
     async function buyTx(roomId, amountLamports){
       const rid = String(roomId || "");
       const lamports = Number(amountLamports);
@@ -2082,6 +2111,58 @@ const $ = (id) => document.getElementById(id);
         return false;
       } finally {
         room._spawnExecInFlight = false;
+      }
+    }
+
+    function isSpawnClosed(room){
+      if(!room) return false;
+
+      // UI state already reflects spawn completion
+      if(room.state === "BONDING" || room.state === "BONDED") return true;
+
+      // fallback to onchain thread state
+      const spawnState =
+        room?.onchain?.spawnState ??
+        room?.onchain?.spawn_state ??
+        null;
+
+      return Number(spawnState) === 1;
+    }
+
+    function connectedWalletUnclaimedSpawnAllocation(room){
+      if(!room || !connectedWallet) return { hasClaimable: false, claimableTokens: 0, allocation: 0, claimed: 0 };
+      const row = room?.onchain?.byWallet?.[connectedWallet] || {};
+      const allocation = Number(row.spawn_token_allocation || 0);
+      const claimed = Number(row.spawn_tokens_claimed || 0);
+      const claimableTokens = Math.max(0, allocation - claimed);
+      return {
+        hasClaimable: claimableTokens > 0,
+        claimableTokens,
+        allocation,
+        claimed,
+      };
+    }
+
+    async function claimConnectedWalletSpawnTokens(room){
+      if(!room || !connectedWallet) return false;
+      if(room._spawnClaimInFlight) return false;
+      room._spawnClaimInFlight = true;
+      try {
+        await claimSpawnTokensTx(room.id);
+        await Promise.all([
+          fetchRoomOnchainSnapshot(room.id),
+          fetchConnectedWalletDepositSnapshot(),
+        ]);
+        addSystemEvent(room.id, `@${shortWallet(connectedWallet)} claimed spawn tokens.`);
+        showToast("claim successful");
+        renderRoom(room.id);
+        renderHome();
+        return true;
+      } catch(e){
+        reportTxError(e, "claim spawn tokens transaction failed");
+        return false;
+      } finally {
+        room._spawnClaimInFlight = false;
       }
     }
 
@@ -2196,6 +2277,8 @@ const $ = (id) => document.getElementById(id);
           allocated_sol: allocatedSol,
           withdrawable_sol: withdrawableSol,
           escrow_sol: allocatedSol,
+          spawn_token_allocation: Number(deposit.spawn_token_allocation || 0),
+          spawn_tokens_claimed: Number(deposit.spawn_tokens_claimed || 0),
           deposit_pda: acct.pubkey.toBase58()
         };
 
@@ -4969,6 +5052,37 @@ if(connectBtn){
         if(progressLine) progressLine.textContent = `trading fee: ${POST_SPAWN_TRADING_FEE_BPS / 100}% applied to bonding buys/sells`;
       }
 
+      const spawnSuccessPanel = $("spawnSuccessPanel");
+      const spawnSuccessTitle = $("spawnSuccessTitle");
+      const spawnSuccessText = $("spawnSuccessText");
+      const spawnSuccessActions = $("spawnSuccessActions");
+      const claimSpawnBtn = $("claimSpawnBtn");
+      const spawnClosed = isSpawnClosed(r);
+      const claimState = connectedWalletUnclaimedSpawnAllocation(r);
+      if(spawnSuccessPanel){
+        spawnSuccessPanel.style.display = spawnClosed ? "block" : "none";
+      }
+      if(spawnClosed){
+        if(spawnSuccessTitle) spawnSuccessTitle.textContent = "Spawn successful. Token is now live.";
+        if(spawnSuccessText){
+          spawnSuccessText.textContent = claimState.hasClaimable
+            ? `You have ${Math.round(claimState.claimableTokens).toLocaleString()} spawn tokens ready to claim.`
+            : "Spawn completed. If you participated in the spawn, you may have tokens to claim.";
+          if(!connectedWallet){
+            spawnSuccessText.textContent =
+              "Spawn successful. Connect wallet to check claimable spawn tokens.";
+          }
+        }
+        if(spawnSuccessActions){
+          const canClaimNow = !!connectedWallet && claimState.hasClaimable;
+          spawnSuccessActions.style.display = canClaimNow ? "flex" : "none";
+          if(claimSpawnBtn){
+            claimSpawnBtn.disabled = !canClaimNow || !!r._spawnClaimInFlight;
+            claimSpawnBtn.textContent = r._spawnClaimInFlight ? "claiming…" : "Claim tokens";
+          }
+        }
+      }
+
       const me =
         (r.state === "SPAWNING")
           ? `you: ${myEscrow(roomId).toFixed(3)} SOL escrow`
@@ -5117,6 +5231,14 @@ if(connectBtn){
       openModal($("unpingBack"));
     }
     $("pingBtn").addEventListener("click", () => openPingModal(activeRoomId));
+    const claimSpawnBtn = $("claimSpawnBtn");
+    if(claimSpawnBtn){
+      claimSpawnBtn.addEventListener("click", async () => {
+        const r = roomById(activeRoomId);
+        if(!r) return;
+        await claimConnectedWalletSpawnTokens(r);
+      });
+    }
     $("pingAmount").addEventListener("input", () => updatePingAllocationHint(modalRoomId || activeRoomId));
     $("pingMaxBtn").addEventListener("click", () => {
       const maxLamports = Number(state.maxPingLamports || 0);
