@@ -2405,6 +2405,8 @@ const $ = (id) => document.getElementById(id);
             refundable_sol: refundableSol,
             allocated_sol: allocatedSol,
             withdrawable_sol: refundableSol + allocatedSol,
+            spawn_token_allocation: Number(deposit.spawn_token_allocation || 0),
+            spawn_tokens_claimed: Number(deposit.spawn_tokens_claimed || 0),
             deposit_pda: acct.pubkey.toBase58(),
           };
         }
@@ -2480,6 +2482,49 @@ const $ = (id) => document.getElementById(id);
       });
       state.walletBalancesMeta[wallet] = { ...meta, inflight };
       return inflight;
+    }
+
+    function getWalletSpawnAllocations(wallet, snapshot){
+      if(!wallet) return [];
+      const rowsByRoomId = new Map();
+
+      const depositsByThread = snapshot?.depositsByThread || {};
+      Object.values(depositsByThread).forEach((deposit) => {
+        const allocation = Number(deposit.spawn_token_allocation || 0);
+        const claimed = Number(deposit.spawn_tokens_claimed || 0);
+        if(allocation <= 0 && claimed <= 0) return;
+        const room = roomById(deposit.threadId);
+        rowsByRoomId.set(deposit.threadId, {
+          roomId: deposit.threadId,
+          roomName: room?.name || deposit.threadId,
+          roomTicker: room?.ticker || "",
+          allocation,
+          claimed,
+          claimable: Math.max(0, allocation - claimed),
+        });
+      });
+
+      const rows = [];
+      state.rooms.forEach((room) => {
+        const onchain = room?.onchain || state.onchain?.[room.id] || null;
+        const byWallet = onchain?.byWallet || {};
+        const entry = byWallet[wallet] || null;
+        if(!entry) return;
+        const allocation = Number(entry.spawn_token_allocation || 0);
+        const claimed = Number(entry.spawn_tokens_claimed || 0);
+        if(allocation <= 0 && claimed <= 0) return;
+        rowsByRoomId.set(room.id, {
+          roomId: room.id,
+          roomName: room.name,
+          roomTicker: room.ticker,
+          allocation,
+          claimed,
+          claimable: Math.max(0, allocation - claimed),
+        });
+      });
+      rowsByRoomId.forEach((row) => rows.push(row));
+      rows.sort((a, b) => (b.claimable - a.claimable) || (b.allocation - a.allocation));
+      return rows;
     }
 
     // Example already spawned + bonding
@@ -4259,52 +4304,144 @@ if(connectBtn){
           });
         }
 
-        const tokenHeader = document.createElement("div");
-        tokenHeader.className = "muted tiny";
-        tokenHeader.textContent = "Tokens";
-        sections.appendChild(tokenHeader);
+        const spawnHeader = document.createElement("div");
+        spawnHeader.className = "muted tiny";
+        spawnHeader.textContent = "Spawn allocations";
+        sections.appendChild(spawnHeader);
 
-        const tokens = snapshot.tokenBalances || [];
-        if(!tokens.length){
+        const spawnAllocations = getWalletSpawnAllocations(wallet, snapshot);
+        if(!spawnAllocations.length){
           const none = document.createElement("div");
           none.className = "muted tiny";
-          none.textContent = "no SPL tokens";
+          none.textContent = "no spawn allocations";
           sections.appendChild(none);
         } else {
-          tokens.forEach((token) => {
-            const room = token.roomId ? roomById(token.roomId) : null;
+          spawnAllocations.forEach((allocationRow) => {
             const row = document.createElement("div");
             row.className = "btn subtle profileTabRow";
-            const left = document.createElement("span");
-            left.innerHTML = `${escapeText(room ? `${room.name} $${room.ticker}` : shortWallet(token.mint))} <span class="muted tiny">${Number(token.amount || 0).toLocaleString()}</span>`;
+            const left = document.createElement("div");
+            left.style.display = "flex";
+            left.style.flexDirection = "column";
+            left.style.gap = "2px";
+            const line1 = document.createElement("span");
+            line1.innerHTML = `${escapeText(allocationRow.roomName)} <span class="muted">$${escapeText(allocationRow.roomTicker)}</span>`;
+            const line2 = document.createElement("span");
+            line2.className = "muted tiny";
+            line2.textContent = `${Math.round(allocationRow.claimable).toLocaleString()} claimable • ${Math.round(allocationRow.claimed).toLocaleString()} claimed`;
+            left.appendChild(line1);
+            left.appendChild(line2);
             row.appendChild(left);
-            if(room){
+
+            if(allocationRow.claimable > 0){
               const right = document.createElement("span");
               right.style.display = "inline-flex";
               right.style.gap = "6px";
               const openBtn = document.createElement("button");
               openBtn.className = "btn subtle small";
               openBtn.type = "button";
-              openBtn.textContent = "open";
+              openBtn.textContent = "open room";
               openBtn.addEventListener("click", (e) => {
                 e.stopPropagation();
-                navigateHash("room/" + encodeURIComponent(room.id));
+                navigateHash("room/" + encodeURIComponent(allocationRow.roomId));
               });
               right.appendChild(openBtn);
-              const sellBtn = document.createElement("button");
-              sellBtn.className = "btn subtle small";
-              sellBtn.type = "button";
-              sellBtn.textContent = "sell";
-              sellBtn.addEventListener("click", (e) => {
-                e.stopPropagation();
-                navigateHash("room/" + encodeURIComponent(room.id));
-                setTimeout(() => openUnpingModal(room.id), 0);
-              });
-              right.appendChild(sellBtn);
               row.appendChild(right);
             }
+
             sections.appendChild(row);
           });
+        }
+
+        const tokens = snapshot.tokenBalances || [];
+        const pingyTokens = tokens.filter((token) => !!token.roomId);
+        const otherTokens = tokens.filter((token) => !token.roomId);
+
+        const pingyHeader = document.createElement("div");
+        pingyHeader.className = "muted tiny";
+        pingyHeader.textContent = "Pingy tokens";
+        sections.appendChild(pingyHeader);
+
+        if(!pingyTokens.length){
+          const none = document.createElement("div");
+          none.className = "muted tiny";
+          none.textContent = "no Pingy tokens";
+          sections.appendChild(none);
+        } else {
+          pingyTokens.forEach((token) => {
+            const room = roomById(token.roomId);
+            const row = document.createElement("div");
+            row.className = "btn subtle profileTabRow";
+            const left = document.createElement("span");
+            left.innerHTML = `${escapeText(room ? `${room.name} $${room.ticker}` : shortWallet(token.mint))} <span class="muted tiny">${Number(token.amount || 0).toLocaleString()}</span>`;
+            row.appendChild(left);
+            const right = document.createElement("span");
+            right.style.display = "inline-flex";
+            right.style.gap = "6px";
+            const openBtn = document.createElement("button");
+            openBtn.className = "btn subtle small";
+            openBtn.type = "button";
+            openBtn.textContent = "open";
+            openBtn.addEventListener("click", (e) => {
+              e.stopPropagation();
+              navigateHash("room/" + encodeURIComponent(room.id));
+            });
+            right.appendChild(openBtn);
+            const sellBtn = document.createElement("button");
+            sellBtn.className = "btn subtle small";
+            sellBtn.type = "button";
+            sellBtn.textContent = "sell";
+            sellBtn.addEventListener("click", (e) => {
+              e.stopPropagation();
+              navigateHash("room/" + encodeURIComponent(room.id));
+              setTimeout(() => openUnpingModal(room.id), 0);
+            });
+            right.appendChild(sellBtn);
+            row.appendChild(right);
+            sections.appendChild(row);
+          });
+        }
+
+        const otherHeader = document.createElement("div");
+        otherHeader.className = "muted tiny";
+        otherHeader.textContent = "Other SPL tokens";
+        sections.appendChild(otherHeader);
+
+        if(!otherTokens.length){
+          const none = document.createElement("div");
+          none.className = "muted tiny";
+          none.textContent = "no other SPL tokens";
+          sections.appendChild(none);
+        } else {
+          const maxVisible = 5;
+          let expanded = false;
+          const wrapper = document.createElement("div");
+          const toggleBtn = document.createElement("button");
+          toggleBtn.className = "btn subtle small";
+          toggleBtn.type = "button";
+          const renderOther = () => {
+            wrapper.innerHTML = "";
+            const visible = expanded ? otherTokens : otherTokens.slice(0, maxVisible);
+            visible.forEach((token) => {
+              const row = document.createElement("div");
+              row.className = "btn subtle profileTabRow";
+              row.innerHTML = `<span>${escapeText(shortWallet(token.mint))} <span class="muted tiny">${Number(token.amount || 0).toLocaleString()}</span></span>`;
+              wrapper.appendChild(row);
+            });
+            if(otherTokens.length > maxVisible){
+              toggleBtn.textContent = expanded
+                ? "other wallet tokens ▾"
+                : `other wallet tokens ▸ (${otherTokens.length})`;
+            }
+          };
+          if(otherTokens.length > maxVisible){
+            toggleBtn.addEventListener("click", () => {
+              expanded = !expanded;
+              renderOther();
+            });
+            sections.appendChild(toggleBtn);
+          }
+          renderOther();
+          sections.appendChild(wrapper);
         }
 
         content.innerHTML = "";
