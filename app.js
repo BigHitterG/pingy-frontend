@@ -4708,6 +4708,40 @@ if(connectBtn){
       const isAdmin = !!threadAdminPubkey && !!walletPubkey && toBase58String(threadAdminPubkey) === toBase58String(walletPubkey);
       const canModerateApprovals = isApprover(r, connectedWallet);
 
+      const launchTrustLines = $("launchTrustLines");
+      if(launchTrustLines){
+        const launchTypeLabel = roomLaunchMode(r) === "instant" ? "Instant" : "Spawn";
+        const approvedCountRaw = Number(r?.onchain?.approved_count);
+        const approvedCount = Number.isFinite(approvedCountRaw) && approvedCountRaw >= 0
+          ? approvedCountRaw
+          : Number((snapshot.approvedWallets || []).length || 0);
+        const requiredWalletsRaw = Number(minApprovedWalletsRequired(r));
+        const requiredWallets = Number.isFinite(requiredWalletsRaw) && requiredWalletsRaw > 0 ? requiredWalletsRaw : null;
+        const maxWalletSharePctRaw = Number(roomMaxWalletShareBps(r));
+        const maxWalletSharePct = Number.isFinite(maxWalletSharePctRaw) && maxWalletSharePctRaw > 0
+          ? (maxWalletSharePctRaw / 100).toFixed(1)
+          : null;
+        const creatorCommit = Number(creatorCommitSol(r));
+        const creatorCommitLine = creatorCommit > 0 ? `${creatorCommit.toFixed(3)} SOL` : "—";
+        const approverCount = Number((approvers || []).length || 0);
+
+        const lines = [];
+        if(requiredWallets !== null) lines.push(`<div>Approved wallets: ${approvedCount} / ${requiredWallets}</div>`);
+        else lines.push(`<div>Approved wallets: ${approvedCount} / —</div>`);
+        if(maxWalletSharePct !== null){
+          const shareLabel = r.state === "BONDING" || r.state === "BONDED"
+            ? "Max wallet share (formation)"
+            : "Max wallet share";
+          lines.push(`<div>${shareLabel}: ${maxWalletSharePct}%</div>`);
+        } else {
+          lines.push(`<div>Max wallet share: —</div>`);
+        }
+        lines.push(`<div>Creator commit: ${creatorCommitLine}</div>`);
+        lines.push(`<div>Approver count: ${approverCount > 0 ? approverCount : "—"}</div>`);
+        lines.push(`<div>Launch type: ${launchTypeLabel}</div>`);
+        launchTrustLines.innerHTML = lines.join("");
+      }
+
       const pendingList = $("pendingList");
       const pingersList = $("pingersList");
       const approversList = $("approversList");
