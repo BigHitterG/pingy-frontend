@@ -256,7 +256,7 @@ const $ = (id) => document.getElementById(id);
 
     function primaryActionForRoom(room){
       if(room?.state === "BONDING") return { label: "buy", opensTrade: true };
-      if(room?.state === "BONDED") return { label: "view", opensTrade: false };
+      if(room?.state === "BONDED") return { label: "graduated", opensTrade: false };
       return { label: "ping", opensTrade: true };
     }
 
@@ -3873,7 +3873,11 @@ if(connectBtn){
       const chip = `${phaseLabel} • ${roomLaunchLabel(r)}`;
       const athRatio = p;
       const isHotBonding = r.state === "BONDING" && athRatio >= 0.9;
+      const isBonded = r.state === "BONDED";
       const barClass = isHotBonding ? "bar barActive barBonding barHot" : "bar barActive barBonding";
+      const subline = isBonded
+        ? "Graduated from bonding"
+        : escapeText(r.desc || "—");
 
       return `
         <div class="cardGrid">
@@ -3881,9 +3885,9 @@ if(connectBtn){
           <div style="min-width:0;">
             <div class="row" style="justify-content:space-between;align-items:baseline;">
               <div class="name">${escapeText(r.name)} <span class="k">$${escapeText(r.ticker)}</span></div>
-              <span class="k">${chip}</span>
+              <span class="k">${chip}${isBonded ? " • graduated" : ""}</span>
             </div>
-            <div class="tiny subline">${escapeText(r.desc || "—")}</div>
+            <div class="tiny subline">${subline}</div>
             <div class="${barClass}"><i style="width:${pct}%"></i>${isHotBonding ? `<span class="barSpark"></span>` : ""}</div>
           </div>
           <div>
@@ -5314,8 +5318,8 @@ if(connectBtn){
         const progressLine = $("spawnProgressLine");
         if(progressLine) progressLine.textContent = `Bonding progress: ${reserveSol.toFixed(3)} / ${targetSol.toFixed(3)} SOL • trading fee: ${POST_SPAWN_TRADING_FEE_BPS / 100}% applied to bonding buys/sells`;
       } else {
-        phaseLabel.textContent = "BONDED • lifecycle complete";
-        statePill.textContent = visiblePhaseLabel;
+        phaseLabel.textContent = "BONDED • graduated from bonding";
+        statePill.textContent = "BONDED";
         phaseBar.style.width = "100%";
         phaseBar.style.background = "#46d36f";
         if(phaseBarWrap){
@@ -5324,7 +5328,11 @@ if(connectBtn){
           if(sparkEl) sparkEl.remove();
         }
         const progressLine = $("spawnProgressLine");
-        if(progressLine) progressLine.textContent = `trading fee: ${POST_SPAWN_TRADING_FEE_BPS / 100}% applied to bonding buys/sells`;
+        if(progressLine){
+          const reserveSol = currentBondingReserveSol(r);
+          const targetSol = graduationTargetSol(r);
+          progressLine.textContent = `Bonding target reached: ${reserveSol.toFixed(3)} / ${targetSol.toFixed(3)} SOL • post-graduation routing is the next phase`;
+        }
       }
 
       const spawnSuccessPanel = $("spawnSuccessPanel");
@@ -5338,14 +5346,22 @@ if(connectBtn){
         spawnSuccessPanel.style.display = spawnClosed ? "block" : "none";
       }
       if(spawnClosed){
-        if(spawnSuccessTitle) spawnSuccessTitle.textContent = "Spawn successful. Token is now live.";
+        if(spawnSuccessTitle){
+          spawnSuccessTitle.textContent = r.state === "BONDED"
+            ? "This coin has graduated from bonding."
+            : "Spawn successful. Token is now live.";
+        }
         if(spawnSuccessText){
-          spawnSuccessText.textContent = claimState.hasClaimable
-            ? `You have ${Math.round(claimState.claimableTokens).toLocaleString()} spawn tokens ready to claim.`
-            : "Spawn completed. If you participated in the spawn, you may have tokens to claim.";
-          if(!connectedWallet){
-            spawnSuccessText.textContent =
-              "Spawn successful. Connect wallet to check claimable spawn tokens.";
+          if(r.state === "BONDED"){
+            spawnSuccessText.textContent = "Bonding completed successfully. Post-graduation trading and routing are the next implementation step.";
+          } else {
+            spawnSuccessText.textContent = claimState.hasClaimable
+              ? `You have ${Math.round(claimState.claimableTokens).toLocaleString()} spawn tokens ready to claim.`
+              : "Spawn completed. If you participated in the spawn, you may have tokens to claim.";
+            if(!connectedWallet){
+              spawnSuccessText.textContent =
+                "Spawn successful. Connect wallet to check claimable spawn tokens.";
+            }
           }
         }
         if(spawnSuccessActions){
@@ -5369,13 +5385,17 @@ if(connectBtn){
       const unpingBtn = $("unpingBtn");
       if(pingBtn) pingBtn.textContent = r.state === "SPAWNING" ? "ping" : "buy";
       if(unpingBtn) unpingBtn.textContent = r.state === "SPAWNING" ? "unping" : "sell";
-      if(r.state === "BONDED"){
-        if(pingBtn) pingBtn.textContent = "buy unavailable";
-        if(unpingBtn) unpingBtn.textContent = "sell unavailable";
-      }
-      $("pingBtn").disabled = !connectedWallet || r.state === "BONDED" || !!(connectedWallet && r.blockedWallets && r.blockedWallets[connectedWallet]);
-      $("unpingBtn").disabled = !connectedWallet || r.state === "BONDED";
+
+      const bondedTradeLocked = r.state === "BONDED";
+
+      $("pingBtn").disabled = !connectedWallet || bondedTradeLocked || !!(connectedWallet && r.blockedWallets && r.blockedWallets[connectedWallet]);
+      $("unpingBtn").disabled = !connectedWallet || bondedTradeLocked;
       updateActionModalCopy(r);
+
+      const bondedStatusPanel = $("bondedStatusPanel");
+      const bondedStatusLine = $("bondedStatusLine");
+      if(bondedStatusPanel) bondedStatusPanel.style.display = r.state === "BONDED" ? "block" : "none";
+      if(bondedStatusLine && r.state === "BONDED") bondedStatusLine.textContent = "This coin has graduated from bonding. Post-graduation trading/routing is the next implementation step.";
 
       setComposerState(r);
       renderChat(roomId);
@@ -5414,21 +5434,25 @@ if(connectBtn){
       const unpingConfirm = $("unpingConfirm");
       const unpingAmount = $("unpingAmount");
 
-      if(pingModalTitle) pingModalTitle.textContent = isSpawning ? "ping" : "buy";
-      if(unpingModalTitle) unpingModalTitle.textContent = isSpawning ? "unping" : "sell";
+      if(pingModalTitle) pingModalTitle.textContent = isBonded ? "graduated" : (isSpawning ? "ping" : "buy");
+      if(unpingModalTitle) unpingModalTitle.textContent = isBonded ? "graduated" : (isSpawning ? "unping" : "sell");
       if(pingAmountUnit) pingAmountUnit.textContent = "SOL";
       if(unpingAmountUnit) unpingAmountUnit.textContent = isSpawning ? "SOL" : "tokens";
 
       if(pingModalHelp){
         pingModalHelp.textContent = isSpawning
           ? "During spawn, your ping funds escrow allocation. First ping may include small Solana network/storage costs and you can unping to withdraw before spawn completes."
-          : "During bonding, buys route through the bonding curve and apply the trading fee shown in room stats.";
+          : isBonded
+            ? "This coin has graduated from bonding. Post-graduation trading will be connected in the next phase."
+            : "During bonding, buys route through the bonding curve and apply the trading fee shown in room stats.";
       }
 
       if(unpingModalHelp){
         unpingModalHelp.textContent = isSpawning
           ? "During spawn, unping performs a full escrow withdraw and returns funds to your wallet (minus network fees)."
-          : "During bonding, sell an amount of tokens into the bonding curve; trading fees apply to each sell.";
+          : isBonded
+            ? "This coin has graduated from bonding. Post-graduation sell routing will be connected in the next phase."
+            : "During bonding, sell an amount of tokens into the bonding curve; trading fees apply to each sell.";
       }
 
       if(isSpawning){
@@ -5446,13 +5470,13 @@ if(connectBtn){
         if(unpingConfirm) unpingConfirm.textContent = "sell";
       } else if(isBonded){
         if(unpingAmount){
-          unpingAmount.value = "trading unavailable";
+          unpingAmount.value = "graduated";
           unpingAmount.readOnly = true;
         }
-        if(unpingConfirm) unpingConfirm.textContent = "sell unavailable";
+        if(unpingConfirm) unpingConfirm.textContent = "post-graduation routing next";
       }
 
-      if(pingConfirm) pingConfirm.textContent = isSpawning ? "ping" : "buy";
+      if(pingConfirm) pingConfirm.textContent = isBonded ? "post-graduation routing next" : (isSpawning ? "ping" : "buy");
     }
 
     function updatePingAllocationHint(roomId){
@@ -5467,8 +5491,10 @@ if(connectBtn){
       const pingConfirm = $("pingConfirm");
       if(r.state !== "SPAWNING"){
         state.maxPingLamports = 0;
-        hint.textContent = "For bonding buys, enter SOL to buy tokens from the curve.";
-        if(pingConfirm) pingConfirm.disabled = false;
+        hint.textContent = r.state === "BONDED"
+          ? "This coin has graduated from bonding. Post-graduation trading will be wired next."
+          : "For bonding buys, enter SOL to buy tokens from the curve.";
+        if(pingConfirm) pingConfirm.disabled = r.state === "BONDED";
         return;
       }
       const userDeposit = state.userEscrow || {};
@@ -5485,6 +5511,9 @@ if(connectBtn){
       const r = roomById(rid);
       if(!r) return;
       r.onchain = state.onchain?.[rid] || r.onchain || {};
+      if(r.state === "BONDED"){
+        return alert("This coin has graduated from bonding. Post-graduation buy routing will be connected in the next phase.");
+      }
       modalRoomId = rid;
       updateActionModalCopy(r);
       $("pingAmount").value = "";
@@ -5499,7 +5528,7 @@ if(connectBtn){
       const r = roomById(rid);
       if(!r) return;
       r.onchain = state.onchain?.[rid] || r.onchain || {};
-      if(r.state === "BONDED") return alert("sell is not available after bonding is complete in this mock.");
+      if(r.state === "BONDED") return alert("This coin has graduated from bonding. Post-graduation sell routing will be connected in the next phase.");
       modalRoomId = rid;
       updateActionModalCopy(r);
       $("unpingRoomLine").textContent = `coin: ${r.name}  $${r.ticker}`;
@@ -5741,7 +5770,7 @@ if(connectBtn){
           state.chat[r.id].push({ ts: nowStamp(), wallet: connectedWallet, text:`sold ${sellTokens.toFixed(3)} tokens for ${sellFee.grossSol.toFixed(3)} SOL gross (${sellFee.feeSol.toFixed(3)} fee, ${sellFee.netSol.toFixed(3)} net received).`, kind: "activity" });
         }
       } else {
-        return alert("sell is unavailable in this state.");
+        return alert("This coin has graduated from bonding. Post-graduation sell routing is part of the next phase.");
       }
 
       closeModal($("unpingBack"));
