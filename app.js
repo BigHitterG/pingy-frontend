@@ -248,10 +248,16 @@ const $ = (id) => document.getElementById(id);
     }
 
     function lifecyclePhaseLabel(state){
-      if(state === "SPAWNING") return "PING PHASE";
-      if(state === "BONDING") return "MARKET";
+      if(state === "SPAWNING") return "SPAWNING";
+      if(state === "BONDING") return "BONDING";
       if(state === "BONDED") return "BONDED";
       return state || "—";
+    }
+
+    function primaryActionForRoom(room){
+      if(room?.state === "BONDING") return { label: "buy", opensTrade: true };
+      if(room?.state === "BONDED") return { label: "view", opensTrade: false };
+      return { label: "ping", opensTrade: true };
     }
 
 
@@ -3723,11 +3729,11 @@ if(connectBtn){
               <div class="tiny subline">${escapeText(r.desc || "prespawn chat open")}</div>
               <div class="bar barActive barSpawn"><i style="width:${pct}%"></i></div>
               <div class="barRow">
-                <div class="tiny">spawn progress</div>
+                <div class="tiny">phase: ${phaseLabel}</div>
                 <div class="pct">${pct}%</div>
               </div>
               <div class="tiny muted" style="margin-top:4px;">${allocated.toFixed(3)} / ${target.toFixed(3)} SOL</div>
-              <div class="tiny muted">${approvedCount} / ${minApproved} approved wallets</div>
+              <div class="tiny muted">${approvedCount} / ${minApproved} required wallets</div>
             </div>
           </div>
         `;
@@ -3756,7 +3762,9 @@ if(connectBtn){
           </div>
           <div>
             <div class="metric">${fmtK(mc)}</div>
+            <div class="tiny muted">market cap</div>
             <div class="chg ${chgCls}">${signArrow(chg)}</div>
+            <div class="tiny muted">24h</div>
           </div>
         </div>
       `;
@@ -3767,6 +3775,7 @@ if(connectBtn){
     }
 
     function renderExploreCard(r, where){
+      const action = primaryActionForRoom(r);
       const el = document.createElement("div");
       el.className = "card";
       el.style.maxWidth = "none";
@@ -3774,7 +3783,7 @@ if(connectBtn){
       el.innerHTML = `
         ${cardInner(r)}
         <div class="row" style="justify-content:flex-end; margin-top:10px;">
-          <button class="btn subtle" data-ping="${escapeText(r.id)}">ping</button>
+          <button class="btn subtle" data-ping="${escapeText(r.id)}">${action.label}</button>
           <button class="btn subtle" title="share" data-share="${escapeText(r.id)}">↗</button>
         </div>
       `;
@@ -3784,7 +3793,7 @@ if(connectBtn){
       });
       el.querySelector("[data-ping]").addEventListener("click", () => {
         openRoom(r.id);
-        setTimeout(() => openPingModal(r.id), 0);
+        if(action.opensTrade) setTimeout(() => openPingModal(r.id), 0);
       });
       el.querySelector("[data-share]").addEventListener("click", () => openShareModal(r.id));
       where.appendChild(el);
@@ -3876,6 +3885,7 @@ if(connectBtn){
     }
 
     function updateHomeCard(el, r){
+      const action = primaryActionForRoom(r);
       const classes = ["card"];
       if(Date.now() < (r._pulseUntil||0)) classes.push("pulse");
       if(state.movers.active.has(r.id)) classes.push("isMover");
@@ -3885,7 +3895,7 @@ if(connectBtn){
       el.innerHTML = `
         ${cardInner(r)}
         <div class="row" style="justify-content:flex-end; margin-top:10px;">
-          <button class="btn subtle small" data-ping="${escapeText(r.id)}">ping</button>
+          <button class="btn subtle small" data-ping="${escapeText(r.id)}">${action.label}</button>
           <button class="btn subtle small" title="share" data-share="${escapeText(r.id)}">↗</button>
         </div>
       `;
@@ -3895,7 +3905,7 @@ if(connectBtn){
       });
       el.querySelector("[data-ping]").addEventListener("click", () => {
         openRoom(r.id);
-        setTimeout(() => openPingModal(r.id), 0);
+        if(action.opensTrade) setTimeout(() => openPingModal(r.id), 0);
       });
       el.querySelector("[data-share]").addEventListener("click", () => openShareModal(r.id));
     }
