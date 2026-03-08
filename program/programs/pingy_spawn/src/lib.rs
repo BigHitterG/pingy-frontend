@@ -6,6 +6,10 @@ declare_id!("FSvYheeHSLjU6UKqka5AnMeaPwsQBrLm8dCL4VtFpf5R");
 pub const SPAWN_FEE_BPS: u64 = 100;
 pub const BPS_DENOM: u64 = 10_000;
 pub const LAMPORTS_PER_SOL: u64 = 1_000_000_000;
+pub const TOTAL_SUPPLY: u64 = 1_000_000_000;
+pub const VIRTUAL_SOL_RESERVE_INITIAL: u64 = 30 * LAMPORTS_PER_SOL;
+pub const VIRTUAL_TOKEN_RESERVE_INITIAL: u64 = TOTAL_SUPPLY;
+pub const POST_SPAWN_TRADING_FEE_BPS: u16 = 100;
 
 pub const MIN_APPROVED_WALLETS_MIN: u32 = 10;
 pub const MIN_APPROVED_WALLETS_MAX: u32 = 50;
@@ -56,17 +60,13 @@ pub mod pingy_spawn {
 
         let curve = &mut ctx.accounts.curve;
         curve.thread_id = thread_id.clone();
-        curve.state = CurveLifecycle::PreSpawn;
+        initialize_curve_state(
+            curve,
+            TOTAL_SUPPLY,
+            POST_SPAWN_TRADING_FEE_BPS,
+            spawn_target_lamports,
+        );
         curve.mint = Pubkey::default();
-        curve.total_supply = 0;
-        curve.virtual_sol_reserve = 0;
-        curve.virtual_token_reserve = 0;
-        curve.real_sol_reserve = 0;
-        curve.real_token_reserve = 0;
-        curve.opening_buy_lamports = 0;
-        curve.opening_buy_tokens = 0;
-        curve.trade_fee_bps = 0;
-        curve.graduation_target_lamports = 0;
 
         let spawn_pool = &mut ctx.accounts.spawn_pool;
         spawn_pool.thread_id = thread_id.clone();
@@ -366,6 +366,136 @@ fn allocate_for_deposit(
         .ok_or(PingyError::AmountOverflow)?;
 
     Ok(())
+}
+
+fn initialize_curve_state(
+    curve: &mut Curve,
+    total_supply: u64,
+    trade_fee_bps: u16,
+    graduation_target_lamports: u64,
+) {
+    curve.state = CurveLifecycle::PreSpawn;
+    curve.total_supply = total_supply;
+    curve.virtual_sol_reserve = VIRTUAL_SOL_RESERVE_INITIAL;
+    curve.virtual_token_reserve = VIRTUAL_TOKEN_RESERVE_INITIAL;
+    curve.real_sol_reserve = 0;
+    curve.real_token_reserve = total_supply;
+    curve.opening_buy_lamports = 0;
+    curve.opening_buy_tokens = 0;
+    curve.trade_fee_bps = trade_fee_bps;
+    curve.graduation_target_lamports = graduation_target_lamports;
+}
+
+fn apply_trade_fee(amount: u64, fee_bps: u16) -> Result<(u64, u64)> {
+    let fee = amount
+        .checked_mul(fee_bps as u64)
+        .ok_or(PingyError::AmountOverflow)?
+        .checked_div(BPS_DENOM)
+        .ok_or(PingyError::AmountOverflow)?;
+    let net = amount
+        .checked_sub(fee)
+        .ok_or(PingyError::AccountingUnderflow)?;
+    Ok((net, fee))
+}
+
+fn curve_buy_tokens(sol_in: u64, curve: &Curve) -> Result<u64> {
+    if sol_in == 0 {
+        return Ok(0);
+    }
+
+    require!(
+        curve.virtual_sol_reserve > 0,
+        PingyError::InvalidCurveReserves
+    );
+    require!(
+        curve.virtual_token_reserve > 0,
+        PingyError::InvalidCurveReserves
+    );
+
+    let x = curve.virtual_sol_reserve as u128;
+    let y = curve.virtual_token_reserve as u128;
+    let s = sol_in as u128;
+    let k = x.checked_mul(y).ok_or(PingyError::AmountOverflow)?;
+    let next_x = x.checked_add(s).ok_or(PingyError::AmountOverflow)?;
+    let next_y = k.checked_div(next_x).ok_or(PingyError::AmountOverflow)?;
+    let tokens_out = y
+        .checked_sub(next_y)
+        .ok_or(PingyError::AccountingUnderflow)?;
+
+    u64::try_from(tokens_out).map_err(|_| error!(PingyError::AmountOverflow))
+}
+
+fn curve_sell_sol(token_in: u64, curve: &Curve) -> Result<u64> {
+    if token_in == 0 {
+        return Ok(0);
+    }
+
+    require!(
+        curve.virtual_sol_reserve > 0,
+        PingyError::InvalidCurveReserves
+    );
+    require!(
+        curve.virtual_token_reserve > 0,
+        PingyError::InvalidCurveReserves
+    );
+
+    let x = curve.virtual_sol_reserve as u128;
+    let y = curve.virtual_token_reserve as u128;
+    let t = token_in as u128;
+    let k = x.checked_mul(y).ok_or(PingyError::AmountOverflow)?;
+    let next_y = y.checked_add(t).ok_or(PingyError::AmountOverflow)?;
+    let next_x = k.checked_div(next_y).ok_or(PingyError::AmountOverflow)?;
+    let sol_out = x
+        .checked_sub(next_x)
+        .ok_or(PingyError::AccountingUnderflow)?;
+
+    u64::try_from(sol_out).map_err(|_| error!(PingyError::AmountOverflow))
+}
+
+fn apply_curve_buy(sol_in: u64, curve: &mut Curve) -> Result<u64> {
+    let tokens_out = curve_buy_tokens(sol_in, curve)?;
+
+    curve.virtual_sol_reserve = curve
+        .virtual_sol_reserve
+        .checked_add(sol_in)
+        .ok_or(PingyError::AmountOverflow)?;
+    curve.virtual_token_reserve = curve
+        .virtual_token_reserve
+        .checked_sub(tokens_out)
+        .ok_or(PingyError::AccountingUnderflow)?;
+    curve.real_sol_reserve = curve
+        .real_sol_reserve
+        .checked_add(sol_in)
+        .ok_or(PingyError::AmountOverflow)?;
+    curve.real_token_reserve = curve
+        .real_token_reserve
+        .checked_sub(tokens_out)
+        .ok_or(PingyError::AccountingUnderflow)?;
+
+    Ok(tokens_out)
+}
+
+fn apply_curve_sell(token_in: u64, curve: &mut Curve) -> Result<u64> {
+    let sol_out = curve_sell_sol(token_in, curve)?;
+
+    curve.virtual_sol_reserve = curve
+        .virtual_sol_reserve
+        .checked_sub(sol_out)
+        .ok_or(PingyError::AccountingUnderflow)?;
+    curve.virtual_token_reserve = curve
+        .virtual_token_reserve
+        .checked_add(token_in)
+        .ok_or(PingyError::AmountOverflow)?;
+    curve.real_sol_reserve = curve
+        .real_sol_reserve
+        .checked_sub(sol_out)
+        .ok_or(PingyError::AccountingUnderflow)?;
+    curve.real_token_reserve = curve
+        .real_token_reserve
+        .checked_add(token_in)
+        .ok_or(PingyError::AmountOverflow)?;
+
+    Ok(sol_out)
 }
 
 fn transfer_from_thread_escrow_to_account<'info>(
@@ -778,4 +908,118 @@ pub enum PingyError {
     SpawnTargetNotReached,
     #[msg("Minimum approved wallets requirement has not been reached")]
     MinApprovedWalletsNotReached,
+    #[msg("Curve reserves are invalid")]
+    InvalidCurveReserves,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn curve_fixture() -> Curve {
+        Curve {
+            thread_id: "thread".to_string(),
+            state: CurveLifecycle::PreSpawn,
+            mint: Pubkey::default(),
+            total_supply: TOTAL_SUPPLY,
+            virtual_sol_reserve: VIRTUAL_SOL_RESERVE_INITIAL,
+            virtual_token_reserve: VIRTUAL_TOKEN_RESERVE_INITIAL,
+            real_sol_reserve: 0,
+            real_token_reserve: TOTAL_SUPPLY,
+            opening_buy_lamports: 0,
+            opening_buy_tokens: 0,
+            trade_fee_bps: POST_SPAWN_TRADING_FEE_BPS,
+            graduation_target_lamports: SPAWN_TARGET_MIN_LAMPORTS,
+        }
+    }
+
+    #[test]
+    fn trade_fee_output_is_correct() {
+        let amount = 1_000_000_000u64;
+        let (net, fee) = apply_trade_fee(amount, POST_SPAWN_TRADING_FEE_BPS).unwrap();
+        assert_eq!(fee, 10_000_000);
+        assert_eq!(net, 990_000_000);
+    }
+
+    #[test]
+    fn apply_curve_buy_updates_reserves() {
+        let mut curve = curve_fixture();
+        let sol_in = LAMPORTS_PER_SOL;
+
+        let tokens_out = apply_curve_buy(sol_in, &mut curve).unwrap();
+
+        assert!(tokens_out > 0);
+        assert_eq!(
+            curve.virtual_sol_reserve,
+            VIRTUAL_SOL_RESERVE_INITIAL + sol_in
+        );
+        assert!(curve.virtual_token_reserve < VIRTUAL_TOKEN_RESERVE_INITIAL);
+        assert_eq!(curve.real_sol_reserve, sol_in);
+        assert_eq!(curve.real_token_reserve, TOTAL_SUPPLY - tokens_out);
+    }
+
+    #[test]
+    fn apply_curve_sell_updates_reserves() {
+        let mut curve = curve_fixture();
+        let sol_in = LAMPORTS_PER_SOL;
+        let tokens_out = apply_curve_buy(sol_in, &mut curve).unwrap();
+
+        let sol_out = apply_curve_sell(tokens_out / 2, &mut curve).unwrap();
+
+        assert!(sol_out > 0);
+        assert!(curve.virtual_sol_reserve < VIRTUAL_SOL_RESERVE_INITIAL + sol_in);
+        assert!(curve.virtual_token_reserve > VIRTUAL_TOKEN_RESERVE_INITIAL - tokens_out);
+    }
+
+    #[test]
+    fn sell_fails_when_real_sol_reserve_is_insufficient() {
+        let mut curve = curve_fixture();
+        let sol_in = LAMPORTS_PER_SOL;
+        let tokens_out = apply_curve_buy(sol_in, &mut curve).unwrap();
+        curve.real_sol_reserve = 0;
+
+        let result = apply_curve_sell(tokens_out, &mut curve);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn curve_math_is_monotonic_and_deterministic() {
+        let sol_in = 250_000_000u64;
+        let mut curve_a = curve_fixture();
+        let mut curve_b = curve_fixture();
+
+        let out_a = apply_curve_buy(sol_in, &mut curve_a).unwrap();
+        let out_b = apply_curve_buy(sol_in, &mut curve_b).unwrap();
+        assert_eq!(out_a, out_b);
+
+        let out_more = curve_buy_tokens(sol_in * 2, &curve_fixture()).unwrap();
+        assert!(out_more >= out_a);
+
+        let mut curve_sell_a = curve_fixture();
+        apply_curve_buy(sol_in, &mut curve_sell_a).unwrap();
+        let sell_a = curve_sell_sol(10_000_000, &curve_sell_a).unwrap();
+        let sell_b = curve_sell_sol(20_000_000, &curve_sell_a).unwrap();
+        assert!(sell_b >= sell_a);
+    }
+
+    #[test]
+    fn initialize_curve_state_sets_expected_defaults() {
+        let mut curve = curve_fixture();
+        curve.state = CurveLifecycle::Bonding;
+        curve.virtual_sol_reserve = 1;
+        curve.real_sol_reserve = 7;
+
+        initialize_curve_state(&mut curve, TOTAL_SUPPLY, POST_SPAWN_TRADING_FEE_BPS, 123);
+
+        assert!(matches!(curve.state, CurveLifecycle::PreSpawn));
+        assert_eq!(curve.total_supply, TOTAL_SUPPLY);
+        assert_eq!(curve.virtual_sol_reserve, VIRTUAL_SOL_RESERVE_INITIAL);
+        assert_eq!(curve.virtual_token_reserve, VIRTUAL_TOKEN_RESERVE_INITIAL);
+        assert_eq!(curve.real_sol_reserve, 0);
+        assert_eq!(curve.real_token_reserve, TOTAL_SUPPLY);
+        assert_eq!(curve.opening_buy_lamports, 0);
+        assert_eq!(curve.opening_buy_tokens, 0);
+        assert_eq!(curve.trade_fee_bps, POST_SPAWN_TRADING_FEE_BPS);
+        assert_eq!(curve.graduation_target_lamports, 123);
+    }
 }
