@@ -93,7 +93,7 @@ pub mod pingy_spawn {
         spawn_pool.thread_id = thread_id.clone();
 
         let thread_escrow = &mut ctx.accounts.thread_escrow;
-        thread_escrow.thread_id = thread_id;
+        thread_escrow.thread_id = thread_id.clone();
 
         let fee_vault = &mut ctx.accounts.fee_vault;
         if !fee_vault.initialized {
@@ -307,23 +307,28 @@ pub mod pingy_spawn {
         Ok(())
     }
 
-    pub fn execute_spawn(ctx: Context<ExecuteSpawn>, thread_id: String) -> Result<()> {
-        let thread = &mut ctx.accounts.thread;
-        require!(thread.thread_id == thread_id, PingyError::ThreadMismatch);
-        require!(
-            thread.spawn_state == SpawnState::Open,
-            PingyError::SpawnAlreadyClosed
-        );
-        require!(
-            thread.total_allocated_lamports >= thread.spawn_target_lamports,
-            PingyError::SpawnTargetNotReached
-        );
-        require!(
-            thread.approved_count >= thread.min_approved_wallets,
-            PingyError::MinApprovedWalletsNotReached
-        );
+    pub fn execute_spawn<'info>(
+        ctx: Context<'_, '_, 'info, 'info, ExecuteSpawn<'info>>,
+        thread_id: String,
+    ) -> Result<()> {
+        {
+            let thread = &ctx.accounts.thread;
+            require!(thread.thread_id == thread_id, PingyError::ThreadMismatch);
+            require!(
+                thread.spawn_state == SpawnState::Open,
+                PingyError::SpawnAlreadyClosed
+            );
+            require!(
+                thread.total_allocated_lamports >= thread.spawn_target_lamports,
+                PingyError::SpawnTargetNotReached
+            );
+            require!(
+                thread.approved_count >= thread.min_approved_wallets,
+                PingyError::MinApprovedWalletsNotReached
+            );
+        }
 
-        let use_amt = thread.spawn_target_lamports;
+        let use_amt = ctx.accounts.thread.spawn_target_lamports;
         let fee = use_amt
             .checked_mul(SPAWN_FEE_BPS)
             .ok_or(PingyError::AmountOverflow)?
@@ -359,7 +364,7 @@ pub mod pingy_spawn {
         };
 
         allocate_spawn_tokens_pro_rata(
-            thread,
+            &mut ctx.accounts.thread,
             &thread_id,
             use_amt,
             tokens_out,
@@ -377,6 +382,7 @@ pub mod pingy_spawn {
             net,
         )?;
 
+        let thread = &mut ctx.accounts.thread;
         thread.total_allocated_lamports = thread
             .total_allocated_lamports
             .checked_sub(use_amt)
