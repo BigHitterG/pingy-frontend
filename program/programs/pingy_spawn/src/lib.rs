@@ -44,6 +44,8 @@ pub mod pingy_spawn {
         thread.thread_id = thread_id.clone();
         thread.admin_pubkey = ctx.accounts.admin.key();
         thread.spawn_state = SpawnState::Open;
+        thread.curve_initialized = false;
+        thread.launch_mode = 0;
         thread.pending_count = 0;
         thread.approved_count = 0;
         thread.total_allocated_lamports = 0;
@@ -51,6 +53,20 @@ pub mod pingy_spawn {
         thread.min_approved_wallets = min_approved_wallets;
         thread.spawn_target_lamports = spawn_target_lamports;
         thread.max_wallet_share_bps = max_wallet_share_bps;
+
+        let curve = &mut ctx.accounts.curve;
+        curve.thread_id = thread_id.clone();
+        curve.state = CurveLifecycle::PreSpawn;
+        curve.mint = Pubkey::default();
+        curve.total_supply = 0;
+        curve.virtual_sol_reserve = 0;
+        curve.virtual_token_reserve = 0;
+        curve.real_sol_reserve = 0;
+        curve.real_token_reserve = 0;
+        curve.opening_buy_lamports = 0;
+        curve.opening_buy_tokens = 0;
+        curve.trade_fee_bps = 0;
+        curve.graduation_target_lamports = 0;
 
         let spawn_pool = &mut ctx.accounts.spawn_pool;
         spawn_pool.thread_id = thread_id.clone();
@@ -91,6 +107,8 @@ pub mod pingy_spawn {
                 deposit.rejected_once = false;
                 deposit.refundable_lamports = 0;
                 deposit.allocated_lamports = 0;
+                deposit.spawn_token_allocation = 0;
+                deposit.spawn_tokens_claimed = 0;
             }
             require!(
                 deposit.user_pubkey == ctx.accounts.user.key(),
@@ -396,6 +414,14 @@ pub struct InitializeThread<'info> {
     #[account(
         init,
         payer = admin,
+        space = 8 + Curve::LEN,
+        seeds = [b"curve", thread_id.as_bytes()],
+        bump
+    )]
+    pub curve: Account<'info, Curve>,
+    #[account(
+        init,
+        payer = admin,
         space = 8 + SpawnPool::LEN,
         seeds = [b"spawn_pool", thread_id.as_bytes()],
         bump
@@ -552,6 +578,8 @@ pub struct Thread {
     pub thread_id: String,
     pub admin_pubkey: Pubkey,
     pub spawn_state: SpawnState,
+    pub curve_initialized: bool,
+    pub launch_mode: u8,
     pub pending_count: u32,
     pub approved_count: u32,
     pub total_allocated_lamports: u64,
@@ -563,7 +591,7 @@ pub struct Thread {
 
 impl Thread {
     pub const MAX_THREAD_ID_LEN: usize = 64;
-    pub const LEN: usize = 4 + Self::MAX_THREAD_ID_LEN + 32 + 1 + 4 + 4 + 8 + 8 + 4 + 8 + 2;
+    pub const LEN: usize = 4 + Self::MAX_THREAD_ID_LEN + 32 + 1 + 1 + 1 + 4 + 4 + 8 + 8 + 4 + 8 + 2;
 
     fn increment_status_count(&mut self, new_status: DepositStatus) -> Result<()> {
         match new_status {
@@ -626,12 +654,30 @@ pub struct Deposit {
     pub rejected_once: bool,
     pub refundable_lamports: u64,
     pub allocated_lamports: u64,
+    pub spawn_token_allocation: u64,
+    pub spawn_tokens_claimed: u64,
 }
 
 impl Deposit {
     pub const MAX_THREAD_ID_LEN: usize = 64;
-    pub const SIZE: usize = 4 + Self::MAX_THREAD_ID_LEN + 32 + 1 + 1 + 8 + 8;
+    pub const SIZE: usize = 4 + Self::MAX_THREAD_ID_LEN + 32 + 1 + 1 + 8 + 8 + 8 + 8;
     pub const LEN: usize = Self::SIZE;
+}
+
+#[account]
+pub struct Curve {
+    pub thread_id: String,
+    pub state: CurveLifecycle,
+    pub mint: Pubkey,
+    pub total_supply: u64,
+    pub virtual_sol_reserve: u64,
+    pub virtual_token_reserve: u64,
+    pub real_sol_reserve: u64,
+    pub real_token_reserve: u64,
+    pub opening_buy_lamports: u64,
+    pub opening_buy_tokens: u64,
+    pub trade_fee_bps: u16,
+    pub graduation_target_lamports: u64,
 }
 
 #[account]
@@ -644,7 +690,6 @@ pub struct FeeVault {
     pub initialized: bool,
 }
 
-
 impl ThreadEscrow {
     pub const MAX_THREAD_ID_LEN: usize = 64;
     pub const LEN: usize = 4 + Self::MAX_THREAD_ID_LEN;
@@ -654,6 +699,10 @@ impl FeeVault {
     pub const SIZE: usize = 1;
 }
 
+impl Curve {
+    pub const MAX_THREAD_ID_LEN: usize = 64;
+    pub const LEN: usize = 4 + Self::MAX_THREAD_ID_LEN + 1 + 32 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 2 + 8;
+}
 
 #[event]
 pub struct SpawnExecuted {
@@ -682,6 +731,13 @@ pub enum DepositStatus {
     Rejected,
     Withdrawn,
     Converted,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
+pub enum CurveLifecycle {
+    PreSpawn,
+    Bonding,
+    Bonded,
 }
 
 #[error_code]
