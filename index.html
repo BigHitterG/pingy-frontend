@@ -432,7 +432,7 @@
   <div class="modalBack" id="pingBack" role="dialog" aria-modal="true">
     <div class="modal">
       <div class="modalHead">
-        <div class="modalTitle">ping (buy)</div>
+        <div class="modalTitle" id="pingModalTitle">ping</div>
         <button class="btn subtle" id="pingClose">close</button>
       </div>
 
@@ -442,11 +442,11 @@
         <div class="panel">
           <div class="h">amount</div>
           <div class="row" style="margin-top:8px;">
-            <div class="muted" style="min-width:120px;">SOL</div>
+            <div class="muted" id="pingAmountUnit" style="min-width:120px;">SOL</div>
             <input id="pingAmount" placeholder="e.g. 0.10" inputmode="decimal" style="max-width:220px;" />
             <button class="btn subtle" id="pingMaxBtn" type="button">MAX</button>
           </div>
-          <div class="muted" style="margin-top:8px;">first ping may include a small Solana network/storage cost. you can fully unping before spawn to withdraw your escrow (minus network fees).</div>
+          <div class="muted" id="pingModalHelp" style="margin-top:8px;">first ping may include a small Solana network/storage cost. you can fully unping before spawn to withdraw your escrow (minus network fees).</div>
           <div class="muted" id="pingAllocationHint" style="margin-top:8px;">This will allocate up to 0.000 SOL, remainder stays refundable.</div>
         </div>
 
@@ -462,7 +462,7 @@
   <div class="modalBack" id="unpingBack" role="dialog" aria-modal="true">
     <div class="modal">
       <div class="modalHead">
-        <div class="modalTitle">unping (sell)</div>
+        <div class="modalTitle" id="unpingModalTitle">unping</div>
         <button class="btn subtle" id="unpingClose">close</button>
       </div>
 
@@ -472,10 +472,10 @@
         <div class="panel">
           <div class="h">amount</div>
           <div class="row" style="margin-top:8px;">
-            <div class="muted" style="min-width:120px;">SOL</div>
+            <div class="muted" id="unpingAmountUnit" style="min-width:120px;">SOL</div>
             <input id="unpingAmount" value="full withdraw" readonly style="max-width:220px;" />
           </div>
-          <div class="muted" style="margin-top:8px;">full withdraw only. funds return to your wallet immediately after unping.</div>
+          <div class="muted" id="unpingModalHelp" style="margin-top:8px;">full withdraw only. funds return to your wallet immediately after unping.</div>
         </div>
 
         <div class="row" style="justify-content:flex-end;">

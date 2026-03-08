@@ -4922,8 +4922,13 @@ if(connectBtn){
       const unpingBtn = $("unpingBtn");
       if(pingBtn) pingBtn.textContent = r.state === "SPAWNING" ? "ping" : "buy";
       if(unpingBtn) unpingBtn.textContent = r.state === "SPAWNING" ? "unping" : "sell";
-      $("pingBtn").disabled = !connectedWallet || !!(connectedWallet && r.blockedWallets && r.blockedWallets[connectedWallet]);
-      $("unpingBtn").disabled = !connectedWallet;
+      if(r.state === "BONDED"){
+        if(pingBtn) pingBtn.textContent = "buy unavailable";
+        if(unpingBtn) unpingBtn.textContent = "sell unavailable";
+      }
+      $("pingBtn").disabled = !connectedWallet || r.state === "BONDED" || !!(connectedWallet && r.blockedWallets && r.blockedWallets[connectedWallet]);
+      $("unpingBtn").disabled = !connectedWallet || r.state === "BONDED";
+      updateActionModalCopy(r);
 
       setComposerState(r);
       renderChat(roomId);
@@ -4946,6 +4951,63 @@ if(connectBtn){
       return Math.max(0, Math.min(need, walletRemaining));
     }
 
+    function updateActionModalCopy(room){
+      const r = room || {};
+      const isSpawning = r.state === "SPAWNING";
+      const isBonding = r.state === "BONDING";
+      const isBonded = r.state === "BONDED";
+
+      const pingModalTitle = $("pingModalTitle");
+      const unpingModalTitle = $("unpingModalTitle");
+      const pingAmountUnit = $("pingAmountUnit");
+      const unpingAmountUnit = $("unpingAmountUnit");
+      const pingModalHelp = $("pingModalHelp");
+      const unpingModalHelp = $("unpingModalHelp");
+      const pingConfirm = $("pingConfirm");
+      const unpingConfirm = $("unpingConfirm");
+      const unpingAmount = $("unpingAmount");
+
+      if(pingModalTitle) pingModalTitle.textContent = isSpawning ? "ping" : "buy";
+      if(unpingModalTitle) unpingModalTitle.textContent = isSpawning ? "unping" : "sell";
+      if(pingAmountUnit) pingAmountUnit.textContent = "SOL";
+      if(unpingAmountUnit) unpingAmountUnit.textContent = isSpawning ? "SOL" : "tokens";
+
+      if(pingModalHelp){
+        pingModalHelp.textContent = isSpawning
+          ? "During spawn, your ping funds escrow allocation. First ping may include small Solana network/storage costs and you can unping to withdraw before spawn completes."
+          : "During bonding, buys route through the bonding curve and apply the trading fee shown in room stats.";
+      }
+
+      if(unpingModalHelp){
+        unpingModalHelp.textContent = isSpawning
+          ? "During spawn, unping performs a full escrow withdraw and returns funds to your wallet (minus network fees)."
+          : "During bonding, sell an amount of tokens into the bonding curve; trading fees apply to each sell.";
+      }
+
+      if(isSpawning){
+        if(unpingAmount){
+          unpingAmount.value = "full withdraw";
+          unpingAmount.readOnly = true;
+        }
+        if(unpingConfirm) unpingConfirm.textContent = "unping (full withdraw)";
+      } else if(isBonding){
+        if(unpingAmount){
+          unpingAmount.value = "";
+          unpingAmount.readOnly = false;
+          unpingAmount.placeholder = "e.g. 100";
+        }
+        if(unpingConfirm) unpingConfirm.textContent = "sell";
+      } else if(isBonded){
+        if(unpingAmount){
+          unpingAmount.value = "trading unavailable";
+          unpingAmount.readOnly = true;
+        }
+        if(unpingConfirm) unpingConfirm.textContent = "sell unavailable";
+      }
+
+      if(pingConfirm) pingConfirm.textContent = isSpawning ? "ping" : "buy";
+    }
+
     function updatePingAllocationHint(roomId){
       const hint = $("pingAllocationHint");
       if(!hint) return;
@@ -4958,7 +5020,7 @@ if(connectBtn){
       const pingConfirm = $("pingConfirm");
       if(r.state !== "SPAWNING"){
         state.maxPingLamports = 0;
-        hint.textContent = "Max applies during spawning.";
+        hint.textContent = "For bonding buys, enter SOL to buy tokens from the curve.";
         if(pingConfirm) pingConfirm.disabled = false;
         return;
       }
@@ -4966,7 +5028,7 @@ if(connectBtn){
       const maxLamports = computeMaxPingLamports(r, userDeposit);
       state.maxPingLamports = maxLamports;
       const maxSol = maxLamports / LAMPORTS_PER_SOL;
-      hint.textContent = maxLamports > 0 ? `Max: ${maxSol.toFixed(3)} SOL` : "Spawn is full or you're at cap.";
+      hint.textContent = maxLamports > 0 ? `Max escrow allocation: ${maxSol.toFixed(3)} SOL` : "Spawn is full or you're at cap.";
       if(pingConfirm) pingConfirm.disabled = maxLamports <= 0;
     }
 
@@ -4977,6 +5039,7 @@ if(connectBtn){
       if(!r) return;
       r.onchain = state.onchain?.[rid] || r.onchain || {};
       modalRoomId = rid;
+      updateActionModalCopy(r);
       $("pingAmount").value = "";
       state.maxPingLamports = 0;
       $("pingRoomLine").textContent = `coin: ${r.name}  $${r.ticker}`;
@@ -4991,8 +5054,7 @@ if(connectBtn){
       r.onchain = state.onchain?.[rid] || r.onchain || {};
       if(r.state === "BONDED") return alert("sell is not available after bonding is complete in this mock.");
       modalRoomId = rid;
-      $("unpingAmount").value = r.state === "SPAWNING" ? "full withdraw" : "sell token amount";
-      $("unpingAmount").readOnly = r.state === "SPAWNING";
+      updateActionModalCopy(r);
       $("unpingRoomLine").textContent = `coin: ${r.name}  $${r.ticker}`;
       openModal($("unpingBack"));
     }
