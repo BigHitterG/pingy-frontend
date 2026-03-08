@@ -485,6 +485,10 @@ const $ = (id) => document.getElementById(id);
       return String($("newLaunchMode")?.value || "spawn").toLowerCase() === "instant" ? "instant" : "spawn";
     }
 
+    function launchModeByte(mode){
+      return String(mode || "spawn").toLowerCase() === "instant" ? 1 : 0;
+    }
+
     function selectedPresetKey(){
       return String($("newPreset")?.value || "fast").toLowerCase();
     }
@@ -1788,7 +1792,7 @@ const $ = (id) => document.getElementById(id);
             { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
             { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
           ],
-          data: concatBytes(await anchorDiscriminator("initialize_thread"), encodeStringArg(rid), encodeU32Arg(Number(config.minApprovedWallets || 0)), encodeU64Arg(Number(config.spawnTargetLamports || 0)), encodeU16Arg(Number(config.maxWalletShareBps || 0))),
+          data: concatBytes(await anchorDiscriminator("initialize_thread"), encodeStringArg(rid), encodeU32Arg(Number(config.minApprovedWallets || 0)), encodeU64Arg(Number(config.spawnTargetLamports || 0)), encodeU16Arg(Number(config.maxWalletShareBps || 0)), encodeU8Arg(launchModeByte(config.launchMode))),
         }));
       }
 
@@ -1824,7 +1828,7 @@ const $ = (id) => document.getElementById(id);
       const [curveTokenVaultPda] = await deriveCurveTokenVaultPda(rid);
       const discriminator = await anchorDiscriminator("initialize_thread");
       const config = createConfig || getCreateLaunchConfig();
-      const data = concatBytes(discriminator, encodeStringArg(rid), encodeU32Arg(Number(config.minApprovedWallets || 0)), encodeU64Arg(Number(config.spawnTargetLamports || 0)), encodeU16Arg(Number(config.maxWalletShareBps || 0)));
+      const data = concatBytes(discriminator, encodeStringArg(rid), encodeU32Arg(Number(config.minApprovedWallets || 0)), encodeU64Arg(Number(config.spawnTargetLamports || 0)), encodeU16Arg(Number(config.maxWalletShareBps || 0)), encodeU8Arg(launchModeByte(config.launchMode)));
       const keys = [
         { pubkey: adminPk, isSigner: true, isWritable: true },
         { pubkey: threadPda, isSigner: false, isWritable: true },
@@ -2100,7 +2104,7 @@ const $ = (id) => document.getElementById(id);
         admin_pubkey: adminPubkey,
         spawnState,
         curve_initialized: curveInitialized,
-        launch_mode: Number(launchMode || 0),
+        launch_mode: Number(launchMode || 0) === 1 ? "instant" : "spawn",
         pending_count: pendingCount,
         approved_count: approvedCount,
         total_allocated_lamports: Number(totalAllocatedLamports || 0n),
@@ -3887,8 +3891,8 @@ if(connectBtn){
       }
       const id = "r" + Math.random().toString(16).slice(2,6);
 
-      if(shouldUseOnchain() && launchMode === "spawn"){
-        if(commitLamports > 0){
+      if(shouldUseOnchain()){
+        if(launchMode === "spawn" && commitLamports > 0){
           try {
             await pingWithOptionalThreadInitTx(id, commitLamports, true, launchConfig);
           } catch(e){
@@ -3899,8 +3903,15 @@ if(connectBtn){
         } else {
           try {
             await initializeThreadTx(id, launchConfig);
+            if(launchMode === "instant" && commitLamports > 0){
+              await buyTx(id, commitLamports);
+            }
           } catch (e){
-            reportTxError(e, "initialize_thread transaction failed");
+            if(launchMode === "instant" && commitLamports > 0){
+              reportTxError(e, "initialize_thread + instant buy transaction failed");
+            } else {
+              reportTxError(e, "initialize_thread transaction failed");
+            }
             return;
           }
         }
@@ -3917,7 +3928,7 @@ if(connectBtn){
       if(newBannerData) r.banner = newBannerData;
       if(launchMode === "instant"){
         r.token_address = mockTokenAddress(r.ticker || r.name || "PINGY");
-        if(commit > 0){
+        if(!shouldUseOnchain() && commit > 0){
           r.positions[connectedWallet] = r.positions[connectedWallet] || {escrow_sol:0, net_sol_in:0, spawn_tokens:0, token_balance:0};
           const buyFee = applyTradingFeeToBuySol(commit);
           const buy = applyCurveBuy(buyFee.netSol, r.curve_state || makeCurveState());
@@ -3972,7 +3983,7 @@ if(connectBtn){
       renderHome();
       openRoom(id);
 
-      if(shouldUseOnchain() && launchMode === "spawn"){
+      if(shouldUseOnchain()){
         await fetchRoomOnchainSnapshot(id);
         await refreshConnectedWalletEscrowLine(id);
         await fetchConnectedWalletDepositSnapshot();

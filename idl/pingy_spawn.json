@@ -81,6 +81,10 @@
         {
           "name": "maxWalletShareBps",
           "type": "u16"
+        },
+        {
+          "name": "launchMode",
+          "type": "u8"
         }
       ]
     },
@@ -1006,6 +1010,26 @@
           "index": false
         }
       ]
+    },
+    {
+      "name": "curveGraduated",
+      "fields": [
+        {
+          "name": "threadId",
+          "type": "string",
+          "index": false
+        },
+        {
+          "name": "finalSolReserve",
+          "type": "u64",
+          "index": false
+        },
+        {
+          "name": "finalTokenReserve",
+          "type": "u64",
+          "index": false
+        }
+      ]
     }
   ],
   "errors": [
@@ -1148,6 +1172,11 @@
       "code": 6027,
       "name": "InvalidUserTokenAccount",
       "msg": "User token account is invalid"
+    },
+    {
+      "code": 6028,
+      "name": "InvalidLaunchMode",
+      "msg": "Launch mode is invalid"
     }
   ]
 }
