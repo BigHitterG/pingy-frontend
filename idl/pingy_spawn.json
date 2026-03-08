@@ -34,6 +34,17 @@
           "writable": true
         },
         {
+          "name": "curveAuthority"
+        },
+        {
+          "name": "mint",
+          "writable": true
+        },
+        {
+          "name": "curveTokenVault",
+          "writable": true
+        },
+        {
           "name": "spawnPool",
           "writable": true
         },
@@ -48,6 +59,10 @@
         {
           "name": "systemProgram",
           "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "tokenProgram",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         }
       ],
       "args": [
@@ -295,6 +310,21 @@
           "writable": true
         },
         {
+          "name": "curve",
+          "writable": true
+        },
+        {
+          "name": "curveAuthority"
+        },
+        {
+          "name": "mint",
+          "writable": true
+        },
+        {
+          "name": "curveTokenVault",
+          "writable": true
+        },
+        {
           "name": "threadEscrow",
           "writable": true
         },
@@ -309,6 +339,10 @@
         {
           "name": "systemProgram",
           "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "tokenProgram",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         }
       ],
       "args": [
@@ -524,6 +558,18 @@
           {
             "name": "mint",
             "type": "pubkey"
+          },
+          {
+            "name": "mintDecimals",
+            "type": "u8"
+          },
+          {
+            "name": "curveTokenVault",
+            "type": "pubkey"
+          },
+          {
+            "name": "curveAuthorityBump",
+            "type": "u8"
           },
           {
             "name": "totalSupply",
@@ -775,6 +821,21 @@
       "code": 6017,
       "name": "DepositNotApproved",
       "msg": "Deposit is not approved"
+    },
+    {
+      "code": 6018,
+      "name": "InvalidCurveMintAuthority",
+      "msg": "Curve mint authority is invalid"
+    },
+    {
+      "code": 6019,
+      "name": "CurveTokenVaultMintMismatch",
+      "msg": "Curve token vault mint does not match curve mint"
+    },
+    {
+      "code": 6020,
+      "name": "InvalidCurveReserves",
+      "msg": "Curve reserves are invalid"
     }
   ]
 }

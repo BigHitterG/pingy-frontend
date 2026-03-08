@@ -1,5 +1,6 @@
 use anchor_lang::prelude::*;
 use anchor_lang::system_program;
+use anchor_spl::token::{self, Mint, MintTo, Token, TokenAccount};
 
 declare_id!("FSvYheeHSLjU6UKqka5AnMeaPwsQBrLm8dCL4VtFpf5R");
 
@@ -10,6 +11,7 @@ pub const TOTAL_SUPPLY: u64 = 1_000_000_000;
 pub const VIRTUAL_SOL_RESERVE_INITIAL: u64 = 30 * LAMPORTS_PER_SOL;
 pub const VIRTUAL_TOKEN_RESERVE_INITIAL: u64 = TOTAL_SUPPLY;
 pub const POST_SPAWN_TRADING_FEE_BPS: u16 = 100;
+pub const TOKEN_DECIMALS: u8 = 0;
 
 pub const MIN_APPROVED_WALLETS_MIN: u32 = 10;
 pub const MIN_APPROVED_WALLETS_MAX: u32 = 50;
@@ -66,8 +68,14 @@ pub mod pingy_spawn {
             POST_SPAWN_TRADING_FEE_BPS,
             spawn_target_lamports,
         );
-        curve.mint = Pubkey::default();
+        curve.curve_authority_bump = ctx.bumps.curve_authority;
 
+        initialize_mint_if_needed(curve, &ctx.accounts.mint, &ctx.accounts.curve_authority)?;
+        initialize_curve_token_vault_if_needed(
+            curve,
+            &ctx.accounts.curve_token_vault,
+            &ctx.accounts.curve_authority,
+        )?;
         let spawn_pool = &mut ctx.accounts.spawn_pool;
         spawn_pool.thread_id = thread_id.clone();
 
@@ -375,6 +383,10 @@ fn initialize_curve_state(
     graduation_target_lamports: u64,
 ) {
     curve.state = CurveLifecycle::PreSpawn;
+    curve.mint = Pubkey::default();
+    curve.mint_decimals = TOKEN_DECIMALS;
+    curve.curve_token_vault = Pubkey::default();
+    curve.curve_authority_bump = 0;
     curve.total_supply = total_supply;
     curve.virtual_sol_reserve = VIRTUAL_SOL_RESERVE_INITIAL;
     curve.virtual_token_reserve = VIRTUAL_TOKEN_RESERVE_INITIAL;
@@ -384,6 +396,78 @@ fn initialize_curve_state(
     curve.opening_buy_tokens = 0;
     curve.trade_fee_bps = trade_fee_bps;
     curve.graduation_target_lamports = graduation_target_lamports;
+}
+
+fn initialize_mint_if_needed<'info>(
+    curve: &mut Curve,
+    mint: &Account<'info, Mint>,
+    curve_authority: &UncheckedAccount<'info>,
+) -> Result<()> {
+    let mint_authority = mint
+        .mint_authority
+        .ok_or(PingyError::InvalidCurveMintAuthority)?;
+    require!(
+        mint_authority == curve_authority.key(),
+        PingyError::InvalidCurveMintAuthority
+    );
+
+    curve.mint = mint.key();
+    curve.mint_decimals = mint.decimals;
+
+    Ok(())
+}
+
+fn initialize_curve_token_vault_if_needed<'info>(
+    curve: &mut Curve,
+    curve_token_vault: &Account<'info, TokenAccount>,
+    curve_authority: &UncheckedAccount<'info>,
+) -> Result<()> {
+    require!(
+        curve_token_vault.mint == curve.mint,
+        PingyError::CurveTokenVaultMintMismatch
+    );
+    require!(
+        curve_token_vault.owner == curve_authority.key(),
+        PingyError::CurveTokenVaultMintMismatch
+    );
+
+    curve.curve_token_vault = curve_token_vault.key();
+
+    Ok(())
+}
+
+fn mint_total_supply_to_curve_vault<'info>(
+    thread_id: &str,
+    curve: &Curve,
+    curve_authority: &UncheckedAccount<'info>,
+    mint: &Account<'info, Mint>,
+    curve_token_vault: &Account<'info, TokenAccount>,
+    token_program: &Program<'info, Token>,
+) -> Result<()> {
+    if curve_token_vault.amount > 0 {
+        return Ok(());
+    }
+
+    let signer_seeds: &[&[&[u8]]] = &[&[
+        b"curve_authority",
+        thread_id.as_bytes(),
+        &[curve.curve_authority_bump],
+    ]];
+
+    token::mint_to(
+        CpiContext::new_with_signer(
+            token_program.to_account_info(),
+            MintTo {
+                mint: mint.to_account_info(),
+                to: curve_token_vault.to_account_info(),
+                authority: curve_authority.to_account_info(),
+            },
+            signer_seeds,
+        ),
+        curve.total_supply,
+    )?;
+
+    Ok(())
 }
 
 fn apply_trade_fee(amount: u64, fee_bps: u16) -> Result<(u64, u64)> {
@@ -550,6 +634,31 @@ pub struct InitializeThread<'info> {
     )]
     pub curve: Account<'info, Curve>,
     #[account(
+        seeds = [b"curve_authority", thread_id.as_bytes()],
+        bump
+    )]
+    /// CHECK: PDA used as mint authority and token vault authority.
+    pub curve_authority: UncheckedAccount<'info>,
+    #[account(
+        init_if_needed,
+        payer = admin,
+        seeds = [b"mint", thread_id.as_bytes()],
+        bump,
+        mint::decimals = TOKEN_DECIMALS,
+        mint::authority = curve_authority,
+        mint::freeze_authority = curve_authority
+    )]
+    pub mint: Account<'info, Mint>,
+    #[account(
+        init_if_needed,
+        payer = admin,
+        seeds = [b"curve_token_vault", thread_id.as_bytes()],
+        bump,
+        token::mint = mint,
+        token::authority = curve_authority
+    )]
+    pub curve_token_vault: Account<'info, TokenAccount>,
+    #[account(
         init,
         payer = admin,
         space = 8 + SpawnPool::LEN,
@@ -574,6 +683,7 @@ pub struct InitializeThread<'info> {
     )]
     pub fee_vault: Account<'info, FeeVault>,
     pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>,
 }
 
 #[derive(Accounts)]
@@ -683,6 +793,30 @@ pub struct ExecuteSpawn<'info> {
     pub thread: Account<'info, Thread>,
     #[account(
         mut,
+        seeds = [b"curve", thread_id.as_bytes()],
+        bump,
+        constraint = curve.thread_id == thread_id @ PingyError::ThreadMismatch
+    )]
+    pub curve: Account<'info, Curve>,
+    #[account(
+        seeds = [b"curve_authority", thread_id.as_bytes()],
+        bump = curve.curve_authority_bump
+    )]
+    /// CHECK: PDA used as mint authority and token vault authority.
+    pub curve_authority: UncheckedAccount<'info>,
+    #[account(mut, address = curve.mint)]
+    pub mint: Account<'info, Mint>,
+    #[account(
+        mut,
+        seeds = [b"curve_token_vault", thread_id.as_bytes()],
+        bump,
+        address = curve.curve_token_vault,
+        token::mint = mint,
+        token::authority = curve_authority
+    )]
+    pub curve_token_vault: Account<'info, TokenAccount>,
+    #[account(
+        mut,
         seeds = [b"escrow", thread_id.as_bytes()],
         bump,
         constraint = thread_escrow.thread_id == thread_id @ PingyError::ThreadMismatch
@@ -701,6 +835,7 @@ pub struct ExecuteSpawn<'info> {
     )]
     pub fee_vault: Account<'info, FeeVault>,
     pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>,
 }
 
 #[account]
@@ -799,6 +934,9 @@ pub struct Curve {
     pub thread_id: String,
     pub state: CurveLifecycle,
     pub mint: Pubkey,
+    pub mint_decimals: u8,
+    pub curve_token_vault: Pubkey,
+    pub curve_authority_bump: u8,
     pub total_supply: u64,
     pub virtual_sol_reserve: u64,
     pub virtual_token_reserve: u64,
@@ -831,7 +969,8 @@ impl FeeVault {
 
 impl Curve {
     pub const MAX_THREAD_ID_LEN: usize = 64;
-    pub const LEN: usize = 4 + Self::MAX_THREAD_ID_LEN + 1 + 32 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 2 + 8;
+    pub const LEN: usize =
+        4 + Self::MAX_THREAD_ID_LEN + 1 + 32 + 1 + 32 + 1 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 2 + 8;
 }
 
 #[event]
@@ -910,6 +1049,10 @@ pub enum PingyError {
     MinApprovedWalletsNotReached,
     #[msg("Curve reserves are invalid")]
     InvalidCurveReserves,
+    #[msg("Curve mint authority is invalid")]
+    InvalidCurveMintAuthority,
+    #[msg("Curve token vault mint does not match curve mint")]
+    CurveTokenVaultMintMismatch,
 }
 
 #[cfg(test)]
@@ -921,6 +1064,9 @@ mod tests {
             thread_id: "thread".to_string(),
             state: CurveLifecycle::PreSpawn,
             mint: Pubkey::default(),
+            mint_decimals: TOKEN_DECIMALS,
+            curve_token_vault: Pubkey::default(),
+            curve_authority_bump: 0,
             total_supply: TOTAL_SUPPLY,
             virtual_sol_reserve: VIRTUAL_SOL_RESERVE_INITIAL,
             virtual_token_reserve: VIRTUAL_TOKEN_RESERVE_INITIAL,
@@ -1012,6 +1158,10 @@ mod tests {
         initialize_curve_state(&mut curve, TOTAL_SUPPLY, POST_SPAWN_TRADING_FEE_BPS, 123);
 
         assert!(matches!(curve.state, CurveLifecycle::PreSpawn));
+        assert_eq!(curve.mint, Pubkey::default());
+        assert_eq!(curve.mint_decimals, TOKEN_DECIMALS);
+        assert_eq!(curve.curve_token_vault, Pubkey::default());
+        assert_eq!(curve.curve_authority_bump, 0);
         assert_eq!(curve.total_supply, TOTAL_SUPPLY);
         assert_eq!(curve.virtual_sol_reserve, VIRTUAL_SOL_RESERVE_INITIAL);
         assert_eq!(curve.virtual_token_reserve, VIRTUAL_TOKEN_RESERVE_INITIAL);

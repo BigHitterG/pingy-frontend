@@ -6,6 +6,9 @@ import {
   deriveThreadPda,
   deriveSpawnPoolPda,
   deriveCurvePda,
+  deriveCurveAuthorityPda,
+  deriveCurveTokenVaultPda,
+  deriveMintPda,
   deriveFeeVaultPda,
   deriveDepositPda,
   deriveThreadEscrowPda,
@@ -14,6 +17,7 @@ import {
   SystemProgram,
   Transaction,
   TransactionInstruction,
+  TOKEN_PROGRAM_ID,
 } from "./lib/solana.js";
 
 function surfaceFatalMessage(prefix, err){
@@ -49,6 +53,9 @@ const $ = (id) => document.getElementById(id);
       deriveThreadPda,
       deriveSpawnPoolPda,
       deriveCurvePda,
+      deriveCurveAuthorityPda,
+      deriveCurveTokenVaultPda,
+      deriveMintPda,
       deriveFeeVaultPda,
       deriveDepositPda,
       deriveThreadEscrowPda,
@@ -1448,8 +1455,6 @@ const $ = (id) => document.getElementById(id);
 
     const ONCHAIN_REFRESH_MS = 7000;
     const WALLET_BAL_REFRESH_MS = 6000;
-    const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
-
 
     function readU32LE(bytes, offset){
       const v = new DataView(bytes.buffer, bytes.byteOffset + offset, 4).getUint32(0, true);
@@ -1751,6 +1756,9 @@ const $ = (id) => document.getElementById(id);
       const [threadPda] = await deriveThreadPda(rid);
       const [spawnPoolPda] = await deriveSpawnPoolPda(rid);
       const [curvePda] = await deriveCurvePda(rid);
+      const [curveAuthorityPda] = await deriveCurveAuthorityPda(rid);
+      const [mintPda] = await deriveMintPda(rid);
+      const [curveTokenVaultPda] = await deriveCurveTokenVaultPda(rid);
       const [depositPda] = await deriveDepositPda(rid, walletPk);
       const [threadEscrowPda] = await deriveThreadEscrowPda(rid);
 
@@ -1763,10 +1771,14 @@ const $ = (id) => document.getElementById(id);
             { pubkey: walletPk, isSigner: true, isWritable: true },
             { pubkey: threadPda, isSigner: false, isWritable: true },
             { pubkey: curvePda, isSigner: false, isWritable: true },
+            { pubkey: curveAuthorityPda, isSigner: false, isWritable: false },
+            { pubkey: mintPda, isSigner: false, isWritable: true },
+            { pubkey: curveTokenVaultPda, isSigner: false, isWritable: true },
             { pubkey: spawnPoolPda, isSigner: false, isWritable: true },
             { pubkey: threadEscrowPda, isSigner: false, isWritable: true },
             { pubkey: (await deriveFeeVaultPda())[0], isSigner: false, isWritable: true },
             { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+            { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
           ],
           data: concatBytes(await anchorDiscriminator("initialize_thread"), encodeStringArg(rid), encodeU32Arg(Number(config.minApprovedWallets || 0)), encodeU64Arg(Number(config.spawnTargetLamports || 0)), encodeU16Arg(Number(config.maxWalletShareBps || 0))),
         }));
@@ -1799,6 +1811,9 @@ const $ = (id) => document.getElementById(id);
       const [threadPda] = await deriveThreadPda(rid);
       const [spawnPoolPda] = await deriveSpawnPoolPda(rid);
       const [curvePda] = await deriveCurvePda(rid);
+      const [curveAuthorityPda] = await deriveCurveAuthorityPda(rid);
+      const [mintPda] = await deriveMintPda(rid);
+      const [curveTokenVaultPda] = await deriveCurveTokenVaultPda(rid);
       const discriminator = await anchorDiscriminator("initialize_thread");
       const config = createConfig || getCreateLaunchConfig();
       const data = concatBytes(discriminator, encodeStringArg(rid), encodeU32Arg(Number(config.minApprovedWallets || 0)), encodeU64Arg(Number(config.spawnTargetLamports || 0)), encodeU16Arg(Number(config.maxWalletShareBps || 0)));
@@ -1806,16 +1821,20 @@ const $ = (id) => document.getElementById(id);
         { pubkey: adminPk, isSigner: true, isWritable: true },
         { pubkey: threadPda, isSigner: false, isWritable: true },
         { pubkey: curvePda, isSigner: false, isWritable: true },
+        { pubkey: curveAuthorityPda, isSigner: false, isWritable: false },
+        { pubkey: mintPda, isSigner: false, isWritable: true },
+        { pubkey: curveTokenVaultPda, isSigner: false, isWritable: true },
         { pubkey: spawnPoolPda, isSigner: false, isWritable: true },
         { pubkey: (await deriveThreadEscrowPda(rid))[0], isSigner: false, isWritable: true },
         { pubkey: (await deriveFeeVaultPda())[0], isSigner: false, isWritable: true },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
       ];
       console.log("[ping-debug] initialize_thread ix", {
         programId: PROGRAM_ID.toBase58(),
         discriminatorBytes: Array.from(discriminator),
         dataLength: data.length,
-        idlAccountOrder: ["admin", "thread", "curve", "spawnPool", "threadEscrow", "feeVault", "systemProgram"],
+        idlAccountOrder: ["admin", "thread", "curve", "curveAuthority", "mint", "curveTokenVault", "spawnPool", "threadEscrow", "feeVault", "systemProgram", "tokenProgram"],
         keys: keys.map((k) => ({ pubkey: k.pubkey.toBase58(), isSigner: k.isSigner, isWritable: k.isWritable })),
       });
       return sendProgramInstruction(new TransactionInstruction({
