@@ -20,6 +20,8 @@ pub const SPAWN_TARGET_MIN_LAMPORTS: u64 = LAMPORTS_PER_SOL;
 pub const SPAWN_TARGET_MAX_LAMPORTS: u64 = 100 * LAMPORTS_PER_SOL;
 pub const MAX_WALLET_SHARE_BPS_MIN: u16 = 200;
 pub const MAX_WALLET_SHARE_BPS_MAX: u16 = 2000;
+pub const LAUNCH_MODE_SPAWN: u8 = 0;
+pub const LAUNCH_MODE_INSTANT: u8 = 1;
 
 #[program]
 pub mod pingy_spawn {
@@ -31,28 +33,38 @@ pub mod pingy_spawn {
         min_approved_wallets: u32,
         spawn_target_lamports: u64,
         max_wallet_share_bps: u16,
+        launch_mode: u8,
     ) -> Result<()> {
         require!(!thread_id.is_empty(), PingyError::InvalidThreadId);
         require!(
-            (MIN_APPROVED_WALLETS_MIN..=MIN_APPROVED_WALLETS_MAX).contains(&min_approved_wallets),
-            PingyError::MinApprovedWalletsOutOfBounds
+            launch_mode == LAUNCH_MODE_SPAWN || launch_mode == LAUNCH_MODE_INSTANT,
+            PingyError::InvalidLaunchMode
         );
-        require!(
-            (SPAWN_TARGET_MIN_LAMPORTS..=SPAWN_TARGET_MAX_LAMPORTS)
-                .contains(&spawn_target_lamports),
-            PingyError::SpawnTargetOutOfBounds
-        );
-        require!(
-            (MAX_WALLET_SHARE_BPS_MIN..=MAX_WALLET_SHARE_BPS_MAX).contains(&max_wallet_share_bps),
-            PingyError::MaxWalletShareOutOfBounds
-        );
+
+        if launch_mode == LAUNCH_MODE_SPAWN {
+            require!(
+                (MIN_APPROVED_WALLETS_MIN..=MIN_APPROVED_WALLETS_MAX)
+                    .contains(&min_approved_wallets),
+                PingyError::MinApprovedWalletsOutOfBounds
+            );
+            require!(
+                (SPAWN_TARGET_MIN_LAMPORTS..=SPAWN_TARGET_MAX_LAMPORTS)
+                    .contains(&spawn_target_lamports),
+                PingyError::SpawnTargetOutOfBounds
+            );
+            require!(
+                (MAX_WALLET_SHARE_BPS_MIN..=MAX_WALLET_SHARE_BPS_MAX)
+                    .contains(&max_wallet_share_bps),
+                PingyError::MaxWalletShareOutOfBounds
+            );
+        }
 
         let thread = &mut ctx.accounts.thread;
         thread.thread_id = thread_id.clone();
         thread.admin_pubkey = ctx.accounts.admin.key();
         thread.spawn_state = SpawnState::Open;
         thread.curve_initialized = false;
-        thread.launch_mode = 0;
+        thread.launch_mode = launch_mode;
         thread.pending_count = 0;
         thread.approved_count = 0;
         thread.total_allocated_lamports = 0;
@@ -86,6 +98,22 @@ pub mod pingy_spawn {
         let fee_vault = &mut ctx.accounts.fee_vault;
         if !fee_vault.initialized {
             fee_vault.initialized = true;
+        }
+
+        if launch_mode == LAUNCH_MODE_INSTANT {
+            mint_total_supply_to_curve_vault(
+                &thread_id,
+                &ctx.accounts.curve,
+                &ctx.accounts.curve_authority,
+                &ctx.accounts.mint,
+                &ctx.accounts.curve_token_vault,
+                &ctx.accounts.token_program,
+            )?;
+
+            let curve = &mut ctx.accounts.curve;
+            curve.state = CurveLifecycle::Bonding;
+            thread.curve_initialized = true;
+            thread.spawn_state = SpawnState::Closed;
         }
 
         Ok(())
@@ -320,6 +348,13 @@ pub mod pingy_spawn {
             curve.opening_buy_lamports = net;
             curve.opening_buy_tokens = tokens_out;
             curve.state = CurveLifecycle::Bonding;
+            if maybe_graduate_curve(curve) {
+                emit!(CurveGraduated {
+                    thread_id: thread_id.clone(),
+                    final_sol_reserve: curve.real_sol_reserve,
+                    final_token_reserve: curve.real_token_reserve,
+                });
+            }
             tokens_out
         };
 
@@ -473,6 +508,13 @@ pub mod pingy_spawn {
         )?;
 
         let tokens_out = apply_curve_buy(net_lamports, &mut ctx.accounts.curve)?;
+        if maybe_graduate_curve(&mut ctx.accounts.curve) {
+            emit!(CurveGraduated {
+                thread_id: thread_id.clone(),
+                final_sol_reserve: ctx.accounts.curve.real_sol_reserve,
+                final_token_reserve: ctx.accounts.curve.real_token_reserve,
+            });
+        }
 
         let signer_seeds: &[&[&[u8]]] = &[&[
             b"curve_authority",
@@ -887,6 +929,17 @@ fn apply_curve_sell(token_in: u64, curve: &mut Curve) -> Result<u64> {
         .ok_or(PingyError::AmountOverflow)?;
 
     Ok(sol_out)
+}
+
+fn maybe_graduate_curve(curve: &mut Curve) -> bool {
+    if curve.state == CurveLifecycle::Bonding
+        && curve.real_sol_reserve >= curve.graduation_target_lamports
+    {
+        curve.state = CurveLifecycle::Bonded;
+        return true;
+    }
+
+    false
 }
 
 fn transfer_from_thread_escrow_to_account<'info>(
@@ -1504,6 +1557,13 @@ pub struct SellExecuted {
     pub net_sol_out: u64,
 }
 
+#[event]
+pub struct CurveGraduated {
+    pub thread_id: String,
+    pub final_sol_reserve: u64,
+    pub final_token_reserve: u64,
+}
+
 impl SpawnPool {
     pub const MAX_THREAD_ID_LEN: usize = 64;
     pub const LEN: usize = 4 + Self::MAX_THREAD_ID_LEN;
@@ -1590,6 +1650,8 @@ pub enum PingyError {
     InsufficientSpawnPoolBalance,
     #[msg("User token account is invalid")]
     InvalidUserTokenAccount,
+    #[msg("Launch mode is invalid")]
+    InvalidLaunchMode,
 }
 
 #[cfg(test)]
