@@ -3868,6 +3868,11 @@ if(connectBtn){
       const mc = Number(r.market_cap_usd || 0);
       const p = (r.state === "BONDING") ? bondingProgress01(r) : 1;
       const pct = Math.round(p * 100);
+      const reserveSol = currentBondingReserveSol(r);
+      const targetSol = graduationTargetSol(r);
+      const lifecycleText = (r.state === "BONDING")
+        ? `Bonding: ${reserveSol.toFixed(3)} / ${targetSol.toFixed(3)} SOL`
+        : `Graduated at ${targetSol.toFixed(3)} SOL`;
       const chg = Number(r.change_pct || 0);
       const chgCls = chg > 0 ? "up" : (chg < 0 ? "down" : "");
       const chip = `${phaseLabel} • ${roomLaunchLabel(r)}`;
@@ -3885,6 +3890,7 @@ if(connectBtn){
             </div>
             <div class="tiny subline">${escapeText(r.desc || "—")}</div>
             <div class="${barClass}"><i style="width:${pct}%"></i>${isHotBonding ? `<span class="barSpark"></span>` : ""}</div>
+            <div class="tiny muted" style="margin-top:4px;">${lifecycleText}</div>
           </div>
           <div>
             <div class="metric">${fmtK(mc)}</div>
