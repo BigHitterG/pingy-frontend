@@ -485,6 +485,74 @@
           "type": "u64"
         }
       ]
+    },
+    {
+      "name": "sell",
+      "discriminator": [
+        51,
+        230,
+        133,
+        164,
+        1,
+        127,
+        131,
+        173
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "thread"
+        },
+        {
+          "name": "curve",
+          "writable": true
+        },
+        {
+          "name": "curveAuthority"
+        },
+        {
+          "name": "mint",
+          "writable": true
+        },
+        {
+          "name": "curveTokenVault",
+          "writable": true
+        },
+        {
+          "name": "userTokenAccount",
+          "writable": true
+        },
+        {
+          "name": "spawnPool",
+          "writable": true
+        },
+        {
+          "name": "feeVault",
+          "writable": true
+        },
+        {
+          "name": "tokenProgram",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "threadId",
+          "type": "string"
+        },
+        {
+          "name": "tokenAmount",
+          "type": "u64"
+        }
+      ]
     }
   ],
   "accounts": [
@@ -903,6 +971,41 @@
           "index": false
         }
       ]
+    },
+    {
+      "name": "sellExecuted",
+      "fields": [
+        {
+          "name": "threadId",
+          "type": "string",
+          "index": false
+        },
+        {
+          "name": "user",
+          "type": "pubkey",
+          "index": false
+        },
+        {
+          "name": "tokensIn",
+          "type": "u64",
+          "index": false
+        },
+        {
+          "name": "grossSolOut",
+          "type": "u64",
+          "index": false
+        },
+        {
+          "name": "feeSol",
+          "type": "u64",
+          "index": false
+        },
+        {
+          "name": "netSolOut",
+          "type": "u64",
+          "index": false
+        }
+      ]
     }
   ],
   "errors": [
@@ -1040,6 +1143,11 @@
       "code": 6026,
       "name": "InsufficientSpawnPoolBalance",
       "msg": "Spawn pool has insufficient available lamports"
+    },
+    {
+      "code": 6027,
+      "name": "InvalidUserTokenAccount",
+      "msg": "User token account is invalid"
     }
   ]
 }

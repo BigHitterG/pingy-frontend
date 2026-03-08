@@ -2008,6 +2008,44 @@ const $ = (id) => document.getElementById(id);
       return sendProgramInstruction(new TransactionInstruction({ programId: PROGRAM_ID, keys, data }));
     }
 
+    async function sellTx(roomId, tokenAmount){
+      const rid = String(roomId || "");
+      const tokens = Number(tokenAmount);
+      if(!Number.isInteger(tokens) || tokens <= 0){
+        throw new Error("tokenAmount must be a positive integer");
+      }
+      const userPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
+      const [threadPda] = await deriveThreadPda(rid);
+      const [curvePda] = await deriveCurvePda(rid);
+      const [curveAuthorityPda] = await deriveCurveAuthorityPda(rid);
+      const [mintPda] = await deriveMintPda(rid);
+      const [curveTokenVaultPda] = await deriveCurveTokenVaultPda(rid);
+      const [userTokenAta] = await deriveAssociatedTokenAddress(userPk, mintPda);
+      const [spawnPoolPda] = await deriveSpawnPoolPda(rid);
+      const [feeVaultPda] = await deriveFeeVaultPda();
+
+      const keys = [
+        { pubkey: userPk, isSigner: true, isWritable: true },
+        { pubkey: threadPda, isSigner: false, isWritable: false },
+        { pubkey: curvePda, isSigner: false, isWritable: true },
+        { pubkey: curveAuthorityPda, isSigner: false, isWritable: false },
+        { pubkey: mintPda, isSigner: false, isWritable: true },
+        { pubkey: curveTokenVaultPda, isSigner: false, isWritable: true },
+        { pubkey: userTokenAta, isSigner: false, isWritable: true },
+        { pubkey: spawnPoolPda, isSigner: false, isWritable: true },
+        { pubkey: feeVaultPda, isSigner: false, isWritable: true },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      ];
+
+      const data = concatBytes(
+        await anchorDiscriminator("sell"),
+        encodeStringArg(rid),
+        encodeU64Arg(tokens)
+      );
+      return sendProgramInstruction(new TransactionInstruction({ programId: PROGRAM_ID, keys, data }));
+    }
+
     async function maybeExecuteSpawnOnchain(room){
       if(!room || !shouldUseOnchain()) return false;
       if(room._spawnExecInFlight) return false;
@@ -5126,32 +5164,45 @@ if(connectBtn){
         const s = ($("unpingAmount").value||"").trim();
         const tokenAmount = Number(s);
         if(!s || Number.isNaN(tokenAmount) || tokenAmount <= 0) return alert("enter a valid token amount.");
-        r.positions[connectedWallet] = r.positions[connectedWallet] || {escrow_sol:0, net_sol_in:0, spawn_tokens:0, token_balance:0};
-        const curTokens = Number(r.positions[connectedWallet].token_balance || 0);
-        const sellTokens = Math.min(curTokens, tokenAmount);
-        if(sellTokens <= 0) return alert("you have no tokens to sell.");
-        const sell = applyCurveSell(sellTokens, r.curve_state || makeCurveState());
-        const sellFee = applyTradingFeeToSellSol(sell.grossSolOut);
-        r.curve_state = sell.next;
-        r.positions[connectedWallet].token_balance = curTokens - sellTokens;
-        r.positions[connectedWallet].net_sol_in = Number(r.positions[connectedWallet].net_sol_in || 0) - sellFee.netSol;
-        r.protocol_fees_sol = Number(r.protocol_fees_sol || 0) + sellFee.feeSol;
-        console.debug("[ping-debug] protocol fee accrual (sell)", { roomId: r.id, tradeFeeSol: sellFee.feeSol, protocolFeesSol: r.protocol_fees_sol });
-        syncRoomMarketCap(r);
-        appendBondingTradeEvent(r, {
-          ts: nowStamp(),
-          wallet: connectedWallet,
-          side: "sell",
-          tokens_in: sellTokens,
-          gross_sol_out: sellFee.grossSol,
-          fee_sol: sellFee.feeSol,
-          net_sol_out: sellFee.netSol,
-          price_after: curvePrice(r.curve_state),
-          market_cap_after: Number(r.market_cap_usd || 0),
-        });
-        nudgeChange(r, -(Math.random()*3));
-        state.chat[r.id] = state.chat[r.id] || [];
-        state.chat[r.id].push({ ts: nowStamp(), wallet: connectedWallet, text:`sold ${sellTokens.toFixed(3)} tokens for ${sellFee.grossSol.toFixed(3)} SOL gross (${sellFee.feeSol.toFixed(3)} fee, ${sellFee.netSol.toFixed(3)} net received).`, kind: "activity" });
+        if(shouldUseOnchain()){
+          const tokenAmountU64 = Math.round(tokenAmount);
+          if(!Number.isInteger(tokenAmountU64) || tokenAmountU64 <= 0) return alert("enter at least 1 token.");
+          try {
+            await sellTx(rid, tokenAmountU64);
+          } catch(e){
+            reportTxError(e, "sell transaction failed");
+            return;
+          }
+          state.chat[r.id] = state.chat[r.id] || [];
+          state.chat[r.id].push({ ts: nowStamp(), wallet: "SYSTEM", text:`@${shortWallet(connectedWallet)} submitted a sell tx on-chain (${tokenAmountU64} tokens).`, kind: "system_activity" });
+        } else {
+          r.positions[connectedWallet] = r.positions[connectedWallet] || {escrow_sol:0, net_sol_in:0, spawn_tokens:0, token_balance:0};
+          const curTokens = Number(r.positions[connectedWallet].token_balance || 0);
+          const sellTokens = Math.min(curTokens, tokenAmount);
+          if(sellTokens <= 0) return alert("you have no tokens to sell.");
+          const sell = applyCurveSell(sellTokens, r.curve_state || makeCurveState());
+          const sellFee = applyTradingFeeToSellSol(sell.grossSolOut);
+          r.curve_state = sell.next;
+          r.positions[connectedWallet].token_balance = curTokens - sellTokens;
+          r.positions[connectedWallet].net_sol_in = Number(r.positions[connectedWallet].net_sol_in || 0) - sellFee.netSol;
+          r.protocol_fees_sol = Number(r.protocol_fees_sol || 0) + sellFee.feeSol;
+          console.debug("[ping-debug] protocol fee accrual (sell)", { roomId: r.id, tradeFeeSol: sellFee.feeSol, protocolFeesSol: r.protocol_fees_sol });
+          syncRoomMarketCap(r);
+          appendBondingTradeEvent(r, {
+            ts: nowStamp(),
+            wallet: connectedWallet,
+            side: "sell",
+            tokens_in: sellTokens,
+            gross_sol_out: sellFee.grossSol,
+            fee_sol: sellFee.feeSol,
+            net_sol_out: sellFee.netSol,
+            price_after: curvePrice(r.curve_state),
+            market_cap_after: Number(r.market_cap_usd || 0),
+          });
+          nudgeChange(r, -(Math.random()*3));
+          state.chat[r.id] = state.chat[r.id] || [];
+          state.chat[r.id].push({ ts: nowStamp(), wallet: connectedWallet, text:`sold ${sellTokens.toFixed(3)} tokens for ${sellFee.grossSol.toFixed(3)} SOL gross (${sellFee.feeSol.toFixed(3)} fee, ${sellFee.netSol.toFixed(3)} net received).`, kind: "activity" });
+        }
       } else {
         return alert("sell is unavailable in this state.");
       }
@@ -5159,6 +5210,7 @@ if(connectBtn){
       closeModal($("unpingBack"));
       await fetchRoomOnchainSnapshot(rid);
       await fetchConnectedWalletDepositSnapshot();
+      if(connectedWallet) await fetchWalletBalancesSnapshot(connectedWallet);
       renderRoom(rid);
       r._pulseUntil = Date.now() + 900;
       r._lastActivity = Date.now();

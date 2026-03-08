@@ -504,6 +504,82 @@ pub mod pingy_spawn {
 
         Ok(())
     }
+
+    pub fn sell(ctx: Context<Sell>, thread_id: String, token_amount: u64) -> Result<()> {
+        require!(
+            ctx.accounts.thread.thread_id == thread_id,
+            PingyError::ThreadMismatch
+        );
+        require!(
+            ctx.accounts.curve.thread_id == thread_id,
+            PingyError::ThreadMismatch
+        );
+        require!(
+            ctx.accounts.curve.mint == ctx.accounts.mint.key(),
+            PingyError::ThreadMismatch
+        );
+        require!(
+            ctx.accounts.curve.curve_token_vault == ctx.accounts.curve_token_vault.key(),
+            PingyError::ThreadMismatch
+        );
+        require!(
+            ctx.accounts.thread.spawn_state == SpawnState::Closed,
+            PingyError::SpawnNotClosed
+        );
+        require!(
+            ctx.accounts.curve.state == CurveLifecycle::Bonding,
+            PingyError::InvalidCurveState
+        );
+        require!(token_amount > 0, PingyError::InvalidAmount);
+        require!(
+            ctx.accounts.user_token_account.owner == ctx.accounts.user.key(),
+            PingyError::InvalidUserTokenAccount
+        );
+        require!(
+            ctx.accounts.user_token_account.mint == ctx.accounts.mint.key(),
+            PingyError::InvalidUserTokenAccount
+        );
+
+        token::transfer(
+            CpiContext::new(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from: ctx.accounts.user_token_account.to_account_info(),
+                    to: ctx.accounts.curve_token_vault.to_account_info(),
+                    authority: ctx.accounts.user.to_account_info(),
+                },
+            ),
+            token_amount,
+        )?;
+
+        let gross_sol_out = curve_sell_sol(token_amount, &ctx.accounts.curve)?;
+        let (net_sol_out, fee_sol) =
+            apply_trade_fee(gross_sol_out, ctx.accounts.curve.trade_fee_bps)?;
+
+        apply_curve_sell(token_amount, &mut ctx.accounts.curve)?;
+
+        transfer_from_program_owned_account_to_account(
+            &ctx.accounts.spawn_pool.to_account_info(),
+            &ctx.accounts.fee_vault.to_account_info(),
+            fee_sol,
+        )?;
+        transfer_from_program_owned_account_to_account(
+            &ctx.accounts.spawn_pool.to_account_info(),
+            &ctx.accounts.user.to_account_info(),
+            net_sol_out,
+        )?;
+
+        emit!(SellExecuted {
+            thread_id,
+            user: ctx.accounts.user.key(),
+            tokens_in: token_amount,
+            gross_sol_out,
+            fee_sol,
+            net_sol_out,
+        });
+
+        Ok(())
+    }
 }
 
 fn allocate_spawn_tokens_pro_rata<'info>(
@@ -1207,6 +1283,63 @@ pub struct Buy<'info> {
     pub system_program: Program<'info, System>,
 }
 
+#[derive(Accounts)]
+#[instruction(thread_id: String)]
+pub struct Sell<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+    #[account(
+        seeds = [b"thread", thread_id.as_bytes()],
+        bump
+    )]
+    pub thread: Account<'info, Thread>,
+    #[account(
+        mut,
+        seeds = [b"curve", thread_id.as_bytes()],
+        bump,
+        constraint = curve.thread_id == thread_id @ PingyError::ThreadMismatch
+    )]
+    pub curve: Account<'info, Curve>,
+    #[account(
+        seeds = [b"curve_authority", thread_id.as_bytes()],
+        bump = curve.curve_authority_bump
+    )]
+    /// CHECK: PDA used as token vault authority.
+    pub curve_authority: UncheckedAccount<'info>,
+    #[account(mut, address = curve.mint)]
+    pub mint: Account<'info, Mint>,
+    #[account(
+        mut,
+        seeds = [b"curve_token_vault", thread_id.as_bytes()],
+        bump,
+        address = curve.curve_token_vault,
+        token::mint = mint,
+        token::authority = curve_authority
+    )]
+    pub curve_token_vault: Account<'info, TokenAccount>,
+    #[account(
+        mut,
+        token::mint = mint,
+        token::authority = user
+    )]
+    pub user_token_account: Account<'info, TokenAccount>,
+    #[account(
+        mut,
+        seeds = [b"spawn_pool", thread_id.as_bytes()],
+        bump,
+        constraint = spawn_pool.thread_id == thread_id @ PingyError::ThreadMismatch
+    )]
+    pub spawn_pool: Account<'info, SpawnPool>,
+    #[account(
+        mut,
+        seeds = [b"fee_vault"],
+        bump
+    )]
+    pub fee_vault: Account<'info, FeeVault>,
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+}
+
 #[account]
 pub struct Thread {
     pub thread_id: String,
@@ -1361,6 +1494,16 @@ pub struct BuyExecuted {
     pub tokens_out: u64,
 }
 
+#[event]
+pub struct SellExecuted {
+    pub thread_id: String,
+    pub user: Pubkey,
+    pub tokens_in: u64,
+    pub gross_sol_out: u64,
+    pub fee_sol: u64,
+    pub net_sol_out: u64,
+}
+
 impl SpawnPool {
     pub const MAX_THREAD_ID_LEN: usize = 64;
     pub const LEN: usize = 4 + Self::MAX_THREAD_ID_LEN;
@@ -1445,6 +1588,8 @@ pub enum PingyError {
     InvalidCurveState,
     #[msg("Spawn pool has insufficient available lamports")]
     InsufficientSpawnPoolBalance,
+    #[msg("User token account is invalid")]
+    InvalidUserTokenAccount,
 }
 
 #[cfg(test)]
