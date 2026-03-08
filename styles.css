@@ -231,9 +231,9 @@
     .pct{color:var(--muted); font-size:12px; white-space:nowrap}
 
     /* ROOM */
-    .roomHeader{display:flex;justify-content:space-between;align-items:baseline;gap:10px;border-bottom:1px solid var(--line);padding-bottom:8px;margin-bottom:8px;flex-wrap:wrap}
+    .roomHeader{display:flex;justify-content:space-between;align-items:baseline;gap:10px;border:1px solid var(--line);padding:10px;margin-bottom:8px;flex-wrap:wrap}
     .roomTitle{font-weight:700}
-    .roomMeta{color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .roomMeta{color:var(--muted);white-space:normal;overflow-wrap:anywhere}
 
     .chat{
       border:1px solid var(--line);
