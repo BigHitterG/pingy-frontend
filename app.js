@@ -641,6 +641,13 @@ const $ = (id) => document.getElementById(id);
       return target * (bps / 10000);
     }
 
+    function creatorCommitSol(room){
+      const creatorWallet = room?.creator_wallet;
+      if(!creatorWallet) return 0;
+      const creatorPos = room?.positions?.[creatorWallet];
+      return Number(creatorPos?.escrow_sol || 0);
+    }
+
     function configWalletCapLamports(config){
       const targetLamports = Number(config?.spawnTargetLamports || 0);
       const shareBps = Number(config?.maxWalletShareBps || 0);
@@ -3573,6 +3580,10 @@ if(connectBtn){
       if(r.state === "SPAWNING"){
         const p = spawnProgress01(r);
         const pct = Math.round(p * 100);
+        const target = spawnTargetSol(r);
+        const allocated = Number(r?.onchain?.total_allocated_lamports || 0) / 1e9;
+        const approvedCount = Number(r?.onchain?.approved_count || 0);
+        const minApproved = minApprovedWalletsRequired(r);
         return `
           <div class="cardGrid pre">
             ${mosaicHtml(r)}
@@ -3584,9 +3595,11 @@ if(connectBtn){
               <div class="tiny subline">${escapeText(r.desc || "prespawn chat open")}</div>
               <div class="bar barActive barSpawn"><i style="width:${pct}%"></i></div>
               <div class="barRow">
-                <div class="tiny">ping phase liquidity build</div>
+                <div class="tiny">spawn progress</div>
                 <div class="pct">${pct}%</div>
               </div>
+              <div class="tiny muted" style="margin-top:4px;">${allocated.toFixed(3)} / ${target.toFixed(3)} SOL</div>
+              <div class="tiny muted">${approvedCount} / ${minApproved} approved wallets</div>
             </div>
           </div>
         `;
@@ -4858,7 +4871,7 @@ if(connectBtn){
       const visiblePhaseLabel = lifecyclePhaseLabel(r.state);
 
       if(r.state === "SPAWNING"){
-        phaseLabel.textContent = "PING PHASE • raising launch liquidity";
+        phaseLabel.textContent = "PING PHASE • spawn progress";
         statePill.textContent = visiblePhaseLabel;
         const target = spawnTargetSol(r);
         const allocated = Number(r?.onchain?.total_allocated_lamports || 0) / 1e9;
@@ -4876,7 +4889,18 @@ if(connectBtn){
         if(progressLine){
           const approvedCount = Number(r?.onchain?.approved_count || 0);
           const minApproved = minApprovedWalletsRequired(r);
-          progressLine.textContent = `Allocated: ${allocated.toFixed(3)} / ${target.toFixed(3)} SOL • Approved wallets: ${approvedCount} / ${minApproved} • Max per wallet: ${walletCapSol(r).toFixed(3)} SOL`;
+          const capBps = roomMaxWalletShareBps(r);
+          const capPct = (capBps / 100).toFixed(1);
+          const creatorCommit = creatorCommitSol(r);
+          const creatorLine = creatorCommit > 0
+            ? `<div>Creator commit: ${creatorCommit.toFixed(3)} SOL</div>`
+            : "";
+          progressLine.innerHTML = `
+            <div>Allocated SOL: ${allocated.toFixed(3)} / ${target.toFixed(3)} SOL</div>
+            <div>Approved wallets: ${approvedCount} / ${minApproved}</div>
+            <div>Max per wallet: ${walletCapSol(r).toFixed(3)} SOL or ${capPct}%</div>
+            ${creatorLine}
+          `;
         }
       } else if(r.state === "BONDING"){
         phaseLabel.textContent = "MARKET • live on bonding curve";
