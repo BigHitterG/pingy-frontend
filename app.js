@@ -2135,6 +2135,32 @@ const $ = (id) => document.getElementById(id);
       return Number(spawnState) === 1;
     }
 
+    function normalizeCurveLifecycle(value){
+      if(value == null) return "";
+      if(typeof value === "string"){
+        const lower = value.toLowerCase();
+        if(lower === "bonding") return "bonding";
+        if(lower === "bonded") return "bonded";
+        if(lower === "prespawn" || lower === "pre_spawn" || lower === "pre-spawn") return "preSpawn";
+        return "";
+      }
+      const n = Number(value);
+      if(n === 1) return "bonding";
+      if(n === 2) return "bonded";
+      if(n === 0) return "preSpawn";
+      return "";
+    }
+
+    function mapRoomStateFromOnchainLifecycle(spawnState, curveLifecycle){
+      const s = Number(spawnState);
+      const normalizedLifecycle = normalizeCurveLifecycle(curveLifecycle);
+
+      if(s === 0) return "SPAWNING";
+      if(s === 1 && normalizedLifecycle === "bonding") return "BONDING";
+      if(s === 1 && normalizedLifecycle === "bonded") return "BONDED";
+      return null;
+    }
+
     function connectedWalletUnclaimedSpawnAllocation(room){
       if(!room || !connectedWallet) return { hasClaimable: false, claimableTokens: 0, allocation: 0, claimed: 0 };
       const row = room?.onchain?.byWallet?.[connectedWallet] || {};
@@ -2248,10 +2274,66 @@ const $ = (id) => document.getElementById(id);
       };
     }
 
+    function decodeCurveAccount(data){
+      const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+      if(!bytes?.length || bytes.length < 8) return null;
+      let o = 8; // anchor discriminator
+      const [threadId, o1] = readString(bytes, o);
+      o = o1;
+      const lifecycleCode = bytes[o];
+      o += 1;
+      const [mintPubkey, o2] = readPubkey(bytes, o);
+      o = o2;
+      const mintDecimals = bytes[o];
+      o += 1;
+      const [curveTokenVault, o3] = readPubkey(bytes, o);
+      o = o3;
+      const curveAuthorityBump = bytes[o];
+      o += 1;
+      const totalSupply = new DataView(bytes.buffer, bytes.byteOffset + o, 8).getBigUint64(0, true);
+      o += 8;
+      const virtualSolReserve = new DataView(bytes.buffer, bytes.byteOffset + o, 8).getBigUint64(0, true);
+      o += 8;
+      const virtualTokenReserve = new DataView(bytes.buffer, bytes.byteOffset + o, 8).getBigUint64(0, true);
+      o += 8;
+      const realSolReserve = new DataView(bytes.buffer, bytes.byteOffset + o, 8).getBigUint64(0, true);
+      o += 8;
+      const realTokenReserve = new DataView(bytes.buffer, bytes.byteOffset + o, 8).getBigUint64(0, true);
+      o += 8;
+      const openingBuyLamports = new DataView(bytes.buffer, bytes.byteOffset + o, 8).getBigUint64(0, true);
+      o += 8;
+      const openingBuyTokens = new DataView(bytes.buffer, bytes.byteOffset + o, 8).getBigUint64(0, true);
+      o += 8;
+      const tradeFeeBps = new DataView(bytes.buffer, bytes.byteOffset + o, 2).getUint16(0, true);
+      o += 2;
+      const graduationTargetLamports = new DataView(bytes.buffer, bytes.byteOffset + o, 8).getBigUint64(0, true);
+      return {
+        threadId,
+        state: Number(lifecycleCode || 0),
+        lifecycle: normalizeCurveLifecycle(lifecycleCode),
+        mint: mintPubkey.toBase58(),
+        mint_pubkey: mintPubkey,
+        mint_decimals: Number(mintDecimals || 0),
+        curve_token_vault: curveTokenVault.toBase58(),
+        curve_token_vault_pubkey: curveTokenVault,
+        curve_authority_bump: Number(curveAuthorityBump || 0),
+        total_supply: Number(totalSupply || 0n),
+        virtual_sol_reserve: Number(virtualSolReserve || 0n),
+        virtual_token_reserve: Number(virtualTokenReserve || 0n),
+        real_sol_reserve: Number(realSolReserve || 0n),
+        real_token_reserve: Number(realTokenReserve || 0n),
+        opening_buy_lamports: Number(openingBuyLamports || 0n),
+        opening_buy_tokens: Number(openingBuyTokens || 0n),
+        trade_fee_bps: Number(tradeFeeBps || 0),
+        graduation_target_lamports: Number(graduationTargetLamports || 0n),
+      };
+    }
+
 
     async function fetchRoomOnchainSnapshot(roomId){
       if(!roomId) return null;
       const [threadPda] = await deriveThreadPda(roomId);
+      const [curvePda] = await deriveCurvePda(roomId);
       const threadInfo = await connection.getAccountInfo(threadPda, "confirmed");
       if(!threadInfo || !threadInfo.data || threadInfo.data.length < 8){
         state.onchain[roomId] = null;
@@ -2292,9 +2374,19 @@ const $ = (id) => document.getElementById(id);
         if(deposit.status === "pending") pendingWallets.push(wallet);
       }
 
+      let curve = null;
+      const curveInfo = await connection.getAccountInfo(curvePda, "confirmed");
+      if(curveInfo?.data?.length >= 8){
+        const decodedCurve = decodeCurveAccount(curveInfo.data);
+        if(decodedCurve?.threadId === roomId) curve = decodedCurve;
+      }
+
+      const derivedRoomState = mapRoomStateFromOnchainLifecycle(thread.spawnState, curve?.lifecycle ?? curve?.state);
+
       const snapshot = {
         roomId,
         threadPda: threadPda.toBase58(),
+        curvePda: curvePda.toBase58(),
         admin: thread.admin,
         admin_pubkey: thread.admin_pubkey,
         pending_count: Number(thread.pending_count || 0),
@@ -2304,6 +2396,19 @@ const $ = (id) => document.getElementById(id);
         min_approved_wallets: Number(thread.min_approved_wallets || 0),
         spawn_target_lamports: Number(thread.spawn_target_lamports || 0),
         max_wallet_share_bps: Number(thread.max_wallet_share_bps || 0),
+        curve_lifecycle: curve?.lifecycle || "",
+        curve_state: Number(curve?.state ?? -1),
+        mint: curve?.mint || "",
+        trade_fee_bps: Number(curve?.trade_fee_bps || 0),
+        opening_buy_lamports: Number(curve?.opening_buy_lamports || 0),
+        opening_buy_tokens: Number(curve?.opening_buy_tokens || 0),
+        virtual_sol_reserve: Number(curve?.virtual_sol_reserve || 0),
+        virtual_token_reserve: Number(curve?.virtual_token_reserve || 0),
+        graduation_target_lamports: Number(curve?.graduation_target_lamports || 0),
+        real_sol_reserve: Number(curve?.real_sol_reserve || 0),
+        real_token_reserve: Number(curve?.real_token_reserve || 0),
+        curve,
+        derived_room_state: derivedRoomState || "",
         approverWallets: thread.admin ? [thread.admin] : [],
         byWallet,
         approvedWallets,
@@ -2315,9 +2420,14 @@ const $ = (id) => document.getElementById(id);
       const room = roomById(roomId);
       if(room){
         room.onchain = snapshot;
+        room.curve_lifecycle = snapshot.curve_lifecycle;
+        room.real_sol_reserve = snapshot.real_sol_reserve;
+        room.real_token_reserve = snapshot.real_token_reserve;
+        room.graduation_target_lamports = snapshot.graduation_target_lamports;
         room.spawn_target_sol = Number(snapshot.spawn_target_lamports || 0) / LAMPORTS_PER_SOL;
         room.min_approved_wallets = Number(snapshot.min_approved_wallets || room.min_approved_wallets || 0);
         room.max_wallet_share_bps = Number(snapshot.max_wallet_share_bps || room.max_wallet_share_bps || 0);
+        if(snapshot.derived_room_state) room.state = snapshot.derived_room_state;
       }
       state.onchainMeta[roomId] = { fetchedAtMs: snapshot.fetchedAtMs };
       return snapshot;
