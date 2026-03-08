@@ -3389,10 +3389,26 @@ if(connectBtn){
       if(target <= 0) return 0;
       return clamp01(countedEscrowSol(r) / target);
     }
-    function bondingProgress01(r){
+    function legacyBondingProgress01(r){
       syncRoomMarketCap(r);
-      const MC = Number(r.market_cap_usd || 0);
+      const MC = Number(r?.market_cap_usd || 0);
       return clamp01((MC - MC_SPAWN_FLOOR) / (GRADUATION_MARKET_CAP - MC_SPAWN_FLOOR));
+    }
+    function graduationTargetSol(r){
+      const targetLamports = Number(r?.onchain?.graduation_target_lamports || r?.graduation_target_lamports || 0);
+      if(targetLamports > 0) return targetLamports / LAMPORTS_PER_SOL;
+      return 78;
+    }
+    function currentBondingReserveSol(r){
+      const reserveLamports = Number(r?.onchain?.real_sol_reserve || r?.real_sol_reserve || 0);
+      if(reserveLamports > 0) return reserveLamports / LAMPORTS_PER_SOL;
+      return legacyBondingProgress01(r) * graduationTargetSol(r);
+    }
+    function bondingProgress01(r){
+      if(r?.state === "BONDED") return 1;
+      const target = graduationTargetSol(r);
+      if(target <= 0) return 0;
+      return clamp01(currentBondingReserveSol(r) / target);
     }
 
     function maybeAdvance(r){
@@ -5280,6 +5296,8 @@ if(connectBtn){
         phaseLabel.textContent = "MARKET • live on bonding curve";
         statePill.textContent = visiblePhaseLabel;
         const bondProgress = bondingProgress01(r);
+        const reserveSol = currentBondingReserveSol(r);
+        const targetSol = graduationTargetSol(r);
         const hotBonding = bondProgress >= 0.9;
         phaseBar.style.width = Math.round(bondProgress*100) + "%";
         phaseBar.style.background = hotBonding ? "#46d36f" : "#84d4ff";
@@ -5294,7 +5312,7 @@ if(connectBtn){
           if(!hotBonding && sparkEl) sparkEl.remove();
         }
         const progressLine = $("spawnProgressLine");
-        if(progressLine) progressLine.textContent = `trading fee: ${POST_SPAWN_TRADING_FEE_BPS / 100}% applied to bonding buys/sells`;
+        if(progressLine) progressLine.textContent = `Bonding progress: ${reserveSol.toFixed(3)} / ${targetSol.toFixed(3)} SOL • trading fee: ${POST_SPAWN_TRADING_FEE_BPS / 100}% applied to bonding buys/sells`;
       } else {
         phaseLabel.textContent = "BONDED • lifecycle complete";
         statePill.textContent = visiblePhaseLabel;
