@@ -427,6 +427,83 @@ pub mod pingy_spawn {
 
         Ok(())
     }
+
+    pub fn buy(ctx: Context<Buy>, thread_id: String, amount_lamports: u64) -> Result<()> {
+        require!(
+            ctx.accounts.thread.thread_id == thread_id,
+            PingyError::ThreadMismatch
+        );
+        require!(
+            ctx.accounts.curve.thread_id == thread_id,
+            PingyError::ThreadMismatch
+        );
+        require!(
+            ctx.accounts.curve.mint == ctx.accounts.mint.key(),
+            PingyError::ThreadMismatch
+        );
+        require!(
+            ctx.accounts.curve.curve_token_vault == ctx.accounts.curve_token_vault.key(),
+            PingyError::ThreadMismatch
+        );
+        require!(
+            ctx.accounts.thread.spawn_state == SpawnState::Closed,
+            PingyError::SpawnNotClosed
+        );
+        require!(
+            ctx.accounts.curve.state == CurveLifecycle::Bonding,
+            PingyError::InvalidCurveState
+        );
+        require!(amount_lamports > 0, PingyError::InvalidAmount);
+
+        let transfer_ctx = CpiContext::new(
+            ctx.accounts.system_program.to_account_info(),
+            system_program::Transfer {
+                from: ctx.accounts.user.to_account_info(),
+                to: ctx.accounts.spawn_pool.to_account_info(),
+            },
+        );
+        system_program::transfer(transfer_ctx, amount_lamports)?;
+
+        let (net_lamports, fee_lamports) =
+            apply_trade_fee(amount_lamports, ctx.accounts.curve.trade_fee_bps)?;
+        transfer_from_program_owned_account_to_account(
+            &ctx.accounts.spawn_pool.to_account_info(),
+            &ctx.accounts.fee_vault.to_account_info(),
+            fee_lamports,
+        )?;
+
+        let tokens_out = apply_curve_buy(net_lamports, &mut ctx.accounts.curve)?;
+
+        let signer_seeds: &[&[&[u8]]] = &[&[
+            b"curve_authority",
+            thread_id.as_bytes(),
+            &[ctx.accounts.curve.curve_authority_bump],
+        ]];
+
+        token::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from: ctx.accounts.curve_token_vault.to_account_info(),
+                    to: ctx.accounts.user_token_account.to_account_info(),
+                    authority: ctx.accounts.curve_authority.to_account_info(),
+                },
+                signer_seeds,
+            ),
+            tokens_out,
+        )?;
+
+        emit!(BuyExecuted {
+            thread_id,
+            user: ctx.accounts.user.key(),
+            gross_sol: amount_lamports,
+            fee_sol: fee_lamports,
+            net_sol: net_lamports,
+            tokens_out,
+        });
+
+        Ok(())
+    }
 }
 
 fn allocate_spawn_tokens_pro_rata<'info>(
@@ -766,6 +843,34 @@ fn transfer_from_thread_escrow_to_account<'info>(
     Ok(())
 }
 
+fn transfer_from_program_owned_account_to_account<'info>(
+    source_info: &AccountInfo<'info>,
+    recipient_account: &AccountInfo<'info>,
+    amount: u64,
+) -> Result<()> {
+    if amount == 0 {
+        return Ok(());
+    }
+
+    let min_balance = Rent::get()?.minimum_balance(source_info.data_len());
+    let available = source_info.lamports().saturating_sub(min_balance);
+    require!(
+        available >= amount,
+        PingyError::InsufficientSpawnPoolBalance
+    );
+
+    **source_info.try_borrow_mut_lamports()? = source_info
+        .lamports()
+        .checked_sub(amount)
+        .ok_or(PingyError::AccountingUnderflow)?;
+    **recipient_account.try_borrow_mut_lamports()? = recipient_account
+        .lamports()
+        .checked_add(amount)
+        .ok_or(PingyError::AmountOverflow)?;
+
+    Ok(())
+}
+
 #[derive(Accounts)]
 #[instruction(thread_id: String)]
 pub struct InitializeThread<'info> {
@@ -1043,6 +1148,65 @@ pub struct ClaimSpawnTokens<'info> {
     pub system_program: Program<'info, System>,
 }
 
+#[derive(Accounts)]
+#[instruction(thread_id: String)]
+pub struct Buy<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+    #[account(
+        seeds = [b"thread", thread_id.as_bytes()],
+        bump
+    )]
+    pub thread: Account<'info, Thread>,
+    #[account(
+        mut,
+        seeds = [b"curve", thread_id.as_bytes()],
+        bump,
+        constraint = curve.thread_id == thread_id @ PingyError::ThreadMismatch
+    )]
+    pub curve: Account<'info, Curve>,
+    #[account(
+        seeds = [b"curve_authority", thread_id.as_bytes()],
+        bump = curve.curve_authority_bump
+    )]
+    /// CHECK: PDA used as token vault authority.
+    pub curve_authority: UncheckedAccount<'info>,
+    #[account(mut, address = curve.mint)]
+    pub mint: Account<'info, Mint>,
+    #[account(
+        mut,
+        seeds = [b"curve_token_vault", thread_id.as_bytes()],
+        bump,
+        address = curve.curve_token_vault,
+        token::mint = mint,
+        token::authority = curve_authority
+    )]
+    pub curve_token_vault: Account<'info, TokenAccount>,
+    #[account(
+        init_if_needed,
+        payer = user,
+        associated_token::mint = mint,
+        associated_token::authority = user
+    )]
+    pub user_token_account: Account<'info, TokenAccount>,
+    #[account(
+        mut,
+        seeds = [b"spawn_pool", thread_id.as_bytes()],
+        bump,
+        constraint = spawn_pool.thread_id == thread_id @ PingyError::ThreadMismatch
+    )]
+    pub spawn_pool: Account<'info, SpawnPool>,
+    #[account(
+        mut,
+        seeds = [b"fee_vault"],
+        bump
+    )]
+    pub fee_vault: Account<'info, FeeVault>,
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub system_program: Program<'info, System>,
+}
+
 #[account]
 pub struct Thread {
     pub thread_id: String,
@@ -1187,6 +1351,16 @@ pub struct SpawnExecuted {
     pub opening_buy_tokens: u64,
 }
 
+#[event]
+pub struct BuyExecuted {
+    pub thread_id: String,
+    pub user: Pubkey,
+    pub gross_sol: u64,
+    pub fee_sol: u64,
+    pub net_sol: u64,
+    pub tokens_out: u64,
+}
+
 impl SpawnPool {
     pub const MAX_THREAD_ID_LEN: usize = 64;
     pub const LEN: usize = 4 + Self::MAX_THREAD_ID_LEN;
@@ -1269,6 +1443,8 @@ pub enum PingyError {
     SpawnNotClosed,
     #[msg("Curve state does not allow this operation")]
     InvalidCurveState,
+    #[msg("Spawn pool has insufficient available lamports")]
+    InsufficientSpawnPoolBalance,
 }
 
 #[cfg(test)]
