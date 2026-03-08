@@ -1,6 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_lang::system_program;
-use anchor_spl::token::{self, Mint, MintTo, Token, TokenAccount};
+use anchor_spl::associated_token::AssociatedToken;
+use anchor_spl::token::{self, Mint, MintTo, Token, TokenAccount, Transfer};
 
 declare_id!("FSvYheeHSLjU6UKqka5AnMeaPwsQBrLm8dCL4VtFpf5R");
 
@@ -359,6 +360,70 @@ pub mod pingy_spawn {
             net,
             opening_buy_tokens: tokens_out,
         });
+
+        Ok(())
+    }
+
+    pub fn claim_spawn_tokens(ctx: Context<ClaimSpawnTokens>, thread_id: String) -> Result<()> {
+        require!(
+            ctx.accounts.thread.thread_id == thread_id,
+            PingyError::ThreadMismatch
+        );
+        require!(
+            ctx.accounts.curve.thread_id == thread_id,
+            PingyError::ThreadMismatch
+        );
+        require!(
+            ctx.accounts.deposit.thread_id == thread_id,
+            PingyError::ThreadMismatch
+        );
+        require!(
+            ctx.accounts.deposit.user_pubkey == ctx.accounts.user.key(),
+            PingyError::UserMismatch
+        );
+        require!(
+            ctx.accounts.thread.spawn_state == SpawnState::Closed,
+            PingyError::SpawnNotClosed
+        );
+        require!(
+            ctx.accounts.curve.state == CurveLifecycle::Bonding
+                || ctx.accounts.curve.state == CurveLifecycle::Bonded,
+            PingyError::InvalidCurveState
+        );
+
+        let claimable = ctx
+            .accounts
+            .deposit
+            .spawn_token_allocation
+            .checked_sub(ctx.accounts.deposit.spawn_tokens_claimed)
+            .ok_or(PingyError::AccountingUnderflow)?;
+        require!(claimable > 0, PingyError::NothingToClaim);
+
+        let signer_seeds: &[&[&[u8]]] = &[&[
+            b"curve_authority",
+            thread_id.as_bytes(),
+            &[ctx.accounts.curve.curve_authority_bump],
+        ]];
+
+        token::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from: ctx.accounts.curve_token_vault.to_account_info(),
+                    to: ctx.accounts.user_token_account.to_account_info(),
+                    authority: ctx.accounts.curve_authority.to_account_info(),
+                },
+                signer_seeds,
+            ),
+            claimable,
+        )?;
+
+        ctx.accounts.deposit.spawn_tokens_claimed = ctx
+            .accounts
+            .deposit
+            .spawn_tokens_claimed
+            .checked_add(claimable)
+            .ok_or(PingyError::AmountOverflow)?;
 
         Ok(())
     }
@@ -927,6 +992,57 @@ pub struct ExecuteSpawn<'info> {
     pub token_program: Program<'info, Token>,
 }
 
+#[derive(Accounts)]
+#[instruction(thread_id: String)]
+pub struct ClaimSpawnTokens<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+    #[account(
+        seeds = [b"thread", thread_id.as_bytes()],
+        bump
+    )]
+    pub thread: Account<'info, Thread>,
+    #[account(
+        seeds = [b"curve", thread_id.as_bytes()],
+        bump,
+        constraint = curve.thread_id == thread_id @ PingyError::ThreadMismatch
+    )]
+    pub curve: Account<'info, Curve>,
+    #[account(
+        mut,
+        seeds = [b"deposit", thread_id.as_bytes(), user.key().as_ref()],
+        bump
+    )]
+    pub deposit: Account<'info, Deposit>,
+    #[account(
+        seeds = [b"curve_authority", thread_id.as_bytes()],
+        bump = curve.curve_authority_bump
+    )]
+    /// CHECK: PDA used as mint authority and token vault authority.
+    pub curve_authority: UncheckedAccount<'info>,
+    #[account(address = curve.mint)]
+    pub mint: Account<'info, Mint>,
+    #[account(
+        mut,
+        seeds = [b"curve_token_vault", thread_id.as_bytes()],
+        bump,
+        address = curve.curve_token_vault,
+        token::mint = mint,
+        token::authority = curve_authority
+    )]
+    pub curve_token_vault: Account<'info, TokenAccount>,
+    #[account(
+        init_if_needed,
+        payer = user,
+        associated_token::mint = mint,
+        associated_token::authority = user
+    )]
+    pub user_token_account: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub system_program: Program<'info, System>,
+}
+
 #[account]
 pub struct Thread {
     pub thread_id: String,
@@ -1147,6 +1263,12 @@ pub enum PingyError {
     MissingApprovedDepositAccounts,
     #[msg("Invalid remaining account passed for deposit allocation")]
     InvalidDepositRemainingAccount,
+    #[msg("Nothing to claim")]
+    NothingToClaim,
+    #[msg("Spawn is not closed")]
+    SpawnNotClosed,
+    #[msg("Curve state does not allow this operation")]
+    InvalidCurveState,
 }
 
 #[cfg(test)]
