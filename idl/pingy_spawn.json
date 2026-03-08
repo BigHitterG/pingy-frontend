@@ -351,6 +351,68 @@
           "type": "string"
         }
       ]
+    },
+    {
+      "name": "claimSpawnTokens",
+      "discriminator": [
+        9,
+        37,
+        218,
+        94,
+        21,
+        8,
+        218,
+        3
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "thread"
+        },
+        {
+          "name": "curve"
+        },
+        {
+          "name": "deposit",
+          "writable": true
+        },
+        {
+          "name": "curveAuthority"
+        },
+        {
+          "name": "mint"
+        },
+        {
+          "name": "curveTokenVault",
+          "writable": true
+        },
+        {
+          "name": "userTokenAccount",
+          "writable": true
+        },
+        {
+          "name": "tokenProgram",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "associatedTokenProgram",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "threadId",
+          "type": "string"
+        }
+      ]
     }
   ],
   "accounts": [
@@ -851,6 +913,21 @@
       "code": 6022,
       "name": "InvalidDepositRemainingAccount",
       "msg": "Invalid remaining account passed for deposit allocation"
+    },
+    {
+      "code": 6023,
+      "name": "NothingToClaim",
+      "msg": "Nothing to claim"
+    },
+    {
+      "code": 6024,
+      "name": "SpawnNotClosed",
+      "msg": "Spawn is not closed"
+    },
+    {
+      "code": 6025,
+      "name": "InvalidCurveState",
+      "msg": "Curve state does not allow this operation"
     }
   ]
 }
