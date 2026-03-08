@@ -18,6 +18,7 @@ pub const MIN_APPROVED_WALLETS_MIN: u32 = 10;
 pub const MIN_APPROVED_WALLETS_MAX: u32 = 50;
 pub const SPAWN_TARGET_MIN_LAMPORTS: u64 = LAMPORTS_PER_SOL;
 pub const SPAWN_TARGET_MAX_LAMPORTS: u64 = 100 * LAMPORTS_PER_SOL;
+pub const GRADUATION_TARGET_LAMPORTS: u64 = 78 * LAMPORTS_PER_SOL;
 pub const MAX_WALLET_SHARE_BPS_MIN: u16 = 200;
 pub const MAX_WALLET_SHARE_BPS_MAX: u16 = 2000;
 pub const LAUNCH_MODE_SPAWN: u8 = 0;
@@ -79,7 +80,7 @@ pub mod pingy_spawn {
             curve,
             TOTAL_SUPPLY,
             POST_SPAWN_TRADING_FEE_BPS,
-            spawn_target_lamports,
+            GRADUATION_TARGET_LAMPORTS,
         );
         curve.curve_authority_bump = ctx.bumps.curve_authority;
 
@@ -1680,7 +1681,7 @@ mod tests {
             opening_buy_lamports: 0,
             opening_buy_tokens: 0,
             trade_fee_bps: POST_SPAWN_TRADING_FEE_BPS,
-            graduation_target_lamports: SPAWN_TARGET_MIN_LAMPORTS,
+            graduation_target_lamports: GRADUATION_TARGET_LAMPORTS,
         }
     }
 
@@ -1760,7 +1761,12 @@ mod tests {
         curve.virtual_sol_reserve = 1;
         curve.real_sol_reserve = 7;
 
-        initialize_curve_state(&mut curve, TOTAL_SUPPLY, POST_SPAWN_TRADING_FEE_BPS, 123);
+        initialize_curve_state(
+            &mut curve,
+            TOTAL_SUPPLY,
+            POST_SPAWN_TRADING_FEE_BPS,
+            GRADUATION_TARGET_LAMPORTS,
+        );
 
         assert!(matches!(curve.state, CurveLifecycle::PreSpawn));
         assert_eq!(curve.mint, Pubkey::default());
@@ -1775,6 +1781,6 @@ mod tests {
         assert_eq!(curve.opening_buy_lamports, 0);
         assert_eq!(curve.opening_buy_tokens, 0);
         assert_eq!(curve.trade_fee_bps, POST_SPAWN_TRADING_FEE_BPS);
-        assert_eq!(curve.graduation_target_lamports, 123);
+        assert_eq!(curve.graduation_target_lamports, GRADUATION_TARGET_LAMPORTS);
     }
 }
