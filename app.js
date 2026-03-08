@@ -247,6 +247,13 @@ const $ = (id) => document.getElementById(id);
       return `https://explorer.solana.com/address/${address}?cluster=devnet`;
     }
 
+    function lifecyclePhaseLabel(state){
+      if(state === "SPAWNING") return "PING PHASE";
+      if(state === "BONDING") return "MARKET";
+      if(state === "BONDED") return "BONDED";
+      return state || "—";
+    }
+
 
     let moversIntervalId = null;
 
@@ -3557,6 +3564,7 @@ if(connectBtn){
 
     function cardInner(r){
       maybeAdvance(r);
+      const phaseLabel = lifecyclePhaseLabel(r.state);
 
       if(r.state === "SPAWNING"){
         const p = spawnProgress01(r);
@@ -3567,12 +3575,12 @@ if(connectBtn){
             <div style="min-width:0;">
               <div class="row" style="justify-content:space-between;align-items:baseline;">
                 <div class="name">${escapeText(r.name)} <span class="k">$${escapeText(r.ticker)}</span></div>
-                <span class="k">SPAWNING • ${roomLaunchLabel(r)}</span>
+                <span class="k">${phaseLabel} • ${roomLaunchLabel(r)}</span>
               </div>
               <div class="tiny subline">${escapeText(r.desc || "prespawn chat open")}</div>
               <div class="bar barActive barSpawn"><i style="width:${pct}%"></i></div>
               <div class="barRow">
-                <div class="tiny">raising launch liquidity</div>
+                <div class="tiny">ping phase liquidity build</div>
                 <div class="pct">${pct}%</div>
               </div>
             </div>
@@ -3585,7 +3593,7 @@ if(connectBtn){
       const pct = Math.round(p * 100);
       const chg = Number(r.change_pct || 0);
       const chgCls = chg > 0 ? "up" : (chg < 0 ? "down" : "");
-      const chip = (r.state === "BONDING") ? `BONDING • ${roomLaunchLabel(r)}` : `BONDED • ${roomLaunchLabel(r)}`;
+      const chip = `${phaseLabel} • ${roomLaunchLabel(r)}`;
       const athRatio = p;
       const isHotBonding = r.state === "BONDING" && athRatio >= 0.9;
       const barClass = isHotBonding ? "bar barActive barBonding barHot" : "bar barActive barBonding";
@@ -4836,10 +4844,11 @@ if(connectBtn){
       const statePill = $("statePill");
       const phaseBar = $("phaseBar");
       const phaseBarWrap = phaseBar ? phaseBar.parentElement : null;
+      const visiblePhaseLabel = lifecyclePhaseLabel(r.state);
 
       if(r.state === "SPAWNING"){
-        phaseLabel.textContent = "Raising launch liquidity";
-        statePill.textContent = "SPAWNING";
+        phaseLabel.textContent = "PING PHASE • raising launch liquidity";
+        statePill.textContent = visiblePhaseLabel;
         const target = spawnTargetSol(r);
         const allocated = Number(r?.onchain?.total_allocated_lamports || 0) / 1e9;
         const progress = target > 0
@@ -4859,8 +4868,8 @@ if(connectBtn){
           progressLine.textContent = `Allocated: ${allocated.toFixed(3)} / ${target.toFixed(3)} SOL • Approved wallets: ${approvedCount} / ${minApproved} • Max per wallet: ${walletCapSol(r).toFixed(3)} SOL`;
         }
       } else if(r.state === "BONDING"){
-        phaseLabel.textContent = isInstantLaunch ? "Live on bonding curve" : "BONDING";
-        statePill.textContent = isInstantLaunch ? "INSTANT" : "BONDING";
+        phaseLabel.textContent = "MARKET • live on bonding curve";
+        statePill.textContent = visiblePhaseLabel;
         const bondProgress = bondingProgress01(r);
         const hotBonding = bondProgress >= 0.9;
         phaseBar.style.width = Math.round(bondProgress*100) + "%";
@@ -4878,8 +4887,8 @@ if(connectBtn){
         const progressLine = $("spawnProgressLine");
         if(progressLine) progressLine.textContent = `trading fee: ${POST_SPAWN_TRADING_FEE_BPS / 100}% applied to bonding buys/sells`;
       } else {
-        phaseLabel.textContent = "BONDED";
-        statePill.textContent = "BONDED";
+        phaseLabel.textContent = "BONDED • lifecycle complete";
+        statePill.textContent = visiblePhaseLabel;
         phaseBar.style.width = "100%";
         phaseBar.style.background = "#46d36f";
         if(phaseBarWrap){
