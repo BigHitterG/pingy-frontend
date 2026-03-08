@@ -727,6 +727,11 @@
           "name": "net",
           "type": "u64",
           "index": false
+        },
+        {
+          "name": "openingBuyTokens",
+          "type": "u64",
+          "index": false
         }
       ]
     }
@@ -789,53 +794,63 @@
     },
     {
       "code": 6011,
-      "name": "InsufficientEscrowBalance",
-      "msg": "Thread escrow has insufficient available lamports"
-    },
-    {
-      "code": 6012,
-      "name": "MinApprovedWalletsOutOfBounds",
-      "msg": "min_approved_wallets is outside allowed bounds"
-    },
-    {
-      "code": 6013,
-      "name": "SpawnTargetOutOfBounds",
-      "msg": "spawn_target_lamports is outside allowed bounds"
-    },
-    {
-      "code": 6014,
-      "name": "MaxWalletShareOutOfBounds",
-      "msg": "max_wallet_share_bps is outside allowed bounds"
-    },
-    {
-      "code": 6015,
-      "name": "SpawnTargetNotReached",
-      "msg": "Spawn target has not been reached"
-    },
-    {
-      "code": 6016,
-      "name": "MinApprovedWalletsNotReached",
-      "msg": "Minimum approved wallets requirement has not been reached"
-    },
-    {
-      "code": 6017,
       "name": "DepositNotApproved",
       "msg": "Deposit is not approved"
     },
     {
+      "code": 6012,
+      "name": "InsufficientEscrowBalance",
+      "msg": "Thread escrow has insufficient available lamports"
+    },
+    {
+      "code": 6013,
+      "name": "MinApprovedWalletsOutOfBounds",
+      "msg": "min_approved_wallets is outside allowed bounds"
+    },
+    {
+      "code": 6014,
+      "name": "SpawnTargetOutOfBounds",
+      "msg": "spawn_target_lamports is outside allowed bounds"
+    },
+    {
+      "code": 6015,
+      "name": "MaxWalletShareOutOfBounds",
+      "msg": "max_wallet_share_bps is outside allowed bounds"
+    },
+    {
+      "code": 6016,
+      "name": "SpawnTargetNotReached",
+      "msg": "Spawn target has not been reached"
+    },
+    {
+      "code": 6017,
+      "name": "MinApprovedWalletsNotReached",
+      "msg": "Minimum approved wallets requirement has not been reached"
+    },
+    {
       "code": 6018,
+      "name": "InvalidCurveReserves",
+      "msg": "Curve reserves are invalid"
+    },
+    {
+      "code": 6019,
       "name": "InvalidCurveMintAuthority",
       "msg": "Curve mint authority is invalid"
     },
     {
-      "code": 6019,
+      "code": 6020,
       "name": "CurveTokenVaultMintMismatch",
       "msg": "Curve token vault mint does not match curve mint"
     },
     {
-      "code": 6020,
-      "name": "InvalidCurveReserves",
-      "msg": "Curve reserves are invalid"
+      "code": 6021,
+      "name": "MissingApprovedDepositAccounts",
+      "msg": "Missing approved deposit accounts required for spawn allocation"
+    },
+    {
+      "code": 6022,
+      "name": "InvalidDepositRemainingAccount",
+      "msg": "Invalid remaining account passed for deposit allocation"
     }
   ]
 }

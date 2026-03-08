@@ -1922,6 +1922,66 @@ const $ = (id) => document.getElementById(id);
       }));
     }
 
+    async function executeSpawnTx(roomId){
+      const rid = String(roomId || "");
+      const adminPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
+      const [threadPda] = await deriveThreadPda(rid);
+      const [curvePda] = await deriveCurvePda(rid);
+      const [curveAuthorityPda] = await deriveCurveAuthorityPda(rid);
+      const [mintPda] = await deriveMintPda(rid);
+      const [curveTokenVaultPda] = await deriveCurveTokenVaultPda(rid);
+      const [threadEscrowPda] = await deriveThreadEscrowPda(rid);
+      const [spawnPoolPda] = await deriveSpawnPoolPda(rid);
+      const [feeVaultPda] = await deriveFeeVaultPda();
+
+      const snapshot = state.onchain?.[rid] || await fetchRoomOnchainSnapshot(rid);
+      const approvedRows = Object.values(snapshot?.byWallet || {}).filter((row) => normalizeDepositStatus(row?.status) === "approved" && row?.deposit_pda);
+      const remainingKeys = approvedRows.map((row) => ({
+        pubkey: new PublicKey(row.deposit_pda),
+        isSigner: false,
+        isWritable: true,
+      }));
+
+      const keys = [
+        { pubkey: adminPk, isSigner: true, isWritable: true },
+        { pubkey: threadPda, isSigner: false, isWritable: true },
+        { pubkey: curvePda, isSigner: false, isWritable: true },
+        { pubkey: curveAuthorityPda, isSigner: false, isWritable: false },
+        { pubkey: mintPda, isSigner: false, isWritable: true },
+        { pubkey: curveTokenVaultPda, isSigner: false, isWritable: true },
+        { pubkey: threadEscrowPda, isSigner: false, isWritable: true },
+        { pubkey: spawnPoolPda, isSigner: false, isWritable: true },
+        { pubkey: feeVaultPda, isSigner: false, isWritable: true },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        ...remainingKeys,
+      ];
+
+      const data = concatBytes(await anchorDiscriminator("execute_spawn"), encodeStringArg(rid));
+      return sendProgramInstruction(new TransactionInstruction({ programId: PROGRAM_ID, keys, data }));
+    }
+
+    async function maybeExecuteSpawnOnchain(room){
+      if(!room || !shouldUseOnchain()) return false;
+      if(room._spawnExecInFlight) return false;
+      if(!isCreator(room, connectedWallet)) return false;
+      room._spawnExecInFlight = true;
+      try {
+        await executeSpawnTx(room.id);
+        await fetchRoomOnchainSnapshot(room.id);
+        await fetchConnectedWalletDepositSnapshot();
+        addSystemEvent(room.id, "spawn execute tx submitted on-chain.");
+        renderRoom(room.id);
+        renderHome();
+        return true;
+      } catch(e){
+        reportTxError(e, "execute spawn transaction failed");
+        return false;
+      } finally {
+        room._spawnExecInFlight = false;
+      }
+    }
+
     function decodeThreadAccount(data){
       const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
       if(!bytes?.length || bytes.length < 8) return null;
@@ -2994,6 +3054,11 @@ if(connectBtn){
         const total = countedEscrowSol(r);
         const target = spawnTargetSol(r);
         if(target > 0 && total >= target && getRoomEscrowSnapshot(r).approvedWallets.length >= minApprovedWalletsRequired(r)){
+          if(shouldUseOnchain()){
+            void maybeExecuteSpawnOnchain(r);
+            return;
+          }
+
           const pos = r.positions || {};
           const capSol = walletCapSol(r);
           const contributions = {};

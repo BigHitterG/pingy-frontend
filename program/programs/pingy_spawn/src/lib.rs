@@ -294,7 +294,7 @@ pub mod pingy_spawn {
             PingyError::MinApprovedWalletsNotReached
         );
 
-        let use_amt = thread.total_allocated_lamports;
+        let use_amt = thread.spawn_target_lamports;
         let fee = use_amt
             .checked_mul(SPAWN_FEE_BPS)
             .ok_or(PingyError::AmountOverflow)?
@@ -303,6 +303,32 @@ pub mod pingy_spawn {
         let net = use_amt
             .checked_sub(fee)
             .ok_or(PingyError::AccountingUnderflow)?;
+
+        mint_total_supply_to_curve_vault(
+            &thread_id,
+            &ctx.accounts.curve,
+            &ctx.accounts.curve_authority,
+            &ctx.accounts.mint,
+            &ctx.accounts.curve_token_vault,
+            &ctx.accounts.token_program,
+        )?;
+
+        let tokens_out = {
+            let curve = &mut ctx.accounts.curve;
+            let tokens_out = apply_curve_buy(net, curve)?;
+            curve.opening_buy_lamports = net;
+            curve.opening_buy_tokens = tokens_out;
+            curve.state = CurveLifecycle::Bonding;
+            tokens_out
+        };
+
+        allocate_spawn_tokens_pro_rata(
+            thread,
+            &thread_id,
+            use_amt,
+            tokens_out,
+            ctx.remaining_accounts,
+        )?;
 
         transfer_from_thread_escrow_to_account(
             &ctx.accounts.thread_escrow.to_account_info(),
@@ -323,6 +349,7 @@ pub mod pingy_spawn {
             .total_escrow_lamports
             .checked_sub(use_amt)
             .ok_or(PingyError::AccountingUnderflow)?;
+        thread.curve_initialized = true;
         thread.spawn_state = SpawnState::Closed;
 
         emit!(SpawnExecuted {
@@ -330,10 +357,72 @@ pub mod pingy_spawn {
             total_to_use: use_amt,
             fee,
             net,
+            opening_buy_tokens: tokens_out,
         });
 
         Ok(())
     }
+}
+
+fn allocate_spawn_tokens_pro_rata<'info>(
+    thread: &mut Account<Thread>,
+    thread_id: &str,
+    use_amt: u64,
+    tokens_out: u64,
+    remaining_accounts: &'info [AccountInfo<'info>],
+) -> Result<()> {
+    let mut remaining_lamports = use_amt;
+    let mut remaining_tokens = tokens_out;
+
+    for account_info in remaining_accounts.iter() {
+        let mut deposit: Account<Deposit> = Account::try_from(account_info)?;
+        require!(
+            deposit.thread_id == thread_id,
+            PingyError::InvalidDepositRemainingAccount
+        );
+        require!(
+            deposit.status == DepositStatus::Approved,
+            PingyError::DepositNotApproved
+        );
+
+        let allocated = deposit.allocated_lamports;
+        require!(
+            allocated <= remaining_lamports,
+            PingyError::InvalidDepositRemainingAccount
+        );
+
+        let wallet_tokens = if allocated == 0 {
+            0
+        } else if allocated == remaining_lamports {
+            remaining_tokens
+        } else {
+            ((allocated as u128)
+                .checked_mul(remaining_tokens as u128)
+                .ok_or(PingyError::AmountOverflow)?
+                .checked_div(remaining_lamports as u128)
+                .ok_or(PingyError::AmountOverflow)?) as u64
+        };
+
+        let previous_status = deposit.status;
+        deposit.spawn_token_allocation = wallet_tokens;
+        deposit.allocated_lamports = 0;
+        deposit.status = DepositStatus::Converted;
+        thread.apply_status_transition(previous_status, deposit.status)?;
+
+        remaining_lamports = remaining_lamports
+            .checked_sub(allocated)
+            .ok_or(PingyError::AccountingUnderflow)?;
+        remaining_tokens = remaining_tokens
+            .checked_sub(wallet_tokens)
+            .ok_or(PingyError::AccountingUnderflow)?;
+    }
+
+    require!(
+        remaining_lamports == 0,
+        PingyError::MissingApprovedDepositAccounts
+    );
+
+    Ok(())
 }
 
 fn allocate_for_deposit(
@@ -979,6 +1068,7 @@ pub struct SpawnExecuted {
     pub total_to_use: u64,
     pub fee: u64,
     pub net: u64,
+    pub opening_buy_tokens: u64,
 }
 
 impl SpawnPool {
@@ -1053,6 +1143,10 @@ pub enum PingyError {
     InvalidCurveMintAuthority,
     #[msg("Curve token vault mint does not match curve mint")]
     CurveTokenVaultMintMismatch,
+    #[msg("Missing approved deposit accounts required for spawn allocation")]
+    MissingApprovedDepositAccounts,
+    #[msg("Invalid remaining account passed for deposit allocation")]
+    InvalidDepositRemainingAccount,
 }
 
 #[cfg(test)]
