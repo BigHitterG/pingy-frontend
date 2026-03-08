@@ -30,6 +30,10 @@
           "writable": true
         },
         {
+          "name": "curve",
+          "writable": true
+        },
+        {
           "name": "spawnPool",
           "writable": true
         },
@@ -343,6 +347,19 @@
       ]
     },
     {
+      "name": "curve",
+      "discriminator": [
+        191,
+        180,
+        249,
+        66,
+        180,
+        71,
+        51,
+        182
+      ]
+    },
+    {
       "name": "spawnPool",
       "discriminator": [
         133,
@@ -403,6 +420,14 @@
                 "name": "spawnState"
               }
             }
+          },
+          {
+            "name": "curveInitialized",
+            "type": "bool"
+          },
+          {
+            "name": "launchMode",
+            "type": "u8"
           },
           {
             "name": "pendingCount",
@@ -466,6 +491,74 @@
           },
           {
             "name": "allocatedLamports",
+            "type": "u64"
+          },
+          {
+            "name": "spawnTokenAllocation",
+            "type": "u64"
+          },
+          {
+            "name": "spawnTokensClaimed",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "curve",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "threadId",
+            "type": "string"
+          },
+          {
+            "name": "state",
+            "type": {
+              "defined": {
+                "name": "curveLifecycle"
+              }
+            }
+          },
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "totalSupply",
+            "type": "u64"
+          },
+          {
+            "name": "virtualSolReserve",
+            "type": "u64"
+          },
+          {
+            "name": "virtualTokenReserve",
+            "type": "u64"
+          },
+          {
+            "name": "realSolReserve",
+            "type": "u64"
+          },
+          {
+            "name": "realTokenReserve",
+            "type": "u64"
+          },
+          {
+            "name": "openingBuyLamports",
+            "type": "u64"
+          },
+          {
+            "name": "openingBuyTokens",
+            "type": "u64"
+          },
+          {
+            "name": "tradeFeeBps",
+            "type": "u16"
+          },
+          {
+            "name": "graduationTargetLamports",
             "type": "u64"
           }
         ]
@@ -531,6 +624,23 @@
           },
           {
             "name": "converted"
+          }
+        ]
+      }
+    },
+    {
+      "name": "curveLifecycle",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "preSpawn"
+          },
+          {
+            "name": "bonding"
+          },
+          {
+            "name": "bonded"
           }
         ]
       }

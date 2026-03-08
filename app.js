@@ -5,6 +5,7 @@ import {
   PROGRAM_ID,
   deriveThreadPda,
   deriveSpawnPoolPda,
+  deriveCurvePda,
   deriveFeeVaultPda,
   deriveDepositPda,
   deriveThreadEscrowPda,
@@ -47,6 +48,7 @@ const $ = (id) => document.getElementById(id);
       PROGRAM_ID,
       deriveThreadPda,
       deriveSpawnPoolPda,
+      deriveCurvePda,
       deriveFeeVaultPda,
       deriveDepositPda,
       deriveThreadEscrowPda,
@@ -1748,6 +1750,7 @@ const $ = (id) => document.getElementById(id);
       const walletPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
       const [threadPda] = await deriveThreadPda(rid);
       const [spawnPoolPda] = await deriveSpawnPoolPda(rid);
+      const [curvePda] = await deriveCurvePda(rid);
       const [depositPda] = await deriveDepositPda(rid, walletPk);
       const [threadEscrowPda] = await deriveThreadEscrowPda(rid);
 
@@ -1759,6 +1762,7 @@ const $ = (id) => document.getElementById(id);
           keys: [
             { pubkey: walletPk, isSigner: true, isWritable: true },
             { pubkey: threadPda, isSigner: false, isWritable: true },
+            { pubkey: curvePda, isSigner: false, isWritable: true },
             { pubkey: spawnPoolPda, isSigner: false, isWritable: true },
             { pubkey: threadEscrowPda, isSigner: false, isWritable: true },
             { pubkey: (await deriveFeeVaultPda())[0], isSigner: false, isWritable: true },
@@ -1794,12 +1798,14 @@ const $ = (id) => document.getElementById(id);
       const adminPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
       const [threadPda] = await deriveThreadPda(rid);
       const [spawnPoolPda] = await deriveSpawnPoolPda(rid);
+      const [curvePda] = await deriveCurvePda(rid);
       const discriminator = await anchorDiscriminator("initialize_thread");
       const config = createConfig || getCreateLaunchConfig();
       const data = concatBytes(discriminator, encodeStringArg(rid), encodeU32Arg(Number(config.minApprovedWallets || 0)), encodeU64Arg(Number(config.spawnTargetLamports || 0)), encodeU16Arg(Number(config.maxWalletShareBps || 0)));
       const keys = [
         { pubkey: adminPk, isSigner: true, isWritable: true },
         { pubkey: threadPda, isSigner: false, isWritable: true },
+        { pubkey: curvePda, isSigner: false, isWritable: true },
         { pubkey: spawnPoolPda, isSigner: false, isWritable: true },
         { pubkey: (await deriveThreadEscrowPda(rid))[0], isSigner: false, isWritable: true },
         { pubkey: (await deriveFeeVaultPda())[0], isSigner: false, isWritable: true },
@@ -1809,7 +1815,7 @@ const $ = (id) => document.getElementById(id);
         programId: PROGRAM_ID.toBase58(),
         discriminatorBytes: Array.from(discriminator),
         dataLength: data.length,
-        idlAccountOrder: ["admin", "thread", "spawnPool", "threadEscrow", "feeVault", "systemProgram"],
+        idlAccountOrder: ["admin", "thread", "curve", "spawnPool", "threadEscrow", "feeVault", "systemProgram"],
         keys: keys.map((k) => ({ pubkey: k.pubkey.toBase58(), isSigner: k.isSigner, isWritable: k.isWritable })),
       });
       return sendProgramInstruction(new TransactionInstruction({
@@ -1907,6 +1913,10 @@ const $ = (id) => document.getElementById(id);
       o = o2;
       const spawnState = bytes[o];
       o += 1;
+      const curveInitialized = !!bytes[o];
+      o += 1;
+      const launchMode = bytes[o];
+      o += 1;
       const [pendingCount, o3] = readU32LE(bytes, o);
       o = o3;
       const [approvedCount, o4] = readU32LE(bytes, o);
@@ -1925,6 +1935,8 @@ const $ = (id) => document.getElementById(id);
         admin: adminPubkey.toBase58(),
         admin_pubkey: adminPubkey,
         spawnState,
+        curve_initialized: curveInitialized,
+        launch_mode: Number(launchMode || 0),
         pending_count: pendingCount,
         approved_count: approvedCount,
         total_allocated_lamports: Number(totalAllocatedLamports || 0n),
@@ -1950,6 +1962,10 @@ const $ = (id) => document.getElementById(id);
       const refundableLamports = new DataView(bytes.buffer, bytes.byteOffset + o, 8).getBigUint64(0, true);
       o += 8;
       const allocatedLamports = new DataView(bytes.buffer, bytes.byteOffset + o, 8).getBigUint64(0, true);
+      o += 8;
+      const spawnTokenAllocation = new DataView(bytes.buffer, bytes.byteOffset + o, 8).getBigUint64(0, true);
+      o += 8;
+      const spawnTokensClaimed = new DataView(bytes.buffer, bytes.byteOffset + o, 8).getBigUint64(0, true);
       const statusMap = ["pending", "approved", "revoked", "rejected", "withdrawn", "converted"];
       return {
         threadId,
@@ -1957,7 +1973,9 @@ const $ = (id) => document.getElementById(id);
         status: statusMap[statusCode] || "unknown",
         rejectedOnce,
         refundable_lamports: Number(refundableLamports || 0n),
-        allocated_lamports: Number(allocatedLamports || 0n)
+        allocated_lamports: Number(allocatedLamports || 0n),
+        spawn_token_allocation: Number(spawnTokenAllocation || 0n),
+        spawn_tokens_claimed: Number(spawnTokensClaimed || 0n)
       };
     }
 
@@ -1978,7 +1996,7 @@ const $ = (id) => document.getElementById(id);
       const pendingWallets = [];
       const depositAccounts = await connection.getProgramAccounts(PROGRAM_ID, {
         commitment: "confirmed",
-        filters: [{ dataSize: 8 + 4 + 64 + 32 + 1 + 1 + 8 + 8 }]
+        filters: [{ dataSize: 8 + 4 + 64 + 32 + 1 + 1 + 8 + 8 + 8 + 8 }]
       });
 
       for(const acct of depositAccounts){
@@ -2107,7 +2125,7 @@ const $ = (id) => document.getElementById(id);
       try {
         const depositAccounts = await connection.getProgramAccounts(PROGRAM_ID, {
           commitment: "confirmed",
-          filters: [{ dataSize: 8 + 4 + 64 + 32 + 1 + 1 + 8 + 8 }]
+          filters: [{ dataSize: 8 + 4 + 64 + 32 + 1 + 1 + 8 + 8 + 8 + 8 }]
         });
         for(const acct of depositAccounts){
           if(!acct?.account?.data || acct.account.data.length < 8) continue;
