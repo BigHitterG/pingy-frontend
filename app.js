@@ -1517,23 +1517,29 @@ const $ = (id) => document.getElementById(id);
       return out;
     }
 
-    function encodeU32Arg(v){
-      const out = new Uint8Array(4);
-      new DataView(out.buffer).setUint32(0, Number(v || 0), true);
-      return out;
-    }
+function encodeU32Arg(v){
+  const out = new Uint8Array(4);
+  new DataView(out.buffer).setUint32(0, Number(v || 0), true);
+  return out;
+}
 
-    function encodeU16Arg(v){
-      const out = new Uint8Array(2);
-      new DataView(out.buffer).setUint16(0, Number(v || 0), true);
-      return out;
-    }
+function encodeU16Arg(v){
+  const out = new Uint8Array(2);
+  new DataView(out.buffer).setUint16(0, Number(v || 0), true);
+  return out;
+}
 
-    function encodeU64Arg(v){
-      const out = new Uint8Array(8);
-      new DataView(out.buffer).setBigUint64(0, BigInt(v || 0), true);
-      return out;
-    }
+function encodeU8Arg(v){
+  const out = new Uint8Array(1);
+  new DataView(out.buffer).setUint8(0, Number(v || 0));
+  return out;
+}
+
+function encodeU64Arg(v){
+  const out = new Uint8Array(8);
+  new DataView(out.buffer).setBigUint64(0, BigInt(v || 0), true);
+  return out;
+}
 
     function concatBytes(...parts){
       const total = parts.reduce((n, p) => n + p.length, 0);
