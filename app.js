@@ -12,6 +12,7 @@ import {
   deriveFeeVaultPda,
   deriveDepositPda,
   deriveThreadEscrowPda,
+  deriveBanPda,
   fetchProgramAccounts,
   PublicKey,
   SystemProgram,
@@ -1771,6 +1772,7 @@ function encodeU64Arg(v){
         { pubkey: threadEscrowPda, isSigner: false, isWritable: true },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       ];
+      console.log("[ping-debug] deriveBanPda typeof", typeof deriveBanPda);
       const [banPda] = await deriveBanPda(rid, walletPk);
       const banInfo = await connection.getAccountInfo(banPda, "confirmed");
       if (banInfo) {
@@ -4244,6 +4246,7 @@ if(connectBtn){
           try {
             await pingDepositTx(id, commitLamports);
           } catch(e){
+            alert("RAW ERROR: " + String(e?.message || e));
             if(isWalletTxRejected(e)) showToast("Create cancelled — no commit was submitted.");
             else reportTxError(e, "ping_deposit failed during create after thread init");
             return;
