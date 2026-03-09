@@ -239,6 +239,11 @@ const $ = (id) => document.getElementById(id);
       return /not\s+implemented|not\s+supported|signAndSendTransaction\s+is\s+not\s+a\s+function/i.test(msg);
     }
 
+    function isInvalidWalletArgumentsError(err){
+      const msg = String(err?.message || err || "").toLowerCase();
+      return msg.includes("invalid arguments") || msg.includes("invalid params");
+    }
+
 
     function explorerTxUrl(signature){
       return `https://explorer.solana.com/tx/${signature}?cluster=devnet`;
@@ -1655,19 +1660,53 @@ function encodeU64Arg(v){
         hasSignAndSendTransaction: typeof provider.signAndSendTransaction,
       });
 
+      if(!tx?.feePayer || !tx?.recentBlockhash || !Array.isArray(tx?.instructions) || tx.instructions.length === 0){
+        throw new Error("Transaction is incomplete before wallet call");
+      }
+
       let sig;
       if(typeof provider.signAndSendTransaction === "function"){
         traceStep("tx:signAndSendTransaction", { via: "provider.signAndSendTransaction" }, "tx step: opening phantom with signAndSend...");
         try {
-          const sendRes = await provider.signAndSendTransaction(tx, { skipPreflight: false });
+          console.log("[ping-debug] wallet call args", {
+            method: "signAndSendTransaction",
+            argCount: 1,
+            txShape: {
+              feePayer: tx.feePayer?.toBase58?.() || null,
+              recentBlockhash: tx.recentBlockhash || null,
+              instructionCount: tx.instructions.length,
+            },
+          });
+          const sendRes = await provider.signAndSendTransaction(tx);
           sig = typeof sendRes === "string" ? sendRes : sendRes?.signature;
           traceStep("tx:signAndSendTransaction:ok", { signature: sig });
         } catch (e){
-          if(isWalletTxRejected(e)){
+          if(isInvalidWalletArgumentsError(e)){
+            traceStep("tx:signAndSendTransaction:invalid-args", { error: String(e?.message || e) }, "tx step: invalid arguments from wallet, retrying with options...");
+            try {
+              console.log("[ping-debug] wallet call args", {
+                method: "signAndSendTransaction",
+                argCount: 2,
+                options: { skipPreflight: false },
+                txShape: {
+                  feePayer: tx.feePayer?.toBase58?.() || null,
+                  recentBlockhash: tx.recentBlockhash || null,
+                  instructionCount: tx.instructions.length,
+                },
+              });
+              const sendRes = await provider.signAndSendTransaction(tx, { skipPreflight: false });
+              sig = typeof sendRes === "string" ? sendRes : sendRes?.signature;
+              traceStep("tx:signAndSendTransaction:ok", { signature: sig });
+            } catch (retryErr){
+              e = retryErr;
+            }
+          }
+          if(sig) {
+            // no-op, keep success path intact
+          } else if(isWalletTxRejected(e)){
             traceStep("tx:signAndSendTransaction:rejected", { error: String(e?.message || e) }, "tx step: wallet request rejected by user.");
             throw e;
-          }
-          if(shouldFallbackToSignTransaction(e)){
+          } else if(shouldFallbackToSignTransaction(e)){
             traceStep("tx:signAndSendTransaction:failed", { error: String(e?.message || e) }, "tx step: signAndSend unsupported, trying fallback...");
           } else {
             traceStep("tx:signAndSendTransaction:failed", { error: String(e?.message || e) }, "tx step: signAndSend failed; skipping fallback to avoid duplicate wallet prompts.");
@@ -1680,6 +1719,15 @@ function encodeU64Arg(v){
         traceStep("tx:fallback-signTransaction", { via: "provider.signTransaction + sendRawTransaction" }, "tx step: opening phantom with fallback signer...");
         let signedTx;
         try {
+          console.log("[ping-debug] wallet call args", {
+            method: "signTransaction",
+            argCount: 1,
+            txShape: {
+              feePayer: tx.feePayer?.toBase58?.() || null,
+              recentBlockhash: tx.recentBlockhash || null,
+              instructionCount: tx.instructions.length,
+            },
+          });
           signedTx = await provider.signTransaction(tx);
         } catch(e){
           console.error("signTransaction error", e);
@@ -4210,7 +4258,7 @@ if(connectBtn){
       if(!ticker) return alert("ticker required.");
       const TICKER_RE = /^[A-Z0-9]{1,10}$/;
       if(!TICKER_RE.test(ticker)) return alert("ticker must be 1–10 chars, A–Z and 0–9 only (no spaces).");
-      if(commitStr && (Number.isNaN(commit) || commit <= 0)) return alert("commit must be a valid SOL amount.");
+      if(commitStr && (!Number.isFinite(commit) || Number.isNaN(commit) || commit <= 0)) return alert("commit must be a valid SOL amount.");
       const commitLamports = Math.floor(commit * LAMPORTS_PER_SOL);
       if(commit > 0 && commitLamports <= 0) return alert("commit must be at least 1 lamport.");
 
