@@ -1634,12 +1634,13 @@ function encodeU64Arg(v){
         console.log("[pingy] tx simulation err:", sim?.value?.err);
         console.log("[pingy] tx simulation logs:", sim?.value?.logs || []);
         if(sim?.value?.err){
-          const simLogs = sim?.value?.logs || [];
-          console.warn("[pingy] simulation failed; continuing to wallet signature", sim.value.err, simLogs);
-          showToast(`simulation warning: ${JSON.stringify(sim.value.err)} — requesting wallet signature...`);
+          const simErr = new Error(`simulation failed: ${JSON.stringify(sim.value.err)}`);
+          simErr.simLogs = sim?.value?.logs || [];
+          throw simErr;
         }
       } catch (simErr){
-        console.warn("[pingy] simulation RPC failed; continuing to wallet signature", simErr);
+        console.warn("[pingy] simulation failed; aborting before wallet signature", simErr);
+        throw simErr;
       }
 
       console.log("[pingy] about to sign tx", {
@@ -1748,8 +1749,15 @@ function encodeU64Arg(v){
       }
       const walletPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
       const [threadPda] = await deriveThreadPda(rid);
+      const [spawnPoolPda] = await deriveSpawnPoolPda(rid);
+      const [curvePda] = await deriveCurvePda(rid);
+      const [curveAuthorityPda] = await deriveCurveAuthorityPda(rid);
+      const [mintPda] = await deriveMintPda(rid);
+      const [curveTokenVaultPda] = await deriveCurveTokenVaultPda(rid);
       const [depositPda] = await deriveDepositPda(rid, walletPk);
       const [threadEscrowPda] = await deriveThreadEscrowPda(rid);
+      const [feeVaultPda] = await deriveFeeVaultPda();
+      const launchConfig = getCreateLaunchConfig();
       const discriminator = await anchorDiscriminator("ping_deposit");
       const data = concatBytes(
         discriminator,
@@ -1763,6 +1771,27 @@ function encodeU64Arg(v){
         { pubkey: threadEscrowPda, isSigner: false, isWritable: true },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       ];
+      const [banPda] = await deriveBanPda(rid, walletPk);
+      const banInfo = await connection.getAccountInfo(banPda, "confirmed");
+      if (banInfo) {
+        keys.push({ pubkey: banPda, isSigner: false, isWritable: false });
+      }
+      console.log("[ping-create-debug]", {
+        roomId: rid,
+        launchConfig,
+        commitLamports: lamports,
+        pdas: {
+          threadPda: threadPda.toBase58(),
+          curvePda: curvePda.toBase58(),
+          curveAuthorityPda: curveAuthorityPda.toBase58(),
+          mintPda: mintPda.toBase58(),
+          curveTokenVaultPda: curveTokenVaultPda.toBase58(),
+          spawnPoolPda: spawnPoolPda.toBase58(),
+          threadEscrowPda: threadEscrowPda.toBase58(),
+          feeVaultPda: feeVaultPda.toBase58(),
+          depositPda: depositPda.toBase58(),
+        },
+      });
       console.log("[ping-debug] ping_deposit ix", {
         programId: PROGRAM_ID.toBase58(),
         threadPda: threadPda.toBase58(),
@@ -1852,6 +1881,8 @@ function encodeU64Arg(v){
       const [curveAuthorityPda] = await deriveCurveAuthorityPda(rid);
       const [mintPda] = await deriveMintPda(rid);
       const [curveTokenVaultPda] = await deriveCurveTokenVaultPda(rid);
+      const [threadEscrowPda] = await deriveThreadEscrowPda(rid);
+      const [feeVaultPda] = await deriveFeeVaultPda();
       const discriminator = await anchorDiscriminator("initialize_thread");
       const config = createConfig || getCreateLaunchConfig();
       const data = concatBytes(discriminator, encodeStringArg(rid), encodeU32Arg(Number(config.minApprovedWallets || 0)), encodeU64Arg(Number(config.spawnTargetLamports || 0)), encodeU16Arg(Number(config.maxWalletShareBps || 0)), encodeU8Arg(launchModeByte(config.launchMode)));
@@ -1863,11 +1894,26 @@ function encodeU64Arg(v){
         { pubkey: mintPda, isSigner: false, isWritable: true },
         { pubkey: curveTokenVaultPda, isSigner: false, isWritable: true },
         { pubkey: spawnPoolPda, isSigner: false, isWritable: true },
-        { pubkey: (await deriveThreadEscrowPda(rid))[0], isSigner: false, isWritable: true },
-        { pubkey: (await deriveFeeVaultPda())[0], isSigner: false, isWritable: true },
+        { pubkey: threadEscrowPda, isSigner: false, isWritable: true },
+        { pubkey: feeVaultPda, isSigner: false, isWritable: true },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
         { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
       ];
+      console.log("[ping-create-debug]", {
+        roomId: rid,
+        launchConfig: config,
+        commitLamports: 0,
+        pdas: {
+          threadPda: threadPda.toBase58(),
+          curvePda: curvePda.toBase58(),
+          curveAuthorityPda: curveAuthorityPda.toBase58(),
+          mintPda: mintPda.toBase58(),
+          curveTokenVaultPda: curveTokenVaultPda.toBase58(),
+          spawnPoolPda: spawnPoolPda.toBase58(),
+          threadEscrowPda: threadEscrowPda.toBase58(),
+          feeVaultPda: feeVaultPda.toBase58(),
+        },
+      });
       console.log("[ping-debug] initialize_thread ix", {
         programId: PROGRAM_ID.toBase58(),
         discriminatorBytes: Array.from(discriminator),
@@ -4189,10 +4235,17 @@ if(connectBtn){
       if(shouldUseOnchain()){
         if(launchMode === "spawn" && commitLamports > 0){
           try {
-            await pingWithOptionalThreadInitTx(id, commitLamports, true, launchConfig);
+            await initializeThreadTx(id, launchConfig);
           } catch(e){
             if(isWalletTxRejected(e)) showToast("Create cancelled — no coin or commit was submitted.");
-            else reportTxError(e, "initialize + ping_deposit transaction failed on create");
+            else reportTxError(e, "initialize_thread failed during create");
+            return;
+          }
+          try {
+            await pingDepositTx(id, commitLamports);
+          } catch(e){
+            if(isWalletTxRejected(e)) showToast("Create cancelled — no commit was submitted.");
+            else reportTxError(e, "ping_deposit failed during create after thread init");
             return;
           }
         } else {
