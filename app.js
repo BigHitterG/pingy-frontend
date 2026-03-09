@@ -1706,7 +1706,7 @@ function encodeU64Arg(v){
           } else if(isWalletTxRejected(e)){
             traceStep("tx:signAndSendTransaction:rejected", { error: String(e?.message || e) }, "tx step: wallet request rejected by user.");
             throw e;
-          } else if(shouldFallbackToSignTransaction(e)){
+          } else if(isInvalidWalletArgumentsError(e) || shouldFallbackToSignTransaction(e)){
             traceStep("tx:signAndSendTransaction:failed", { error: String(e?.message || e) }, "tx step: signAndSend unsupported, trying fallback...");
           } else {
             traceStep("tx:signAndSendTransaction:failed", { error: String(e?.message || e) }, "tx step: signAndSend failed; skipping fallback to avoid duplicate wallet prompts.");
