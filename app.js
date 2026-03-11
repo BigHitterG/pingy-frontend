@@ -84,6 +84,7 @@ const $ = (id) => document.getElementById(id);
     const BPS_DENOM = 10_000;
 
     const DEV_SIMULATION = !!(window?.location?.hostname === "localhost" || window?.location?.hostname === "127.0.0.1" || window?.location?.hostname === "0.0.0.0" || window?.location?.hostname?.endsWith?.(".local") || window?.location?.search?.includes("devsim=1"));
+    const DEBUG_WALLET_SMOKE_BEFORE_SPAWN_TX = false;
     const DEV_SIM_DEFAULT_SEED = 1337;
     const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
 
@@ -232,11 +233,6 @@ const $ = (id) => document.getElementById(id);
       if(code === 4001) return true;
       const msg = String(err?.message || err || "");
       return /reject|denied|declin/i.test(msg);
-    }
-
-    function shouldFallbackToSignTransaction(err){
-      const msg = String(err?.message || err || "");
-      return /not\s+implemented|not\s+supported|signAndSendTransaction\s+is\s+not\s+a\s+function/i.test(msg);
     }
 
     function isInvalidWalletArgumentsError(err){
@@ -1623,9 +1619,10 @@ function encodeU64Arg(v){
         ({ blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed"));
       } catch(e){ showToast("getLatestBlockhash: " + (e?.message||e)); throw e; }
 
-      const tx = new Transaction();
-      tx.feePayer = feePayer;
-      tx.recentBlockhash = blockhash;
+      const tx = new Transaction({
+        feePayer,
+        recentBlockhash: blockhash,
+      });
       instructions.forEach((ix) => tx.add(ix));
 
       console.log("[ping-debug] sendProgramInstruction program checks", {
@@ -1665,81 +1662,41 @@ function encodeU64Arg(v){
       }
 
       let sig;
-      if(typeof provider.signAndSendTransaction === "function"){
-        traceStep("tx:signAndSendTransaction", { via: "provider.signAndSendTransaction" }, "tx step: opening phantom with signAndSend...");
-        try {
-          console.log("[ping-debug] wallet call args", {
-            method: "signAndSendTransaction",
-            argCount: 1,
-            txShape: {
-              feePayer: tx.feePayer?.toBase58?.() || null,
-              recentBlockhash: tx.recentBlockhash || null,
-              instructionCount: tx.instructions.length,
-            },
+      traceStep("tx:signTransaction", { via: "provider.signTransaction + sendRawTransaction" }, "tx step: opening phantom with signer...");
+      let signedTx;
+      try {
+        console.log("[ping-debug] wallet call args", {
+          method: "signTransaction",
+          argCount: 1,
+          txShape: {
+            feePayer: tx.feePayer?.toBase58?.() || null,
+            recentBlockhash: tx.recentBlockhash || null,
+            instructionCount: tx.instructions.length,
+          },
+        });
+        signedTx = await provider.signTransaction(tx);
+      } catch(e){
+        if(isInvalidWalletArgumentsError(e)){
+          console.error("[ping-debug] signTransaction invalid arguments context", {
+            connectedWallet,
+            providerPublicKey: provider.publicKey?.toString?.(),
+            txFeePayer: tx.feePayer?.toBase58?.(),
+            txRecentBlockhash: tx.recentBlockhash,
+            txInstructionCount: tx.instructions.length,
+            ixProgramIds: instructions.map((ix) => ix.programId?.toBase58?.()),
           });
-          const sendRes = await provider.signAndSendTransaction(tx);
-          sig = typeof sendRes === "string" ? sendRes : sendRes?.signature;
-          traceStep("tx:signAndSendTransaction:ok", { signature: sig });
-        } catch (e){
-          if(isInvalidWalletArgumentsError(e)){
-            traceStep("tx:signAndSendTransaction:invalid-args", { error: String(e?.message || e) }, "tx step: invalid arguments from wallet, retrying with options...");
-            try {
-              console.log("[ping-debug] wallet call args", {
-                method: "signAndSendTransaction",
-                argCount: 2,
-                options: { skipPreflight: false },
-                txShape: {
-                  feePayer: tx.feePayer?.toBase58?.() || null,
-                  recentBlockhash: tx.recentBlockhash || null,
-                  instructionCount: tx.instructions.length,
-                },
-              });
-              const sendRes = await provider.signAndSendTransaction(tx, { skipPreflight: false });
-              sig = typeof sendRes === "string" ? sendRes : sendRes?.signature;
-              traceStep("tx:signAndSendTransaction:ok", { signature: sig });
-            } catch (retryErr){
-              e = retryErr;
-            }
-          }
-          if(sig) {
-            // no-op, keep success path intact
-          } else if(isWalletTxRejected(e)){
-            traceStep("tx:signAndSendTransaction:rejected", { error: String(e?.message || e) }, "tx step: wallet request rejected by user.");
-            throw e;
-          } else if(isInvalidWalletArgumentsError(e) || shouldFallbackToSignTransaction(e)){
-            traceStep("tx:signAndSendTransaction:failed", { error: String(e?.message || e) }, "tx step: signAndSend unsupported, trying fallback...");
-          } else {
-            traceStep("tx:signAndSendTransaction:failed", { error: String(e?.message || e) }, "tx step: signAndSend failed; skipping fallback to avoid duplicate wallet prompts.");
-            throw e;
-          }
-        }
-      }
-
-      if(!sig){
-        traceStep("tx:fallback-signTransaction", { via: "provider.signTransaction + sendRawTransaction" }, "tx step: opening phantom with fallback signer...");
-        let signedTx;
-        try {
-          console.log("[ping-debug] wallet call args", {
-            method: "signTransaction",
-            argCount: 1,
-            txShape: {
-              feePayer: tx.feePayer?.toBase58?.() || null,
-              recentBlockhash: tx.recentBlockhash || null,
-              instructionCount: tx.instructions.length,
-            },
-          });
-          signedTx = await provider.signTransaction(tx);
-        } catch(e){
-          console.error("signTransaction error", e);
+          showToast("Wallet rejected transaction object before popup/open approval.");
+        } else {
           showToast("signTransaction: " + String(e?.message || e));
-          throw e;
         }
-        if(!signedTx) throw new Error("Missing signed transaction");
-
-        try {
-          sig = await connection.sendRawTransaction(signedTx.serialize(), { skipPreflight:false });
-        } catch(e){ showToast("sendRawTransaction: " + (e?.message||e)); throw e; }
+        throw e;
       }
+      if(!signedTx) throw new Error("Missing signed transaction");
+
+      try {
+        sig = await connection.sendRawTransaction(signedTx.serialize(), { skipPreflight:false });
+      } catch(e){ showToast("sendRawTransaction: " + (e?.message||e)); throw e; }
+
       if(!sig) throw new Error("Missing transaction signature");
       traceStep("tx:submitted", { signature: sig }, "tx submitted; waiting for confirmation...");
 
@@ -3127,9 +3084,15 @@ function encodeU64Arg(v){
     }
 
     async function runWalletSmokeTest(){
-      if(!connectedWallet) return showToast("connect wallet first.");
+      if(!connectedWallet){
+        showToast("connect wallet first.");
+        return { ok: false, error: new Error("wallet not connected") };
+      }
       const provider = getProvider();
-      if(!provider) return showToast("Phantom not found. Install Phantom.");
+      if(!provider){
+        showToast("Phantom not found. Install Phantom.");
+        return { ok: false, error: new Error("phantom provider not found") };
+      }
       const walletPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
       traceStep("wallet-smoke-test:start", { wallet: connectedWallet }, "smoke test: requesting phantom popup...");
       try {
@@ -3147,22 +3110,16 @@ function encodeU64Arg(v){
 
         console.log("SystemProgram.transfer type:", typeof SystemProgram.transfer);
 
-        let sig;
-        if(typeof provider.signAndSendTransaction === "function"){
-          const sendRes = await provider.signAndSendTransaction(tx, { skipPreflight: false });
-          sig = typeof sendRes === "string" ? sendRes : sendRes?.signature;
-        }
-
-        if(!sig){
-          const signedTx = await provider.signTransaction(tx);
-          sig = await connection.sendRawTransaction(signedTx.serialize(), { skipPreflight: false });
-        }
+        const signedTx = await provider.signTransaction(tx);
+        const sig = await connection.sendRawTransaction(signedTx.serialize(), { skipPreflight: false });
 
         await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, "confirmed");
         traceStep("wallet-smoke-test:ok", { signature: sig }, "smoke test confirmed");
+        return { ok: true, signature: sig };
       } catch (err){
         traceStep("wallet-smoke-test:failed", { error: String(err?.message || err) }, "smoke test failed");
         reportTxError(err, "wallet smoke test failed");
+        return { ok: false, error: err };
       }
     }
 
@@ -4283,6 +4240,14 @@ if(connectBtn){
       const id = "r" + Math.random().toString(16).slice(2,6);
 
       if(shouldUseOnchain()){
+        if(DEBUG_WALLET_SMOKE_BEFORE_SPAWN_TX && launchMode === "spawn"){
+          const smokeRes = await runWalletSmokeTest();
+          if(!smokeRes?.ok && isInvalidWalletArgumentsError(smokeRes?.error)){
+            showToast("Wallet transport failed before spawn tx.");
+            return;
+          }
+        }
+
         if(launchMode === "spawn" && commitLamports > 0){
           try {
             await initializeThreadTx(id, launchConfig);
@@ -5708,6 +5673,14 @@ if(connectBtn){
           const [threadEscrowPda] = await deriveThreadEscrowPda(rid);
           const [spawnPoolPda] = await deriveSpawnPoolPda(rid);
           const threadInfo = await connection.getAccountInfo(threadPda, "confirmed");
+
+          if(DEBUG_WALLET_SMOKE_BEFORE_SPAWN_TX){
+            const smokeRes = await runWalletSmokeTest();
+            if(!smokeRes?.ok && isInvalidWalletArgumentsError(smokeRes?.error)){
+              showToast("Wallet transport failed before spawn tx.");
+              return;
+            }
+          }
 
           const escrowInfoBefore = await connection.getAccountInfo(threadEscrowPda, "confirmed");
           const balBefore = escrowInfoBefore ? await connection.getBalance(threadEscrowPda, "confirmed") : 0;
