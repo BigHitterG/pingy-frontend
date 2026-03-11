@@ -1605,6 +1605,17 @@ function encodeU64Arg(v){
       const instructions = Array.isArray(ixs) ? ixs : [ixs];
       if(!instructions.length) throw new Error("No instructions provided");
 
+      instructions.forEach((ix, i) => {
+        console.log("[ping-debug] instruction", i, {
+          programId: ix.programId?.toBase58?.(),
+          keys: ix.keys?.map(k => ({
+            pubkey: k?.pubkey?.toBase58?.(),
+            isSigner: k?.isSigner,
+            isWritable: k?.isWritable
+          }))
+        });
+      });
+
       try { instructions.forEach(assertIxPubkeys); }
       catch(e){ showToast("assertIxPubkeys: " + (e?.message||e)); throw e; }
 
