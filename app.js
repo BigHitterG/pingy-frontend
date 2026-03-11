@@ -1583,17 +1583,40 @@ function encodeU64Arg(v){
       try {
         return new PublicKey(value);
       } catch (err){
-        throw new Error(`Invalid public key for ${label}: ${String(value || "")}`);
+        throw new Error(`Invalid public key for ${label}: ${String(value)}`);
       }
     }
 
     function assertIxPubkeys(ix){
-      (ix?.keys || []).forEach((k, i) => {
-        if(!k || !k.pubkey) throw new Error(`Missing pubkey in instruction key ${i}`);
-        parsePublicKeyStrict(k.pubkey.toBase58 ? k.pubkey.toBase58() : k.pubkey, `instruction key ${i}`);
+      if(!ix){
+        throw new Error(`Missing instruction: ${String(ix)}`);
+      }
+      const keys = ix.keys;
+      if(!Array.isArray(keys)){
+        throw new Error(`Missing key array on instruction: ${String(keys)}`);
+      }
+      keys.forEach((k, i) => {
+        if(!k){
+          throw new Error(`Missing key in instruction key ${i}: ${String(k)}`);
+        }
+        if(!k.pubkey){
+          throw new Error(`Missing pubkey in instruction key ${i}: ${String(k.pubkey)}`);
+        }
+        const rawPubkey = k.pubkey?.toBase58 ? k.pubkey.toBase58() : k.pubkey;
+        try {
+          parsePublicKeyStrict(rawPubkey, `instruction key ${i}`);
+        } catch (_err){
+          throw new Error(`Invalid pubkey in key ${i}: ${String(rawPubkey)}`);
+        }
       });
-      if(ix?.programId){
-        parsePublicKeyStrict(ix.programId.toBase58 ? ix.programId.toBase58() : ix.programId, "instruction programId");
+      if(!ix.programId){
+        throw new Error(`Invalid programId: ${String(ix.programId)}`);
+      }
+      const rawProgramId = ix.programId?.toBase58 ? ix.programId.toBase58() : ix.programId;
+      try {
+        parsePublicKeyStrict(rawProgramId, "instruction programId");
+      } catch (_err){
+        throw new Error(`Invalid programId: ${String(rawProgramId)}`);
       }
     }
 
@@ -1605,25 +1628,26 @@ function encodeU64Arg(v){
       const instructions = Array.isArray(ixs) ? ixs : [ixs];
       if(!instructions.length) throw new Error("No instructions provided");
 
-      instructions.forEach((ix, i) => {
-        console.log("[ping-debug] instruction", i, {
-          programId: ix.programId?.toBase58?.(),
-          keys: ix.keys?.map(k => ({
-            pubkey: k?.pubkey?.toBase58?.(),
-            isSigner: k?.isSigner,
-            isWritable: k?.isWritable
-          }))
-        });
-      });
+      console.log("[ping-debug] sendProgramInstructions pre-assert", instructions.map((ix, idx) => ({
+        idx,
+        programId: ix?.programId?.toBase58?.() || String(ix?.programId),
+        keyCount: Array.isArray(ix?.keys) ? ix.keys.length : -1,
+        keys: (ix?.keys || []).map((k, i) => ({
+          i,
+          pubkey: k?.pubkey?.toBase58?.() || String(k?.pubkey),
+          isSigner: !!k?.isSigner,
+          isWritable: !!k?.isWritable
+        }))
+      })));
 
       try { instructions.forEach(assertIxPubkeys); }
-      catch(e){ showToast("assertIxPubkeys: " + (e?.message||e)); throw e; }
+      catch(e){ showToast(String(e?.message || e)); throw e; }
 
       let feePayer;
       try {
         const providerPk = provider.publicKey?.toBase58?.() || connectedWallet;
         feePayer = parsePublicKeyStrict(providerPk, "provider public key");
-      } catch(e){ showToast("provider public key: " + (e?.message||e)); throw e; }
+      } catch(e){ showToast(String(e?.message || e)); throw e; }
 
       let blockhash, lastValidBlockHeight;
       try {
@@ -1891,59 +1915,58 @@ function encodeU64Arg(v){
     }
 
     async function initializeThreadTx(threadId, createConfig = null){
-      const rid = String(threadId || "");
-      const adminPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
-      const [threadPda] = await deriveThreadPda(rid);
-      const [spawnPoolPda] = await deriveSpawnPoolPda(rid);
-      const [curvePda] = await deriveCurvePda(rid);
-      const [curveAuthorityPda] = await deriveCurveAuthorityPda(rid);
-      const [mintPda] = await deriveMintPda(rid);
-      const [curveTokenVaultPda] = await deriveCurveTokenVaultPda(rid);
-      const [threadEscrowPda] = await deriveThreadEscrowPda(rid);
-      const [feeVaultPda] = await deriveFeeVaultPda();
-      const discriminator = await anchorDiscriminator("initialize_thread");
-      const config = createConfig || getCreateLaunchConfig();
-      const data = concatBytes(discriminator, encodeStringArg(rid), encodeU32Arg(Number(config.minApprovedWallets || 0)), encodeU64Arg(Number(config.spawnTargetLamports || 0)), encodeU16Arg(Number(config.maxWalletShareBps || 0)), encodeU8Arg(launchModeByte(config.launchMode)));
-      const keys = [
-        { pubkey: adminPk, isSigner: true, isWritable: true },
-        { pubkey: threadPda, isSigner: false, isWritable: true },
-        { pubkey: curvePda, isSigner: false, isWritable: true },
-        { pubkey: curveAuthorityPda, isSigner: false, isWritable: false },
-        { pubkey: mintPda, isSigner: false, isWritable: true },
-        { pubkey: curveTokenVaultPda, isSigner: false, isWritable: true },
-        { pubkey: spawnPoolPda, isSigner: false, isWritable: true },
-        { pubkey: threadEscrowPda, isSigner: false, isWritable: true },
-        { pubkey: feeVaultPda, isSigner: false, isWritable: true },
-        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-      ];
-      console.log("[ping-create-debug]", {
-        roomId: rid,
-        launchConfig: config,
-        commitLamports: 0,
-        pdas: {
-          threadPda: threadPda.toBase58(),
-          curvePda: curvePda.toBase58(),
-          curveAuthorityPda: curveAuthorityPda.toBase58(),
-          mintPda: mintPda.toBase58(),
-          curveTokenVaultPda: curveTokenVaultPda.toBase58(),
-          spawnPoolPda: spawnPoolPda.toBase58(),
-          threadEscrowPda: threadEscrowPda.toBase58(),
-          feeVaultPda: feeVaultPda.toBase58(),
-        },
-      });
-      console.log("[ping-debug] initialize_thread ix", {
-        programId: PROGRAM_ID.toBase58(),
-        discriminatorBytes: Array.from(discriminator),
-        dataLength: data.length,
-        idlAccountOrder: ["admin", "thread", "curve", "curveAuthority", "mint", "curveTokenVault", "spawnPool", "threadEscrow", "feeVault", "systemProgram", "tokenProgram"],
-        keys: keys.map((k) => ({ pubkey: k.pubkey.toBase58(), isSigner: k.isSigner, isWritable: k.isWritable })),
-      });
-      return sendProgramInstruction(new TransactionInstruction({
-        programId: PROGRAM_ID,
-        keys,
-        data,
-      }));
+      try {
+        const rid = String(threadId || "");
+        const adminPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
+        console.log("[ping-debug] initializeThreadTx admin wallet pubkey", adminPk.toBase58());
+        console.log("[ping-debug] initializeThreadTx program id", PROGRAM_ID.toBase58());
+        const [threadPda] = await deriveThreadPda(rid);
+        console.log("[ping-debug] initializeThreadTx threadPda", threadPda.toBase58());
+        const [spawnPoolPda] = await deriveSpawnPoolPda(rid);
+        console.log("[ping-debug] initializeThreadTx spawnPoolPda", spawnPoolPda.toBase58());
+        const [curvePda] = await deriveCurvePda(rid);
+        console.log("[ping-debug] initializeThreadTx curvePda", curvePda.toBase58());
+        const [curveAuthorityPda] = await deriveCurveAuthorityPda(rid);
+        console.log("[ping-debug] initializeThreadTx curveAuthorityPda", curveAuthorityPda.toBase58());
+        const [mintPda] = await deriveMintPda(rid);
+        console.log("[ping-debug] initializeThreadTx mintPda", mintPda.toBase58());
+        const [curveTokenVaultPda] = await deriveCurveTokenVaultPda(rid);
+        console.log("[ping-debug] initializeThreadTx curveTokenVaultPda", curveTokenVaultPda.toBase58());
+        const [threadEscrowPda] = await deriveThreadEscrowPda(rid);
+        console.log("[ping-debug] initializeThreadTx threadEscrowPda", threadEscrowPda.toBase58());
+        const [feeVaultPda] = await deriveFeeVaultPda();
+        console.log("[ping-debug] initializeThreadTx feeVaultPda", feeVaultPda.toBase58());
+        const discriminator = await anchorDiscriminator("initialize_thread");
+        const config = createConfig || getCreateLaunchConfig();
+        const data = concatBytes(discriminator, encodeStringArg(rid), encodeU32Arg(Number(config.minApprovedWallets || 0)), encodeU64Arg(Number(config.spawnTargetLamports || 0)), encodeU16Arg(Number(config.maxWalletShareBps || 0)), encodeU8Arg(launchModeByte(config.launchMode)));
+        const keys = [
+          { pubkey: adminPk, isSigner: true, isWritable: true },
+          { pubkey: threadPda, isSigner: false, isWritable: true },
+          { pubkey: curvePda, isSigner: false, isWritable: true },
+          { pubkey: curveAuthorityPda, isSigner: false, isWritable: false },
+          { pubkey: mintPda, isSigner: false, isWritable: true },
+          { pubkey: curveTokenVaultPda, isSigner: false, isWritable: true },
+          { pubkey: spawnPoolPda, isSigner: false, isWritable: true },
+          { pubkey: threadEscrowPda, isSigner: false, isWritable: true },
+          { pubkey: feeVaultPda, isSigner: false, isWritable: true },
+          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+          { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        ];
+        console.log("[ping-debug] initializeThreadTx final keys", keys.map((k, i) => ({
+          i,
+          pubkey: k?.pubkey?.toBase58?.() || String(k?.pubkey),
+          isSigner: !!k?.isSigner,
+          isWritable: !!k?.isWritable
+        })));
+        return sendProgramInstruction(new TransactionInstruction({
+          programId: PROGRAM_ID,
+          keys,
+          data,
+        }));
+      } catch (err){
+        console.error("[ping-debug] initializeThreadTx build failed", err);
+        throw err;
+      }
     }
 
     async function unpingWithdrawTx(roomId){
@@ -4261,6 +4284,13 @@ if(connectBtn){
 
         if(launchMode === "spawn" && commitLamports > 0){
           try {
+            console.log("[ping-debug] createCoinFromForm before initializeThreadTx", {
+              roomId: id,
+              launchMode,
+              commitLamports,
+              connectedWallet,
+              launchConfig,
+            });
             await initializeThreadTx(id, launchConfig);
           } catch(e){
             if(isWalletTxRejected(e)) showToast("Create cancelled — no coin or commit was submitted.");
@@ -4277,6 +4307,13 @@ if(connectBtn){
           }
         } else {
           try {
+            console.log("[ping-debug] createCoinFromForm before initializeThreadTx", {
+              roomId: id,
+              launchMode,
+              commitLamports,
+              connectedWallet,
+              launchConfig,
+            });
             await initializeThreadTx(id, launchConfig);
             if(launchMode === "instant" && commitLamports > 0){
               await buyTx(id, commitLamports);
