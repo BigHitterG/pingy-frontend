@@ -240,7 +240,6 @@ const $ = (id) => document.getElementById(id);
       return msg.includes("invalid arguments") || msg.includes("invalid params");
     }
 
-
     function explorerTxUrl(signature){
       return `https://explorer.solana.com/tx/${signature}?cluster=devnet`;
     }
@@ -1689,7 +1688,6 @@ function encodeU64Arg(v){
       });
       console.log("[pingy] provider methods", {
         hasSignTransaction: typeof provider.signTransaction,
-        hasSignAndSendTransaction: typeof provider.signAndSendTransaction,
       });
 
       if(!tx?.feePayer || !tx?.recentBlockhash || !Array.isArray(tx?.instructions) || tx.instructions.length === 0){
@@ -1711,19 +1709,15 @@ function encodeU64Arg(v){
         });
         signedTx = await provider.signTransaction(tx);
       } catch(e){
-        if(isInvalidWalletArgumentsError(e)){
-          console.error("[ping-debug] signTransaction invalid arguments context", {
-            connectedWallet,
-            providerPublicKey: provider.publicKey?.toString?.(),
-            txFeePayer: tx.feePayer?.toBase58?.(),
-            txRecentBlockhash: tx.recentBlockhash,
-            txInstructionCount: tx.instructions.length,
-            ixProgramIds: instructions.map((ix) => ix.programId?.toBase58?.()),
-          });
-          showToast("Wallet rejected transaction object before popup/open approval.");
-        } else {
-          showToast("signTransaction: " + String(e?.message || e));
-        }
+        console.error("[ping-debug] signTransaction throw context", {
+          connectedWallet,
+          providerPublicKey: provider.publicKey?.toBase58?.(),
+          txFeePayer: tx.feePayer?.toBase58?.(),
+          txRecentBlockhash: tx.recentBlockhash,
+          txInstructionCount: tx.instructions.length,
+          ixProgramIds: tx.instructions.map((ix) => ix.programId?.toBase58?.()),
+        });
+        showToast("signTransaction: " + String(e?.message || e));
         throw e;
       }
       if(!signedTx) throw new Error("Missing signed transaction");
@@ -3136,7 +3130,8 @@ function encodeU64Arg(v){
         const tx = new Transaction({
           feePayer: walletPk,
           recentBlockhash: blockhash,
-        }).add(SystemProgram.transfer({
+        });
+        tx.add(SystemProgram.transfer({
           fromPubkey: walletPk,
           toPubkey: walletPk,
           lamports: 1,
