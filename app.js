@@ -1850,6 +1850,7 @@ function encodeU64Arg(v){
       const [curveTokenVaultPda] = await deriveCurveTokenVaultPda(rid);
       const [depositPda] = await deriveDepositPda(rid, walletPk);
       const [threadEscrowPda] = await deriveThreadEscrowPda(rid);
+      const [feeVaultPda] = await deriveFeeVaultPda();
 
       const instructions = [];
       const config = createConfig || getCreateLaunchConfig();
@@ -1861,15 +1862,26 @@ function encodeU64Arg(v){
             { pubkey: threadPda, isSigner: false, isWritable: true },
             { pubkey: curvePda, isSigner: false, isWritable: true },
             { pubkey: curveAuthorityPda, isSigner: false, isWritable: false },
-            { pubkey: mintPda, isSigner: false, isWritable: true },
-            { pubkey: curveTokenVaultPda, isSigner: false, isWritable: true },
             { pubkey: spawnPoolPda, isSigner: false, isWritable: true },
             { pubkey: threadEscrowPda, isSigner: false, isWritable: true },
-            { pubkey: (await deriveFeeVaultPda())[0], isSigner: false, isWritable: true },
+            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+          ],
+          data: concatBytes(await anchorDiscriminator("initialize_thread_core"), encodeStringArg(rid), encodeU32Arg(Number(config.minApprovedWallets || 0)), encodeU64Arg(Number(config.spawnTargetLamports || 0)), encodeU16Arg(Number(config.maxWalletShareBps || 0)), encodeU8Arg(launchModeByte(config.launchMode))),
+        }));
+        instructions.push(new TransactionInstruction({
+          programId: PROGRAM_ID,
+          keys: [
+            { pubkey: walletPk, isSigner: true, isWritable: true },
+            { pubkey: threadPda, isSigner: false, isWritable: true },
+            { pubkey: curvePda, isSigner: false, isWritable: true },
+            { pubkey: curveAuthorityPda, isSigner: false, isWritable: false },
+            { pubkey: mintPda, isSigner: false, isWritable: true },
+            { pubkey: curveTokenVaultPda, isSigner: false, isWritable: true },
+            { pubkey: feeVaultPda, isSigner: false, isWritable: true },
             { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
             { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
           ],
-          data: concatBytes(await anchorDiscriminator("initialize_thread"), encodeStringArg(rid), encodeU32Arg(Number(config.minApprovedWallets || 0)), encodeU64Arg(Number(config.spawnTargetLamports || 0)), encodeU16Arg(Number(config.maxWalletShareBps || 0)), encodeU8Arg(launchModeByte(config.launchMode))),
+          data: concatBytes(await anchorDiscriminator("initialize_thread_assets"), encodeStringArg(rid)),
         }));
       }
 
@@ -1890,6 +1902,15 @@ function encodeU64Arg(v){
           encodeU64Arg(lamports)
         ),
       }));
+
+      const instructionNames = includeThreadInit
+        ? ["initialize_thread_core", "initialize_thread_assets", "ping_deposit"]
+        : ["ping_deposit"];
+      console.log("[ping-debug] pingWithOptionalThreadInitTx instruction bundle", {
+        includeThreadInit,
+        instructionCount: instructions.length,
+        instructionNames,
+      });
 
       return sendProgramInstructions(instructions);
     }
@@ -1916,33 +1937,38 @@ function encodeU64Arg(v){
         console.log("[ping-debug] initializeThreadTx threadEscrowPda", threadEscrowPda.toBase58());
         const [feeVaultPda] = await deriveFeeVaultPda();
         console.log("[ping-debug] initializeThreadTx feeVaultPda", feeVaultPda.toBase58());
-        const discriminator = await anchorDiscriminator("initialize_thread");
         const config = createConfig || getCreateLaunchConfig();
-        const data = concatBytes(discriminator, encodeStringArg(rid), encodeU32Arg(Number(config.minApprovedWallets || 0)), encodeU64Arg(Number(config.spawnTargetLamports || 0)), encodeU16Arg(Number(config.maxWalletShareBps || 0)), encodeU8Arg(launchModeByte(config.launchMode)));
-        const keys = [
-          { pubkey: adminPk, isSigner: true, isWritable: true },
-          { pubkey: threadPda, isSigner: false, isWritable: true },
-          { pubkey: curvePda, isSigner: false, isWritable: true },
-          { pubkey: curveAuthorityPda, isSigner: false, isWritable: false },
-          { pubkey: mintPda, isSigner: false, isWritable: true },
-          { pubkey: curveTokenVaultPda, isSigner: false, isWritable: true },
-          { pubkey: spawnPoolPda, isSigner: false, isWritable: true },
-          { pubkey: threadEscrowPda, isSigner: false, isWritable: true },
-          { pubkey: feeVaultPda, isSigner: false, isWritable: true },
-          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-          { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        const instructions = [
+          new TransactionInstruction({
+            programId: PROGRAM_ID,
+            keys: [
+              { pubkey: adminPk, isSigner: true, isWritable: true },
+              { pubkey: threadPda, isSigner: false, isWritable: true },
+              { pubkey: curvePda, isSigner: false, isWritable: true },
+              { pubkey: curveAuthorityPda, isSigner: false, isWritable: false },
+              { pubkey: spawnPoolPda, isSigner: false, isWritable: true },
+              { pubkey: threadEscrowPda, isSigner: false, isWritable: true },
+              { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+            ],
+            data: concatBytes(await anchorDiscriminator("initialize_thread_core"), encodeStringArg(rid), encodeU32Arg(Number(config.minApprovedWallets || 0)), encodeU64Arg(Number(config.spawnTargetLamports || 0)), encodeU16Arg(Number(config.maxWalletShareBps || 0)), encodeU8Arg(launchModeByte(config.launchMode))),
+          }),
+          new TransactionInstruction({
+            programId: PROGRAM_ID,
+            keys: [
+              { pubkey: adminPk, isSigner: true, isWritable: true },
+              { pubkey: threadPda, isSigner: false, isWritable: true },
+              { pubkey: curvePda, isSigner: false, isWritable: true },
+              { pubkey: curveAuthorityPda, isSigner: false, isWritable: false },
+              { pubkey: mintPda, isSigner: false, isWritable: true },
+              { pubkey: curveTokenVaultPda, isSigner: false, isWritable: true },
+              { pubkey: feeVaultPda, isSigner: false, isWritable: true },
+              { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+              { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+            ],
+            data: concatBytes(await anchorDiscriminator("initialize_thread_assets"), encodeStringArg(rid)),
+          }),
         ];
-        console.log("[ping-debug] initializeThreadTx final keys", keys.map((k, i) => ({
-          i,
-          pubkey: k?.pubkey?.toBase58?.() || String(k?.pubkey),
-          isSigner: !!k?.isSigner,
-          isWritable: !!k?.isWritable
-        })));
-        return sendProgramInstruction(new TransactionInstruction({
-          programId: PROGRAM_ID,
-          keys,
-          data,
-        }));
+        return sendProgramInstructions(instructions);
       } catch (err){
         console.error("[ping-debug] initializeThreadTx build failed", err);
         throw err;
@@ -4263,37 +4289,31 @@ if(connectBtn){
           }
         }
 
-        if(launchMode === "spawn" && commitLamports > 0){
+        if(launchMode === "spawn"){
           try {
-            console.log("[ping-debug] createCoinFromForm before initializeThreadTx", {
-              roomId: id,
-              launchMode,
+            const createPath = commitLamports > 0 ? "combined-init+deposit" : "init-only";
+            console.log("[ping-debug] create flow", {
+              launchMode: launchConfig.launchMode,
               commitLamports,
-              connectedWallet,
-              launchConfig,
+              path: createPath,
             });
-            await initializeThreadTx(id, launchConfig);
+            if(commitLamports > 0){
+              await pingWithOptionalThreadInitTx(id, commitLamports, true, launchConfig);
+            } else {
+              await initializeThreadTx(id, launchConfig);
+            }
           } catch(e){
             if(isWalletTxRejected(e)) showToast("Create cancelled — no coin or commit was submitted.");
-            else reportTxError(e, "initialize_thread failed during create");
-            return;
-          }
-          try {
-            await pingDepositTx(id, commitLamports);
-          } catch(e){
-            alert("RAW ERROR: " + String(e?.message || e));
-            if(isWalletTxRejected(e)) showToast("Create cancelled — no commit was submitted.");
-            else reportTxError(e, "ping_deposit failed during create after thread init");
+            else if(commitLamports > 0) reportTxError(e, "initialize_thread_core + initialize_thread_assets + ping_deposit failed during create");
+            else reportTxError(e, "initialize_thread_core + initialize_thread_assets failed during create");
             return;
           }
         } else {
           try {
-            console.log("[ping-debug] createCoinFromForm before initializeThreadTx", {
-              roomId: id,
-              launchMode,
+            console.log("[ping-debug] create flow", {
+              launchMode: launchConfig.launchMode,
               commitLamports,
-              connectedWallet,
-              launchConfig,
+              path: "instant",
             });
             await initializeThreadTx(id, launchConfig);
             if(launchMode === "instant" && commitLamports > 0){
@@ -4301,9 +4321,9 @@ if(connectBtn){
             }
           } catch (e){
             if(launchMode === "instant" && commitLamports > 0){
-              reportTxError(e, "initialize_thread + instant buy transaction failed");
+              reportTxError(e, "initialize_thread_core + initialize_thread_assets + instant buy transaction failed");
             } else {
-              reportTxError(e, "initialize_thread transaction failed");
+              reportTxError(e, "initialize_thread_core + initialize_thread_assets transaction failed");
             }
             return;
           }

@@ -28,8 +28,8 @@ pub const LAUNCH_MODE_INSTANT: u8 = 1;
 pub mod pingy_spawn {
     use super::*;
 
-    pub fn initialize_thread(
-        ctx: Context<InitializeThread>,
+    pub fn initialize_thread_core(
+        ctx: Context<InitializeThreadCore>,
         thread_id: String,
         min_approved_wallets: u32,
         spawn_target_lamports: u64,
@@ -84,24 +84,38 @@ pub mod pingy_spawn {
         );
         curve.curve_authority_bump = ctx.bumps.curve_authority;
 
-        initialize_mint_if_needed(curve, &ctx.accounts.mint, &ctx.accounts.curve_authority)?;
-        initialize_curve_token_vault_if_needed(
-            curve,
-            &ctx.accounts.curve_token_vault,
-            &ctx.accounts.curve_authority,
-        )?;
         let spawn_pool = &mut ctx.accounts.spawn_pool;
         spawn_pool.thread_id = thread_id.clone();
 
         let thread_escrow = &mut ctx.accounts.thread_escrow;
         thread_escrow.thread_id = thread_id.clone();
 
+        Ok(())
+    }
+
+    pub fn initialize_thread_assets(
+        ctx: Context<InitializeThreadAssets>,
+        thread_id: String,
+    ) -> Result<()> {
+        let thread = &mut ctx.accounts.thread;
+        require!(thread.thread_id == thread_id, PingyError::ThreadMismatch);
+
+        let curve = &mut ctx.accounts.curve;
+        require!(curve.thread_id == thread_id, PingyError::ThreadMismatch);
+
+        initialize_mint_if_needed(curve, &ctx.accounts.mint, &ctx.accounts.curve_authority)?;
+        initialize_curve_token_vault_if_needed(
+            curve,
+            &ctx.accounts.curve_token_vault,
+            &ctx.accounts.curve_authority,
+        )?;
+
         let fee_vault = &mut ctx.accounts.fee_vault;
         if !fee_vault.initialized {
             fee_vault.initialized = true;
         }
 
-        if launch_mode == LAUNCH_MODE_INSTANT {
+        if thread.launch_mode == LAUNCH_MODE_INSTANT {
             mint_total_supply_to_curve_vault(
                 &thread_id,
                 &ctx.accounts.curve,
@@ -1009,7 +1023,7 @@ fn transfer_from_program_owned_account_to_account<'info>(
 
 #[derive(Accounts)]
 #[instruction(thread_id: String)]
-pub struct InitializeThread<'info> {
+pub struct InitializeThreadCore<'info> {
     #[account(mut)]
     pub admin: Signer<'info>,
     #[account(
@@ -1024,6 +1038,48 @@ pub struct InitializeThread<'info> {
         init,
         payer = admin,
         space = 8 + Curve::LEN,
+        seeds = [b"curve", thread_id.as_bytes()],
+        bump
+    )]
+    pub curve: Account<'info, Curve>,
+    #[account(
+        seeds = [b"curve_authority", thread_id.as_bytes()],
+        bump
+    )]
+    /// CHECK: PDA used as mint authority and token vault authority.
+    pub curve_authority: UncheckedAccount<'info>,
+    #[account(
+        init,
+        payer = admin,
+        space = 8 + SpawnPool::LEN,
+        seeds = [b"spawn_pool", thread_id.as_bytes()],
+        bump
+    )]
+    pub spawn_pool: Account<'info, SpawnPool>,
+    #[account(
+        init,
+        payer = admin,
+        space = 8 + ThreadEscrow::LEN,
+        seeds = [b"escrow", thread_id.as_bytes()],
+        bump
+    )]
+    pub thread_escrow: Account<'info, ThreadEscrow>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(thread_id: String)]
+pub struct InitializeThreadAssets<'info> {
+    #[account(mut, address = thread.admin_pubkey)]
+    pub admin: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [b"thread", thread_id.as_bytes()],
+        bump
+    )]
+    pub thread: Account<'info, Thread>,
+    #[account(
+        mut,
         seeds = [b"curve", thread_id.as_bytes()],
         bump
     )]
@@ -1053,22 +1109,6 @@ pub struct InitializeThread<'info> {
         token::authority = curve_authority
     )]
     pub curve_token_vault: Account<'info, TokenAccount>,
-    #[account(
-        init,
-        payer = admin,
-        space = 8 + SpawnPool::LEN,
-        seeds = [b"spawn_pool", thread_id.as_bytes()],
-        bump
-    )]
-    pub spawn_pool: Account<'info, SpawnPool>,
-    #[account(
-        init,
-        payer = admin,
-        space = 8 + ThreadEscrow::LEN,
-        seeds = [b"escrow", thread_id.as_bytes()],
-        bump
-    )]
-    pub thread_escrow: Account<'info, ThreadEscrow>,
     #[account(
         init_if_needed,
         payer = admin,
