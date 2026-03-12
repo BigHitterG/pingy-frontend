@@ -1476,7 +1476,9 @@ const $ = (id) => document.getElementById(id);
         seed: DEV_SIM_DEFAULT_SEED,
         walletPool: [],
         backup: null
-      }
+      },
+      activeHomeTab: "pings",
+      activePingThreadId: null
     };
 
     const ONCHAIN_REFRESH_MS = 7000;
@@ -2780,6 +2782,46 @@ function encodeU64Arg(v){
       appendLaunchHistoryPoint(r);
     });
 
+    function seedMockPingThreads(){
+      const seeds = {
+        r1: [
+          { wallet: state.rooms[0].creator_wallet, text: "this one could pop if we hit approvals", kind: "chat" },
+          { wallet: "SYSTEM", text: "watchlist momentum building", kind: "system_activity" },
+          { wallet: state.rooms[0].creator_wallet, text: "if spawn fills i'm in", kind: "chat" }
+        ],
+        r2: [
+          { wallet: state.rooms[1].creator_wallet, text: "market is live now", kind: "chat" },
+          { wallet: state.rooms[1].creator_wallet, text: "watching this one", kind: "chat" }
+        ],
+        r6: [
+          { wallet: state.rooms[5].creator_wallet, text: "i like the distribution here", kind: "chat" },
+          { wallet: "SYSTEM", text: "Spawn threshold moved +1 approval", kind: "system_activity" }
+        ]
+      };
+      Object.entries(seeds).forEach(([rid, msgs]) => {
+        state.chat[rid] = state.chat[rid] || [];
+        if(state.chat[rid].length > 1) return;
+        msgs.forEach((m, idx) => {
+          state.chat[rid].push({
+            ts: nowStamp(),
+            _ts: Date.now() - (msgs.length - idx) * 60_000,
+            wallet: m.wallet,
+            text: m.text,
+            kind: m.kind || "chat"
+          });
+        });
+      });
+
+      const demoWallet = state.rooms[0].creator_wallet;
+      [state.rooms[0], state.rooms[1], state.rooms[5]].forEach((r, idx) => {
+        r.positions = r.positions || {};
+        r.positions[demoWallet] = r.positions[demoWallet] || { escrow_sol: 0.12 + (idx * 0.05), token_balance: idx === 1 ? 2100 : 0 };
+        r.approverWallets = r.approverWallets || {};
+        r.approverWallets[demoWallet] = true;
+      });
+    }
+    seedMockPingThreads();
+
     function mkRoom(id, name, ticker, desc, launchConfig = null){
       const creator_wallet = (Math.random().toString(16).slice(2,10) + '111111111111111111111111111111').slice(0,44);
       const config = launchConfig || getCreateLaunchConfig();
@@ -3320,6 +3362,7 @@ if(connectBtn){
       state.chat[roomId] = state.chat[roomId] || [];
       state.chat[roomId].push({
         ts: nowStamp(),
+        _ts: Date.now(),
         wallet:"SYSTEM",
         text,
         kind: options.kind || "system_activity",
@@ -4177,11 +4220,167 @@ if(connectBtn){
 
     let exploreQuery = "";
     let exploreHasSearched = false;
-    let activeHomeTab = "explore";
+
+    function getWalletEscrowInRoom(room, wallet){
+      if(!room || !wallet) return 0;
+      const onchainRow = room?.onchain?.byWallet?.[wallet] || state.onchain?.[room.id]?.byWallet?.[wallet] || null;
+      if(onchainRow) return Math.max(0, Number(onchainRow.escrow_sol || 0));
+      const local = room.positions?.[wallet] || {};
+      return Math.max(0, Number(local.escrow_sol || 0));
+    }
+
+    function walletIsRelatedToRoom(room, wallet){
+      if(!room || !wallet) return false;
+      if(isCreator(room, wallet)) return true;
+      if(isApprover(room, wallet)) return true;
+      const escrowSol = getWalletEscrowInRoom(room, wallet);
+      if(escrowSol > 0) return true;
+      const pos = room.positions?.[wallet] || {};
+      if(Number(pos.token_balance || 0) > 0) return true;
+      const onchainRow = room?.onchain?.byWallet?.[wallet] || state.onchain?.[room.id]?.byWallet?.[wallet] || null;
+      if(onchainRow){
+        if(Number(onchainRow.escrow_sol || 0) > 0) return true;
+        if(Number(onchainRow.spawn_token_allocation || 0) > 0) return true;
+      }
+      return false;
+    }
+
+    function getPingInboxRooms(){
+      if(!connectedWallet) return [];
+      return state.rooms
+        .filter((room) => walletIsRelatedToRoom(room, connectedWallet))
+        .slice()
+        .sort((a, b) => {
+          const aChat = (state.chat[a.id] || []).length ? Number(state.chat[a.id][state.chat[a.id].length - 1]?._ts || 0) : 0;
+          const bChat = (state.chat[b.id] || []).length ? Number(state.chat[b.id][state.chat[b.id].length - 1]?._ts || 0) : 0;
+          if(aChat !== bChat) return bChat - aChat;
+          const aAct = Number(a._lastActivity || 0);
+          const bAct = Number(b._lastActivity || 0);
+          if(aAct !== bAct) return bAct - aAct;
+          return 0;
+        });
+    }
+
+    function pingThreadPreviewText(room){
+      const msgs = (state.chat[room?.id] || []).slice().reverse();
+      const prefer = msgs.find((m) => m && m.wallet !== "SYSTEM" && m.kind !== "activity" && String(m.text || "").trim());
+      if(prefer) return String(prefer.text).trim().slice(0, 90);
+      const system = msgs.find((m) => m && String(m.text || "").trim());
+      if(system) return String(system.text).trim().slice(0, 90);
+      if(room?.state === "SPAWNING") return "Spawn discussion active";
+      if(room?.state === "BONDING") return "Market is live";
+      if(room?.state === "BONDED") return "Graduated from bonding";
+      return "Thread active";
+    }
+
+    function pingRelationshipMeta(room, wallet){
+      if(!room || !wallet) return "";
+      if(isCreator(room, wallet)) return "creator";
+      if(isApprover(room, wallet)) return "approver";
+      const escrowSol = getWalletEscrowInRoom(room, wallet);
+      if(escrowSol > 0) return `your escrow: ${escrowSol.toFixed(3)} SOL`;
+      const tokenBal = Number((room.positions?.[wallet]?.token_balance) || 0);
+      if(tokenBal > 0) return "you hold this coin";
+      return "participant";
+    }
+
+    function renderPingsView(){
+      const wrap = $("pingsView");
+      if(!wrap) return;
+      wrap.innerHTML = "";
+
+      if(!connectedWallet){
+        wrap.innerHTML = `<div class="panel"><div class="muted">Connect wallet to view your pings.</div></div>`;
+        return;
+      }
+
+      const rooms = getPingInboxRooms();
+      if(!rooms.length){
+        wrap.innerHTML = `<div class="panel"><div class="muted">No pings yet. Join, create, or approve a coin to populate this inbox.</div></div>`;
+        return;
+      }
+
+      const list = document.createElement("div");
+      list.className = "panel";
+      rooms.forEach((room) => {
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = "pingRow";
+        const img = room.image ? `<img src="${escapeText(room.image)}" alt="" />` : `<span>$${escapeText((room.ticker||"?").slice(0,2))}</span>`;
+        row.innerHTML = `
+          <div class="pingAvatar">${img}</div>
+          <div class="pingMain">
+            <div class="pingTitle">${escapeText(room.name)} <span class="muted">$${escapeText(room.ticker)}</span></div>
+            <div class="pingPreview">${escapeText(pingThreadPreviewText(room))}</div>
+            <div class="pingMeta muted tiny">${escapeText(pingRelationshipMeta(room, connectedWallet))}</div>
+          </div>
+          <div class="pingSide">
+            <span class="k">${escapeText(lifecyclePhaseLabel(room.state))}</span>
+            <span class="tiny muted">new</span>
+          </div>
+        `;
+        row.addEventListener("click", () => openPingThread(room.id));
+        list.appendChild(row);
+      });
+      wrap.appendChild(list);
+    }
+
+    function renderPingThreadChat(threadId){
+      const box = $("pingThreadChatBox");
+      if(!box) return;
+      box.innerHTML = "";
+      const msgs = state.chat[threadId] || [];
+      msgs.forEach((m) => {
+        const row = document.createElement("div");
+        row.className = "msg";
+        const sender = m.wallet === "SYSTEM" ? "system" : displayName(m.wallet);
+        row.innerHTML = `
+          <div class="who"><span class="whoName">${escapeText(sender)}</span></div>
+          <div class="text ${m.wallet === "SYSTEM" ? "sysLine" : ""}">${escapeText(m.text || "")}</div>
+          <div class="ts">${escapeText(m.ts || "")}</div>
+        `;
+        box.appendChild(row);
+      });
+      box.scrollTop = box.scrollHeight;
+    }
+
+    function renderPingThread(threadId){
+      const room = roomById(threadId);
+      if(!room) return;
+      state.activePingThreadId = threadId;
+      const title = $("pingThreadTitle");
+      const meta = $("pingThreadMeta");
+      if(title) title.textContent = `${room.name} $${room.ticker}`;
+      if(meta) meta.textContent = `${pingRelationshipMeta(room, connectedWallet) || "participant"} • ${lifecyclePhaseLabel(room.state)}`;
+      renderPingThreadChat(threadId);
+    }
+
+    function openPingsInbox(){
+      state.activePingThreadId = null;
+      const inbox = $("pingsView");
+      const thread = $("pingThreadView");
+      if(inbox) inbox.style.display = "block";
+      if(thread) thread.style.display = "none";
+      renderPingsView();
+    }
+
+    function openPingThread(threadId){
+      state.activePingThreadId = threadId;
+      const inbox = $("pingsView");
+      const thread = $("pingThreadView");
+      if(inbox) inbox.style.display = "none";
+      if(thread) thread.style.display = "block";
+      renderPingThread(threadId);
+    }
+
+    function openMarketRoomFromPingThread(threadId){
+      if(!threadId) return;
+      openRoom(threadId);
+    }
 
     function setHomeTab(tab){
       const next = tab === "pings" || tab === "spawn" ? tab : "explore";
-      activeHomeTab = next;
+      state.activeHomeTab = next;
 
       const exploreTabPanel = $("exploreTabPanel");
       const spawnCoinTabPanel = $("spawnCoinTabPanel");
@@ -4192,6 +4391,7 @@ if(connectBtn){
       if(exploreTabPanel) exploreTabPanel.style.display = next === "explore" ? "block" : "none";
       if(spawnCoinTabPanel) spawnCoinTabPanel.style.display = next === "spawn" ? "block" : "none";
       if(pingsTabPanel) pingsTabPanel.style.display = next === "pings" ? "block" : "none";
+      if(next === "pings") openPingsInbox();
 
       if(pingsTabBtn){
         pingsTabBtn.setAttribute("aria-pressed", next === "pings" ? "true" : "false");
@@ -4218,6 +4418,7 @@ if(connectBtn){
       const exploreList = $("exploreList");
       if(!cardsRow || !exploreList) return;
       exploreList.innerHTML = "";
+      if(state.activeHomeTab === "pings") renderPingsView();
 
       // LIVE: never filtered by explore search
       const liveRooms = sortedLiveRooms();
@@ -4265,8 +4466,29 @@ if(connectBtn){
     $("pingsTabBtn")?.addEventListener("click", () => setHomeTab("pings"));
     $("spawnCoinTabBtn")?.addEventListener("click", () => setHomeTab("spawn"));
     $("exploreTabBtn")?.addEventListener("click", () => setHomeTab("explore"));
+    $("pingThreadBackBtn")?.addEventListener("click", () => openPingsInbox());
+    $("pingThreadMarketBtn")?.addEventListener("click", () => openMarketRoomFromPingThread(state.activePingThreadId));
+    $("pingThreadSendBtn")?.addEventListener("click", () => {
+      if(!connectedWallet) return showToast("connect wallet first.");
+      const rid = state.activePingThreadId;
+      if(!rid) return;
+      const input = $("pingThreadInput");
+      const txt = String(input?.value || "").trim();
+      if(!txt) return;
+      state.chat[rid] = state.chat[rid] || [];
+      state.chat[rid].push({ ts: nowStamp(), _ts: Date.now(), wallet: connectedWallet, text: txt, kind: "chat" });
+      if(input) input.value = "";
+      renderPingThreadChat(rid);
+      renderPingsView();
+    });
+    $("pingThreadInput")?.addEventListener("keydown", (e) => {
+      if(e.key === "Enter" && !e.shiftKey){
+        e.preventDefault();
+        $("pingThreadSendBtn")?.click();
+      }
+    });
     mountCreateCoinInSpawnTab();
-    setHomeTab("explore");
+    setHomeTab("pings");
     bindRoomChartControls();
 
     async function createCoinFromForm(){
@@ -5963,7 +6185,7 @@ if(connectBtn){
       if(!txt) return;
 
       state.chat[activeRoomId] = state.chat[activeRoomId] || [];
-      state.chat[activeRoomId].push({ ts: nowStamp(), wallet: connectedWallet, text: txt, kind: "chat" });
+      state.chat[activeRoomId].push({ ts: nowStamp(), _ts: Date.now(), wallet: connectedWallet, text: txt, kind: "chat" });
       $("msgInput").value = "";
       renderChat(activeRoomId);
     });

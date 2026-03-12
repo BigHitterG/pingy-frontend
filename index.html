@@ -182,7 +182,25 @@
       </div>
 
       <div id="spawnCoinTabPanel" style="display:none;"></div>
-      <div id="pingsTabPanel" style="display:none;"></div>
+      <div id="pingsTabPanel" style="display:none;">
+        <div id="pingsView"></div>
+        <div class="panel" id="pingThreadView" style="display:none; margin-top:10px;">
+          <div class="row" style="justify-content:space-between; align-items:flex-start;">
+            <button class="btn subtle" id="pingThreadBackBtn" type="button">back</button>
+            <span class="k">conversation</span>
+          </div>
+          <div class="h" id="pingThreadTitle" style="margin-top:8px; margin-bottom:4px;">thread</div>
+          <div class="row" style="justify-content:space-between; align-items:flex-start; gap:8px;">
+            <div class="muted tiny" id="pingThreadMeta">—</div>
+            <button class="btn subtle small" id="pingThreadMarketBtn" type="button">market</button>
+          </div>
+          <div class="chat" id="pingThreadChatBox" style="margin-top:8px;"></div>
+          <div class="composer" id="pingThreadComposer">
+            <textarea id="pingThreadInput" placeholder="write a ping…" rows="2"></textarea>
+            <button class="btn" id="pingThreadSendBtn" type="button">send</button>
+          </div>
+        </div>
+      </div>
 
     </div>
 

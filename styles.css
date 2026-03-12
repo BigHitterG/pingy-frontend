@@ -578,3 +578,32 @@
   color:#b00020;
   margin-top:6px;
 }
+
+/* Pings inbox + thread */
+.pingRow{
+  width:100%;
+  border:0;
+  border-top:1px solid var(--line);
+  background:#fff;
+  color:var(--fg);
+  font:inherit;
+  display:grid;
+  grid-template-columns:44px 1fr auto;
+  gap:10px;
+  align-items:center;
+  padding:10px 0;
+  text-align:left;
+  cursor:pointer;
+}
+.pingRow:first-child{border-top:0}
+.pingRow:hover{background:#fafafa}
+.pingAvatar{
+  width:44px;height:44px;border:1px solid var(--line);
+  display:flex;align-items:center;justify-content:center;
+  color:var(--muted);overflow:hidden;background:#fff;
+}
+.pingAvatar img{width:100%;height:100%;object-fit:cover;display:block}
+.pingTitle{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pingPreview{color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pingMain{min-width:0}
+.pingSide{display:flex;flex-direction:column;align-items:flex-end;gap:6px}
