@@ -3159,6 +3159,12 @@ function encodeU64Arg(v){
       if(!opts.silent) showToast("wallet switched.");
     }
 
+    async function reconcileWalletFromProvider(opts = {}){
+      const provider = getProvider();
+      if(!provider) return;
+      await syncWalletFromProvider(provider, opts);
+    }
+
     function bindWalletListeners(provider){
       if(!provider || typeof provider.on !== "function" || boundWalletProviders.has(provider)) return;
       provider.on("accountChanged", async (pubkey) => {
@@ -3179,6 +3185,13 @@ function encodeU64Arg(v){
       });
       boundWalletProviders.add(provider);
     }
+
+    document.addEventListener("visibilitychange", () => {
+      if(document.visibilityState === "visible") reconcileWalletFromProvider({ silent: true });
+    });
+    window.addEventListener("focus", () => {
+      reconcileWalletFromProvider({ silent: true });
+    });
 
     async function runWalletSmokeTest(){
       if(!connectedWallet){
