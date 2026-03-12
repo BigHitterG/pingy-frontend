@@ -1412,7 +1412,7 @@ const $ = (id) => document.getElementById(id);
     // State
     let connectedWallet = null;
     let activeRoomId = null;
-    let walletListenersBound = false;
+    const boundWalletProviders = new WeakSet();
 
     const profile = {
       namesByWallet: {},
@@ -3143,30 +3143,41 @@ function encodeU64Arg(v){
       updateEarningsUI();
     }
 
+    async function syncWalletFromProvider(provider, opts = {}){
+      if(!provider) return;
+      const nextWallet = provider.publicKey?.toBase58?.() || provider.publicKey?.toString?.() || null;
+      const prevWallet = connectedWallet;
+      if(nextWallet === prevWallet) return;
+      if(!nextWallet){
+        clearConnectedWallet();
+        return;
+      }
+      setConnectedWallet(nextWallet);
+      clearWalletScopedCaches();
+      await refreshRoomFromChain();
+      refreshWalletViews();
+      if(!opts.silent) showToast("wallet switched.");
+    }
+
     function bindWalletListeners(provider){
-      if(walletListenersBound || !provider || typeof provider.on !== "function") return;
+      if(!provider || typeof provider.on !== "function" || boundWalletProviders.has(provider)) return;
       provider.on("accountChanged", async (pubkey) => {
         console.log("[wallet] accountChanged", pubkey?.toBase58?.() || null);
         if(!pubkey){
           clearConnectedWallet();
           return;
         }
-        setConnectedWallet(pubkey.toBase58());
-        clearWalletScopedCaches();
-        await refreshRoomFromChain();
-        refreshWalletViews();
+        await syncWalletFromProvider(provider);
       });
       provider.on("connect", async () => {
         console.log("[wallet] connect", provider.publicKey?.toBase58?.() || null);
-        setConnectedWallet(provider.publicKey?.toBase58?.() || null);
-        await refreshRoomFromChain();
-        refreshWalletViews();
+        await syncWalletFromProvider(provider, { silent: true });
       });
       provider.on("disconnect", () => {
         console.log("[wallet] disconnect");
         clearConnectedWallet();
       });
-      walletListenersBound = true;
+      boundWalletProviders.add(provider);
     }
 
     async function runWalletSmokeTest(){
@@ -3259,6 +3270,7 @@ async function disconnectMock(){
   }
   clearConnectedWallet();
   state.userEscrow = null;
+  refreshWalletViews();
   showToast("disconnected.");
 }
 
@@ -6361,6 +6373,10 @@ if(connectBtn){
 
     // Init + ticker
     function tick(){
+      const provider = getProvider();
+      if(provider) syncWalletFromProvider(provider, { silent: true }).catch((err) => {
+        console.warn("[wallet] sync failed", err);
+      });
       renderHome();
       updateHeaderWalletUI();
       if(activeRoomId){
