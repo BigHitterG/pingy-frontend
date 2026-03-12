@@ -2908,21 +2908,24 @@ function encodeU64Arg(v){
       return totalSol * SOL_TO_USD;
     }
 
-    // Collapsible create coin
-    function toggleCreateCoin(force){
-      const wrap = $("createCoinWrap");
-      const on = (typeof force === "boolean") ? force : !wrap.classList.contains("on");
-      wrap.classList.toggle("on", on);
-      $("createTri").textContent = on ? "▼" : "▶";
-      $("createCoinHead").setAttribute("aria-expanded", on ? "true" : "false");
-    }
-    const createCoinHead = $("createCoinHead");
-    console.log("[pingy] DOM check createCoinHead:", !!createCoinHead);
-    if(createCoinHead){
-      createCoinHead.addEventListener("click", () => {
-        console.log("[pingy] createCoinHead click");
-        toggleCreateCoin();
-      });
+    function mountCreateCoinInSpawnTab(){
+      const createCoinWrap = $("createCoinWrap");
+      const createCoinHead = $("createCoinHead");
+      const createCoinBody = $("createCoinBody");
+      const spawnCoinTabPanel = $("spawnCoinTabPanel");
+      if(!createCoinWrap || !spawnCoinTabPanel) return;
+
+      if(createCoinWrap.parentElement !== spawnCoinTabPanel){
+        spawnCoinTabPanel.appendChild(createCoinWrap);
+      }
+
+      if(createCoinHead) createCoinHead.style.display = "none";
+      if(createCoinBody){
+        createCoinBody.style.display = "block";
+        createCoinBody.style.marginTop = "0";
+      }
+      createCoinWrap.classList.add("on");
+      createCoinWrap.style.marginBottom = "0";
     }
 
     // Create coin image/banner previews
@@ -4262,6 +4265,7 @@ if(connectBtn){
     $("pingsTabBtn")?.addEventListener("click", () => setHomeTab("pings"));
     $("spawnCoinTabBtn")?.addEventListener("click", () => setHomeTab("spawn"));
     $("exploreTabBtn")?.addEventListener("click", () => setHomeTab("explore"));
+    mountCreateCoinInSpawnTab();
     setHomeTab("explore");
     bindRoomChartControls();
 
@@ -4425,7 +4429,7 @@ if(connectBtn){
       newBannerData = null;
       setImagePreview("newBannerPreview", null, "no banner");
 
-      toggleCreateCoin(false);
+      setHomeTab("explore");
       renderHome();
       openRoom(id);
 
@@ -4466,7 +4470,7 @@ if(connectBtn){
     if(newRoomBtn){
       newRoomBtn.addEventListener("click", () => {
         if(!connectedWallet) return showToast("connect wallet first.");
-        toggleCreateCoin(true);
+        setHomeTab("spawn");
         $("newName").focus();
       });
     }
