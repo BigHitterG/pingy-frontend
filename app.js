@@ -4174,6 +4174,35 @@ if(connectBtn){
 
     let exploreQuery = "";
     let exploreHasSearched = false;
+    let activeHomeTab = "explore";
+
+    function setHomeTab(tab){
+      const next = tab === "pings" || tab === "spawn" ? tab : "explore";
+      activeHomeTab = next;
+
+      const exploreTabPanel = $("exploreTabPanel");
+      const spawnCoinTabPanel = $("spawnCoinTabPanel");
+      const pingsTabPanel = $("pingsTabPanel");
+      const pingsTabBtn = $("pingsTabBtn");
+      const spawnCoinTabBtn = $("spawnCoinTabBtn");
+      const exploreTabBtn = $("exploreTabBtn");
+      if(exploreTabPanel) exploreTabPanel.style.display = next === "explore" ? "block" : "none";
+      if(spawnCoinTabPanel) spawnCoinTabPanel.style.display = next === "spawn" ? "block" : "none";
+      if(pingsTabPanel) pingsTabPanel.style.display = next === "pings" ? "block" : "none";
+
+      if(pingsTabBtn){
+        pingsTabBtn.setAttribute("aria-pressed", next === "pings" ? "true" : "false");
+        pingsTabBtn.style.fontWeight = next === "pings" ? "700" : "400";
+      }
+      if(spawnCoinTabBtn){
+        spawnCoinTabBtn.setAttribute("aria-pressed", next === "spawn" ? "true" : "false");
+        spawnCoinTabBtn.style.fontWeight = next === "spawn" ? "700" : "400";
+      }
+      if(exploreTabBtn){
+        exploreTabBtn.setAttribute("aria-pressed", next === "explore" ? "true" : "false");
+        exploreTabBtn.style.fontWeight = next === "explore" ? "700" : "400";
+      }
+    }
 
     function runExploreSearch(){
       exploreQuery = ($("searchInput").value || "").trim();
@@ -4230,6 +4259,10 @@ if(connectBtn){
     $("searchInput").addEventListener("keydown", (e) => {
       if(e.key === "Enter"){ e.preventDefault(); runExploreSearch(); }
     });
+    $("pingsTabBtn")?.addEventListener("click", () => setHomeTab("pings"));
+    $("spawnCoinTabBtn")?.addEventListener("click", () => setHomeTab("spawn"));
+    $("exploreTabBtn")?.addEventListener("click", () => setHomeTab("explore"));
+    setHomeTab("explore");
     bindRoomChartControls();
 
     async function createCoinFromForm(){

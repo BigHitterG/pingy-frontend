@@ -144,34 +144,45 @@
         </div>
       </div>
 
-      <div class="panel">
-        <div class="row" style="justify-content:space-between;">
-          <div class="h" style="margin:0;">explore</div>
-          <div class="muted">sorted by state then progress</div>
-        </div>
-        <div class="row" style="margin-top:8px;">
-          <input id="searchInput" placeholder="search" style="flex:1; min-width:220px;" />
-          <button class="btn subtle" id="searchBtn">search</button>
-        </div>
-        <div id="exploreList" style="margin-top:10px;"></div>
+      <div class="row" style="justify-content:space-between; margin-bottom:10px;">
+        <button class="btn subtle" id="pingsTabBtn" type="button">pings</button>
+        <button class="btn subtle" id="spawnCoinTabBtn" type="button">spawn coin</button>
+        <button class="btn subtle" id="exploreTabBtn" type="button">explore</button>
       </div>
 
-            <!-- Cards pinned near top -->
-      <div class="panel" style="margin-top:10px;">
-        <div class="row" style="justify-content:space-between;align-items:baseline;">
-          <div class="h" style="margin:0;">live</div>
-          <div class="muted">spawning → bonding → bonded</div>
+      <div id="exploreTabPanel">
+        <div class="panel">
+          <div class="row" style="justify-content:space-between;">
+            <div class="h" style="margin:0;">explore</div>
+            <div class="muted">sorted by state then progress</div>
+          </div>
+          <div class="row" style="margin-top:8px;">
+            <input id="searchInput" placeholder="search" style="flex:1; min-width:220px;" />
+            <button class="btn subtle" id="searchBtn">search</button>
+          </div>
+          <div id="exploreList" style="margin-top:10px;"></div>
         </div>
-        <div class="cardsRow" id="cardsRow" style="margin-top:8px;"></div>
+
+              <!-- Cards pinned near top -->
+        <div class="panel" style="margin-top:10px;">
+          <div class="row" style="justify-content:space-between;align-items:baseline;">
+            <div class="h" style="margin:0;">live</div>
+            <div class="muted">spawning → bonding → bonded</div>
+          </div>
+          <div class="cardsRow" id="cardsRow" style="margin-top:8px;"></div>
+        </div>
+
+        <button
+          class="btn"
+          id="moveCardsBtn"
+          style="position:fixed; left:50%; bottom:16px; transform:translateX(-50%); z-index:60;"
+        >
+          move
+        </button>
       </div>
 
-      <button
-        class="btn"
-        id="moveCardsBtn"
-        style="position:fixed; left:50%; bottom:16px; transform:translateX(-50%); z-index:60;"
-      >
-        move
-      </button>
+      <div id="spawnCoinTabPanel" style="display:none;"></div>
+      <div id="pingsTabPanel" style="display:none;"></div>
 
     </div>
 
