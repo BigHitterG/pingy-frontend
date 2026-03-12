@@ -1478,7 +1478,8 @@ const $ = (id) => document.getElementById(id);
         backup: null
       },
       activeHomeTab: "pings",
-      activePingThreadId: null
+      activePingThreadId: null,
+      pingReadTsByRoom: {}
     };
 
     const ONCHAIN_REFRESH_MS = 7000;
@@ -4261,6 +4262,52 @@ if(connectBtn){
         });
     }
 
+
+
+    function formatUnreadCountLabel(count){
+      const n = Math.max(0, Number(count) || 0);
+      if(n >= 1000) return "1000+";
+      if(n >= 100) return "100+";
+      if(n >= 50) return "50+";
+      if(n >= 10) return "10+";
+      return String(n);
+    }
+
+    function getUnreadCountForRoom(roomId){
+      if(!roomId || !connectedWallet) return 0;
+      const msgs = state.chat[roomId] || [];
+      const readAfterTs = Number(state.pingReadTsByRoom?.[roomId] || 0);
+      return msgs.reduce((count, m) => {
+        if(!m || m.wallet === connectedWallet || m.wallet === "SYSTEM") return count;
+        const msgTs = Number(m._ts || 0);
+        if(msgTs <= readAfterTs) return count;
+        return count + 1;
+      }, 0);
+    }
+
+    function markPingThreadRead(roomId){
+      if(!roomId) return;
+      state.pingReadTsByRoom[roomId] = Date.now();
+    }
+
+    function getTotalUnreadPingsCount(){
+      const rooms = getPingInboxRooms();
+      return rooms.reduce((sum, room) => sum + getUnreadCountForRoom(room.id), 0);
+    }
+
+    function updatePingsTabUnreadBadge(){
+      const badge = $("pingsTabUnreadBadge");
+      if(!badge) return;
+      const unread = getTotalUnreadPingsCount();
+      if(unread <= 0){
+        badge.style.display = "none";
+        badge.textContent = "0";
+        return;
+      }
+      badge.style.display = "inline-flex";
+      badge.textContent = formatUnreadCountLabel(unread);
+    }
+
     function pingThreadPreviewText(room){
       const msgs = (state.chat[room?.id] || []).slice().reverse();
       const prefer = msgs.find((m) => m && m.wallet !== "SYSTEM" && m.kind !== "activity" && String(m.text || "").trim());
@@ -4304,6 +4351,7 @@ if(connectBtn){
       list.className = "panel";
       rooms.forEach((room) => {
         const row = document.createElement("button");
+        const unreadCount = getUnreadCountForRoom(room.id);
         row.type = "button";
         row.className = "pingRow";
         const img = room.image ? `<img src="${escapeText(room.image)}" alt="" />` : `<span>$${escapeText((room.ticker||"?").slice(0,2))}</span>`;
@@ -4316,13 +4364,14 @@ if(connectBtn){
           </div>
           <div class="pingSide">
             <span class="k">${escapeText(lifecyclePhaseLabel(room.state))}</span>
-            <span class="tiny muted">new</span>
+            ${unreadCount > 0 ? `<span class="pinkCountBadge">${escapeText(formatUnreadCountLabel(unreadCount))}</span>` : `<span class="tiny muted">—</span>`}
           </div>
         `;
         row.addEventListener("click", () => openPingThread(room.id));
         list.appendChild(row);
       });
       wrap.appendChild(list);
+      updatePingsTabUnreadBadge();
     }
 
     function renderPingThreadChat(threadId){
@@ -4366,11 +4415,13 @@ if(connectBtn){
 
     function openPingThread(threadId){
       state.activePingThreadId = threadId;
+      markPingThreadRead(threadId);
       const inbox = $("pingsView");
       const thread = $("pingThreadView");
       if(inbox) inbox.style.display = "none";
       if(thread) thread.style.display = "block";
       renderPingThread(threadId);
+      updatePingsTabUnreadBadge();
     }
 
     function openMarketRoomFromPingThread(threadId){
@@ -4419,6 +4470,7 @@ if(connectBtn){
       if(!cardsRow || !exploreList) return;
       exploreList.innerHTML = "";
       if(state.activeHomeTab === "pings") renderPingsView();
+      updatePingsTabUnreadBadge();
 
       // LIVE: never filtered by explore search
       const liveRooms = sortedLiveRooms();
@@ -4478,8 +4530,10 @@ if(connectBtn){
       state.chat[rid] = state.chat[rid] || [];
       state.chat[rid].push({ ts: nowStamp(), _ts: Date.now(), wallet: connectedWallet, text: txt, kind: "chat" });
       if(input) input.value = "";
+      markPingThreadRead(rid);
       renderPingThreadChat(rid);
       renderPingsView();
+      updatePingsTabUnreadBadge();
     });
     $("pingThreadInput")?.addEventListener("keydown", (e) => {
       if(e.key === "Enter" && !e.shiftKey){
@@ -4489,6 +4543,7 @@ if(connectBtn){
     });
     mountCreateCoinInSpawnTab();
     setHomeTab("pings");
+    updatePingsTabUnreadBadge();
     bindRoomChartControls();
 
     async function createCoinFromForm(){

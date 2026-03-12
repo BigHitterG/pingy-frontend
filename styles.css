@@ -579,6 +579,22 @@
   margin-top:6px;
 }
 
+
+.pinkCountBadge{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  min-width:20px;
+  height:20px;
+  border-radius:999px;
+  padding:0 6px;
+  background:#ff6eb1;
+  color:#fff;
+  font-size:11px;
+  font-weight:700;
+  line-height:1;
+}
+
 /* Pings inbox + thread */
 .pingRow{
   width:100%;
