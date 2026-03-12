@@ -1665,21 +1665,6 @@ function encodeU64Arg(v){
         txInstructionProgramIds: tx.instructions.map((i) => i.programId?.toBase58?.()),
       });
 
-      traceStep("tx:simulate:start", { ixCount: instructions.length });
-      try {
-        const sim = await connection.simulateTransaction(tx, { sigVerify: false, commitment: "processed" });
-        console.log("[pingy] tx simulation err:", sim?.value?.err);
-        console.log("[pingy] tx simulation logs:", sim?.value?.logs || []);
-        if(sim?.value?.err){
-          const simErr = new Error(`simulation failed: ${JSON.stringify(sim.value.err)}`);
-          simErr.simLogs = sim?.value?.logs || [];
-          throw simErr;
-        }
-      } catch (simErr){
-        console.warn("[pingy] simulation failed; aborting before wallet signature", simErr);
-        throw simErr;
-      }
-
       console.log("[pingy] about to sign tx", {
         feePayer: tx.feePayer?.toBase58?.(),
         recentBlockhash: tx.recentBlockhash,
@@ -1698,6 +1683,7 @@ function encodeU64Arg(v){
       traceStep("tx:signTransaction", { via: "provider.signTransaction + sendRawTransaction" }, "tx step: opening phantom with signer...");
       let signedTx;
       try {
+        console.log("[ping-debug] skipping manual simulation; going straight to Phantom");
         console.log("[ping-debug] wallet call args", {
           method: "signTransaction",
           argCount: 1,
