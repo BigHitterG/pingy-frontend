@@ -580,6 +580,16 @@
 }
 
 
+
+.tabBadgeBtn{
+  position:relative;
+  padding-right:22px;
+}
+.tabCornerBadge{
+  position:absolute;
+  top:-7px;
+  right:-7px;
+}
 .pinkCountBadge{
   display:inline-flex;
   align-items:center;
