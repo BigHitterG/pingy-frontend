@@ -1479,7 +1479,7 @@ const $ = (id) => document.getElementById(id);
       },
       activeHomeTab: "pings",
       activePingThreadId: null,
-      pingReadTsByRoom: {}
+      pingReadByWallet: {}
     };
 
     const ONCHAIN_REFRESH_MS = 7000;
@@ -4246,6 +4246,7 @@ if(connectBtn){
       if(!room || !wallet) return false;
       if(isCreator(room, wallet)) return true;
       if(isApprover(room, wallet)) return true;
+      if(normalizeDepositStatus(room.approval?.[wallet] || "")) return true;
       const escrowSol = getWalletEscrowInRoom(room, wallet);
       if(escrowSol > 0) return true;
       const pos = room.positions?.[wallet] || {};
@@ -4255,6 +4256,8 @@ if(connectBtn){
         if(Number(onchainRow.escrow_sol || 0) > 0) return true;
         if(Number(onchainRow.spawn_token_allocation || 0) > 0) return true;
       }
+      const msgs = state.chat?.[room.id] || [];
+      if(msgs.some((m) => m && m.wallet === wallet)) return true;
       return false;
     }
 
@@ -4276,6 +4279,16 @@ if(connectBtn){
 
 
 
+
+
+    function getWalletPingReadState(){
+      if(!connectedWallet) return { tsByRoom: {}, countByRoom: {} };
+      if(!state.pingReadByWallet[connectedWallet]){
+        state.pingReadByWallet[connectedWallet] = { tsByRoom: {}, countByRoom: {} };
+      }
+      return state.pingReadByWallet[connectedWallet];
+    }
+
     function formatUnreadCountLabel(count){
       const n = Math.max(0, Number(count) || 0);
       if(n >= 1000) return "1000+";
@@ -4288,18 +4301,28 @@ if(connectBtn){
     function getUnreadCountForRoom(roomId){
       if(!roomId || !connectedWallet) return 0;
       const msgs = state.chat[roomId] || [];
-      const readAfterTs = Number(state.pingReadTsByRoom?.[roomId] || 0);
-      return msgs.reduce((count, m) => {
+      const readState = getWalletPingReadState();
+      const readAfterTs = Number(readState.tsByRoom?.[roomId] || 0);
+      const readAfterCount = Number(readState.countByRoom?.[roomId] || 0);
+      return msgs.reduce((count, m, idx) => {
         if(!m || m.wallet === connectedWallet || m.wallet === "SYSTEM") return count;
         const msgTs = Number(m._ts || 0);
-        if(msgTs <= readAfterTs) return count;
+        if(msgTs > 0){
+          if(msgTs <= readAfterTs) return count;
+          return count + 1;
+        }
+        const msgIdx = idx + 1;
+        if(msgIdx <= readAfterCount) return count;
         return count + 1;
       }, 0);
     }
 
     function markPingThreadRead(roomId){
       if(!roomId) return;
-      state.pingReadTsByRoom[roomId] = Date.now();
+      const readState = getWalletPingReadState();
+      readState.tsByRoom[roomId] = Date.now();
+      const msgs = state.chat[roomId] || [];
+      readState.countByRoom[roomId] = msgs.length;
     }
 
     function getTotalUnreadPingsCount(){
