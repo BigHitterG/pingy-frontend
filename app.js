@@ -488,18 +488,21 @@ const $ = (id) => document.getElementById(id);
         showToast("Mark live is limited to dev simulation creator/approver/admin controls.");
         return false;
       }
-      const externalLaunch = normalizeExternalLaunchRecord(room);
       const nextUrl = typeof externalLaunchUrl === "string" ? externalLaunchUrl.trim() : "";
       const nextMint = typeof externalMint === "string" ? externalMint.trim() : "";
-      if(externalLaunch){
-        externalLaunch.status = "live";
-        externalLaunch.live_at = Date.now();
-        if(nextUrl) externalLaunch.url = nextUrl;
-        if(nextMint) externalLaunch.mint = nextMint;
-      }
+      const patch = {
+        status: "live",
+        live_at: Date.now(),
+        platform: "pumpfun",
+      };
+      if(nextUrl) patch.url = nextUrl;
+      if(nextMint) patch.mint = nextMint;
 
-      mirrorExternalLaunchLegacyFields(room, externalLaunch);
-      saveLaunchRecordsToLocalStorage();
+      const applied = applyExternalLaunchStatusPatch(roomId, patch);
+      if(!applied){
+        showToast("Failed to mark launch live.");
+        return false;
+      }
 
       addSystemEvent(room.id, "Launch is now live externally.");
       renderRoom(room.id);
