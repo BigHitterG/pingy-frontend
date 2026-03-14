@@ -85,6 +85,7 @@ const $ = (id) => document.getElementById(id);
     const PINGY_LAUNCH_BACKEND = "pumpfun";
     const PINGY_PUMPFUN_LAUNCH_ENDPOINT = "";
     const PINGY_PUMPFUN_SETTLEMENT_ENDPOINT = "";
+    const PINGY_PUMPFUN_STATUS_ENDPOINT = "";
     const EXTERNAL_LAUNCH_RECORDS_STORAGE_KEY = "pingy_external_launch_records";
 
     function isPumpfunLaunchBackend(){
@@ -464,11 +465,19 @@ const $ = (id) => document.getElementById(id);
       if(!isPumpfunRoom(room)) return "";
       const status = getRoomLaunchStatus(room);
       if(status === "draft") return "";
-      if(status === "submitted") return "Submitted to Pump.fun. Waiting for external URL and mint.";
-      const distributionStatus = resolveRoomExternalDistributionStatus(room);
-      if(distributionStatus === "distributed") return "Distribution complete.";
-      if(distributionStatus === "ready") return "Live externally. Tokens received and ready for distribution.";
-      return "Live externally. Waiting for token receipt.";
+      const lines = [];
+      if(status === "submitted") lines.push("Submitted to Pump.fun. Waiting for external URL and mint.");
+      else {
+        const distributionStatus = resolveRoomExternalDistributionStatus(room);
+        if(distributionStatus === "distributed") lines.push("Distribution complete.");
+        else if(distributionStatus === "ready") lines.push("Live externally. Tokens received and ready for distribution.");
+        else lines.push("Live externally. Waiting for token receipt.");
+      }
+      if(isRoomStatusRefreshing(room)) lines.push("Refreshing: yes");
+      if(String(room?.external_settlement_status || "").trim()) lines.push(`Settlement status: ${String(room.external_settlement_status).trim()}`);
+      const settledLabel = formatLaunchTimestamp(room?.external_settled_at);
+      if(settledLabel) lines.push(`Settled: ${settledLabel}`);
+      return lines.join(" • ");
     }
 
     function getDisplayedPumpPreviewText(room){
@@ -1007,6 +1016,19 @@ const $ = (id) => document.getElementById(id);
       return !!room?.settlement_submitting;
     }
 
+    function isRoomStatusRefreshing(room){
+      return !!room?.status_refreshing;
+    }
+
+    function canRefreshRoomExternalStatus(room){
+      if(!room) return false;
+      if(!isPumpfunRoom(room)) return false;
+      const status = getRoomLaunchStatus(room);
+      if(status !== "submitted" && status !== "live") return false;
+      if(isRoomStatusRefreshing(room)) return false;
+      return true;
+    }
+
     function buildPumpfunSettlementPayload(room){
       const receiptRows = getRoomDistributionReceiptsRows(room);
       const rows = receiptRows.map((row) => {
@@ -1123,6 +1145,165 @@ const $ = (id) => document.getElementById(id);
       return String(configuredEndpoint || "").trim();
     }
 
+    function getPumpfunStatusEndpoint(){
+      const configuredEndpoint = typeof window?.PINGY_PUMPFUN_STATUS_ENDPOINT === "string"
+        ? window.PINGY_PUMPFUN_STATUS_ENDPOINT
+        : PINGY_PUMPFUN_STATUS_ENDPOINT;
+      return String(configuredEndpoint || "").trim();
+    }
+
+    function normalizeExternalStatusResult(result, room){
+      if(!result || typeof result !== "object") return buildExternalLaunchErrorResult("Status refresh failed.");
+      if(result.ok === false) return buildExternalLaunchErrorResult(result.error || "Status refresh failed.");
+
+      const launchNormalized = normalizePumpfunLaunchResult(result, room);
+      const settlementNormalized = normalizeExternalSettlementResult(result, room);
+      const hasSettlementRows = Array.isArray(result.rows) && result.rows.length > 0;
+      const hasSettlementStatus = typeof result.settlement_status === "string" && result.settlement_status.trim() !== "";
+      const hasSettledAt = Number.isFinite(Number(result.settled_at)) && Number(result.settled_at) > 0;
+
+      return {
+        ...launchNormalized,
+        ok: true,
+        settlement_status: hasSettlementStatus ? settlementNormalized.settlement_status : undefined,
+        settled_at: hasSettledAt ? settlementNormalized.settled_at : undefined,
+        rows: hasSettlementRows ? settlementNormalized.rows : undefined,
+      };
+    }
+
+    function buildExternalStatusMockResult(room){
+      const launchRecord = getRoomExternalLaunchRecord(room);
+      const receiptRows = getRoomDistributionReceiptsRows(room);
+      return {
+        ok: true,
+        platform: getRoomExternalPlatform(room) || "pumpfun",
+        status: getRoomLaunchStatus(room),
+        url: getRoomExternalLaunchUrl(room),
+        mint: getRoomExternalMint(room),
+        submitted_at: Number(launchRecord?.submitted_at || 0) || null,
+        live_at: Number(launchRecord?.live_at || 0) || null,
+        tokens_received: toSafeExternalTokenAmount(room?.external_tokens_received, 0),
+        tokens_distributed: toSafeExternalTokenAmount(room?.external_tokens_distributed, 0),
+        distribution_status: resolveRoomExternalDistributionStatus(room),
+        settlement_status: String(room?.external_distribution_status || "") === "distributed" ? "complete" : "pending",
+        settled_at: Number(room?.external_distribution_updated_at || 0) || null,
+        rows: receiptRows,
+      };
+    }
+
+    async function fetchPumpfunRoomStatus(room){
+      if(!room) return buildExternalLaunchErrorResult("Room not found.");
+      const endpoint = getPumpfunStatusEndpoint();
+      if(!endpoint){
+        if(DEV_SIMULATION) return buildExternalStatusMockResult(room);
+        return buildExternalLaunchErrorResult("No status endpoint configured.");
+      }
+
+      const payload = {
+        roomId: room.id || "",
+        mint: getRoomExternalMint(room),
+        launchUrl: getRoomExternalLaunchUrl(room),
+        launch_status: getRoomLaunchStatus(room),
+      };
+
+      try {
+        const response = await fetch(endpoint, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        let body = null;
+        try {
+          body = await response.json();
+        } catch (_jsonErr) {
+          return buildExternalLaunchErrorResult("Invalid status response from backend.");
+        }
+        if(!response.ok){
+          const message = typeof body?.error === "string"
+            ? body.error
+            : `Status refresh failed (${response.status}).`;
+          return buildExternalLaunchErrorResult(message);
+        }
+        return body && typeof body === "object" ? body : buildExternalLaunchErrorResult("Invalid status response from backend.");
+      } catch (err) {
+        console.error("[pingy] fetchPumpfunRoomStatus failed", err);
+        return buildExternalLaunchErrorResult("Network error while refreshing status.");
+      }
+    }
+
+    function applyExternalStatusSettlementResult(roomId, normalized){
+      if(!normalized || typeof normalized !== "object") return null;
+      const hasRows = Array.isArray(normalized.rows) && normalized.rows.length > 0;
+      const hasSettlementStatus = typeof normalized.settlement_status === "string" && normalized.settlement_status.trim() !== "";
+      const hasSettledAt = Number.isFinite(Number(normalized.settled_at)) && Number(normalized.settled_at) > 0;
+      if(!hasRows && !hasSettlementStatus && !hasSettledAt) return roomById(roomId);
+
+      const room = roomById(roomId);
+      if(!room) return null;
+      const fallbackRows = hasRows ? normalized.rows : buildPumpfunSettlementPayload(room).rows.map((row) => ({
+        wallet: row.wallet,
+        planned_tokens: row.plannedTokens,
+        sent_tokens: row.sentTokens,
+        status: row.status,
+      }));
+      return applyExternalSettlementResult(roomId, {
+        ok: true,
+        platform: normalized.platform || "pumpfun",
+        settlement_status: hasSettlementStatus ? normalized.settlement_status : resolveRoomExternalDistributionStatus(room),
+        settled_at: hasSettledAt ? normalized.settled_at : Date.now(),
+        rows: fallbackRows,
+      });
+    }
+
+    async function refreshRoomExternalStatus(roomId, { silent = false } = {}){
+      const room = roomById(roomId);
+      if(!room){
+        if(!silent) showToast("Room not found.");
+        return buildExternalLaunchErrorResult("Room not found.");
+      }
+      if(!canRefreshRoomExternalStatus(room)){
+        const error = "Room is not eligible for status refresh.";
+        if(!silent) showToast(error);
+        return buildExternalLaunchErrorResult(error);
+      }
+
+      room.status_refreshing = true;
+      renderRoom(room.id);
+      renderHome();
+      try {
+        const rawResult = await fetchPumpfunRoomStatus(room);
+        const normalized = normalizeExternalStatusResult(rawResult, room);
+        if(normalized.ok === false){
+          if(!silent) showToast(normalized.error || "Status refresh failed.");
+          return normalized;
+        }
+        applyExternalLaunchResult(room.id, normalized);
+        applyExternalStatusSettlementResult(room.id, normalized);
+        room.last_status_refresh_at = Date.now();
+        return normalized;
+      } catch (err) {
+        console.error("[pingy] refreshRoomExternalStatus failed", err);
+        const failed = buildExternalLaunchErrorResult("Status refresh failed.");
+        if(!silent) showToast(failed.error);
+        return failed;
+      } finally {
+        room.status_refreshing = false;
+        room.last_status_refresh_at = Date.now();
+        renderRoom(room.id);
+        renderHome();
+      }
+    }
+
+    function maybeAutoRefreshRoomExternalStatus(room){
+      if(!room || !activeRoomId || room.id !== activeRoomId) return;
+      if(!canRefreshRoomExternalStatus(room)) return;
+      const now = Date.now();
+      const last = Number(room.last_status_refresh_at || 0);
+      const minIntervalMs = 20_000;
+      if(Number.isFinite(last) && last > 0 && (now - last) < minIntervalMs) return;
+      refreshRoomExternalStatus(room.id, { silent: true });
+    }
+
     function validatePumpfunSettlementReadiness(room){
       if(!room) return { ok: false, error: "Room not found." };
       if(!isPumpfunRoom(room)) return { ok: false, error: "This room is not set to Pump.fun launch mode." };
@@ -1167,6 +1348,8 @@ const $ = (id) => document.getElementById(id);
       }
       room.external_distribution_receipts = receipts;
       room.external_distribution_updated_at = settledAt;
+      room.external_settlement_status = normalized.settlement_status;
+      room.external_settled_at = settledAt;
       room.external_distribution_status = normalized.settlement_status === "complete"
         ? "distributed"
         : (normalized.settlement_status === "partial" ? "ready" : resolveRoomExternalDistributionStatus(room));
@@ -7246,6 +7429,7 @@ if(connectBtn){
 
       maybeAdvance(r);
       renderDevSimulationPanel(r);
+      maybeAutoRefreshRoomExternalStatus(r);
 
       $("roomTitle").textContent = r.name + "  $" + r.ticker;
       const roomMeta = $("roomMeta");
@@ -7352,6 +7536,11 @@ if(connectBtn){
         if(externalMint) lines.push(`<div>External mint: ${escapeText(externalMint)}</div>`);
         if(isPumpfunRoom(r)){
           lines.push(`<div>Distribution: ${escapeText(getRoomExternalDistributionStatusLabel(r))}</div>`);
+          if(isRoomStatusRefreshing(r)) lines.push("<div>Refreshing: yes</div>");
+          const settlementStatus = String(r?.external_settlement_status || "").trim();
+          if(settlementStatus) lines.push(`<div>Settlement status: ${escapeText(settlementStatus)}</div>`);
+          const settledLabel = formatLaunchTimestamp(r?.external_settled_at);
+          if(settledLabel) lines.push(`<div>Settled: ${escapeText(settledLabel)}</div>`);
           if(hasFrozenDistributionSnapshot(r)){
             lines.push(`<div>Distribution snapshot: frozen</div>`);
             lines.push(`<div>Snapshot recipients: ${Number(r.distribution_snapshot_total_recipients || getRoomPlannedDistributionRecipientCount(r) || 0).toLocaleString()}</div>`);
@@ -7395,6 +7584,12 @@ if(connectBtn){
             `Snapshot: ${hasFrozenDistributionSnapshot(r) ? "frozen" : "live preview"}`,
           ];
           if(isRoomSettlementSubmitting(r)) lines.push("Settlement submitting: yes");
+          if(isRoomStatusRefreshing(r)) lines.push("Refreshing: yes");
+          if(String(r?.external_settlement_status || "").trim()) lines.push(`Settlement status: ${String(r.external_settlement_status).trim()}`);
+          {
+            const settledLabel = formatLaunchTimestamp(r?.external_settled_at);
+            if(settledLabel) lines.push(`Settled: ${settledLabel}`);
+          }
           if(hasFrozenDistributionSnapshot(r)){
             const lockedLabel = formatLaunchTimestamp(r.distribution_snapshot_locked_at);
             if(lockedLabel) lines.push(`Locked: ${lockedLabel}`);
@@ -7419,6 +7614,16 @@ if(connectBtn){
         const hasExternalUrl = getRoomExternalLaunchUrl(r).trim().length > 0;
         const showOpenButton = isPumpfunRoom(r) && hasExternalUrl;
         openPumpfunBtn.style.display = showOpenButton ? "inline-block" : "none";
+      }
+      const refreshExternalStatusBtn = $("refreshExternalStatusBtn");
+      if(refreshExternalStatusBtn){
+        const launchStatus = getRoomLaunchStatus(r);
+        const canRefresh = canRefreshRoomExternalStatus(r);
+        const refreshing = isRoomStatusRefreshing(r);
+        const showRefresh = isPumpfunRoom(r) && (launchStatus === "submitted" || launchStatus === "live") && (refreshing || canRefresh);
+        refreshExternalStatusBtn.style.display = showRefresh ? "inline-block" : "none";
+        refreshExternalStatusBtn.disabled = refreshing || !canRefresh;
+        refreshExternalStatusBtn.textContent = refreshing ? "refreshing…" : "refresh status";
       }
       const markLiveDevBtn = $("markLiveDevBtn");
       if(markLiveDevBtn){
@@ -7928,6 +8133,10 @@ if(connectBtn){
     $("unpingBtn").addEventListener("click", () => openUnpingModal(activeRoomId));
     const openPumpfunBtn = $("openPumpfunBtn");
     if(openPumpfunBtn) openPumpfunBtn.addEventListener("click", () => openExternalLaunchForRoom(activeRoomId));
+    const refreshExternalStatusBtn = $("refreshExternalStatusBtn");
+    if(refreshExternalStatusBtn) refreshExternalStatusBtn.addEventListener("click", () => {
+      if(activeRoomId) refreshRoomExternalStatus(activeRoomId);
+    });
     const markLiveDevBtn = $("markLiveDevBtn");
     if(markLiveDevBtn) markLiveDevBtn.addEventListener("click", () => {
       if(activeRoomId) markRoomLiveExternally(activeRoomId, {
