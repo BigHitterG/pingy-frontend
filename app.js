@@ -170,6 +170,10 @@ const $ = (id) => document.getElementById(id);
       return String(room?.external_platform || "").toLowerCase();
     }
 
+    function isRoomLaunchSubmitting(room){
+      return !!room?.launch_submitting;
+    }
+
     function formatLaunchTimestamp(ts){
       const num = Number(ts);
       if(!Number.isFinite(num) || num <= 0) return "";
@@ -186,6 +190,7 @@ const $ = (id) => document.getElementById(id);
     function canCurrentWalletLaunchExternally(room){
       if(!connectedWallet || !room) return false;
       if(!isPumpfunRoom(room)) return false;
+      if(isRoomLaunchSubmitting(room)) return false;
       if(room.state !== "SPAWNING") return false;
       if(getRoomLaunchStatus(room) !== "draft") return false;
       return isCreator(room, connectedWallet) || isApprover(room, connectedWallet) || isRoomAdminWallet(room, connectedWallet);
@@ -223,43 +228,98 @@ const $ = (id) => document.getElementById(id);
       };
     }
 
-    function launchRoomOnPumpfun(roomId){
+    function buildExternalLaunchErrorResult(error){
+      const message = typeof error === "string"
+        ? error
+        : String(error?.message || error || "Launch submission failed.");
+      return { ok: false, error: message };
+    }
+
+    function submitPumpfunLaunchMock(room){
+      if(!room) return buildExternalLaunchErrorResult("Room not found.");
+      const payload = buildPumpfunLaunchPayload(room);
+      return {
+        ok: true,
+        platform: "pumpfun",
+        status: "submitted",
+        payload,
+        url: "",
+        mint: "",
+        submitted_at: Date.now(),
+        live_at: null,
+      };
+    }
+
+    function submitPumpfunLaunch(room){
+      // Future boundary: real backend POST should be wired here without changing UI orchestration.
+      if(DEV_SIMULATION) return submitPumpfunLaunchMock(room);
+      return submitPumpfunLaunchMock(room);
+    }
+
+    async function submitRoomLaunchExternally(roomId){
+      const room = roomById(roomId);
+      if(!room) return buildExternalLaunchErrorResult("Room not found.");
+      if(!isPumpfunRoom(room)) return buildExternalLaunchErrorResult("This room is not set to Pump.fun launch mode.");
+      if(!canCurrentWalletLaunchExternally(room)) return buildExternalLaunchErrorResult("Creator, approver, or admin required to submit launch handoff.");
+
+      try {
+        return await Promise.resolve(submitPumpfunLaunch(room));
+      } catch (err) {
+        console.error("[pingy] submitRoomLaunchExternally failed", err);
+        return buildExternalLaunchErrorResult("Launch submission failed.");
+      }
+    }
+
+    async function launchRoomOnPumpfun(roomId){
       const room = roomById(roomId);
       if(!room){
         showToast("Room not found.");
-        return null;
+        return buildExternalLaunchErrorResult("Room not found.");
       }
       if(!isPumpfunRoom(room)){
         showToast("This room is not set to Pump.fun launch mode.");
-        return null;
+        return buildExternalLaunchErrorResult("This room is not set to Pump.fun launch mode.");
       }
       if(room.state !== "SPAWNING"){
         showToast("Launch handoff is only available during spawn formation.");
-        return null;
+        return buildExternalLaunchErrorResult("Launch handoff is only available during spawn formation.");
       }
       if(getRoomLaunchStatus(room) !== "draft"){
         showToast("Launch handoff has already been submitted.");
-        return null;
+        return buildExternalLaunchErrorResult("Launch handoff has already been submitted.");
       }
       if(!canCurrentWalletLaunchExternally(room)){
         showToast("Creator, approver, or admin required to submit launch handoff.");
-        return null;
+        return buildExternalLaunchErrorResult("Creator, approver, or admin required to submit launch handoff.");
       }
-      const payload = buildPumpfunLaunchPayload(room);
-      const externalLaunch = normalizeExternalLaunchRecord(room);
-      if(externalLaunch){
-        externalLaunch.backend = "pumpfun";
-        externalLaunch.status = "submitted";
-        externalLaunch.submitted_at = Date.now();
-        externalLaunch.payload = payload;
-      }
-      room.launch_status = "submitted";
-      room.external_platform = "pumpfun";
-      room._lastLaunchPayload = payload;
-      addSystemEvent(room.id, "Launch submitted to Pump.fun.");
+      room.launch_submitting = true;
       renderRoom(room.id);
       renderHome();
-      return payload;
+      try {
+        const result = await submitRoomLaunchExternally(room.id);
+        if(result?.ok === false){
+          showToast(result.error || "Launch submission failed.");
+          return result;
+        }
+        const applied = applyExternalLaunchResult(room.id, result);
+        if(!applied){
+          const failedResult = buildExternalLaunchErrorResult("Launch submission failed.");
+          showToast(failedResult.error);
+          return failedResult;
+        }
+        addSystemEvent(room.id, "Launch submitted to Pump.fun.");
+        showToast("Launch submitted.");
+        return result;
+      } catch (err) {
+        console.error("[pingy] launchRoomOnPumpfun failed", err);
+        const failedResult = buildExternalLaunchErrorResult("Launch submission failed.");
+        showToast(failedResult.error);
+        return failedResult;
+      } finally {
+        room.launch_submitting = false;
+        renderRoom(room.id);
+        renderHome();
+      }
     }
 
     function markRoomLiveExternally(roomId, { externalLaunchUrl = "", externalMint = "" } = {}){
@@ -348,6 +408,7 @@ const $ = (id) => document.getElementById(id);
     function applyExternalLaunchResult(roomId, result = {}){
       const room = roomById(roomId);
       if(!room || !result || typeof result !== "object") return null;
+      if(result.ok === false) return null;
       normalizeLaunchRoom(room);
       const externalLaunch = normalizeExternalLaunchRecord(room);
       if(!externalLaunch) return null;
@@ -5939,9 +6000,13 @@ if(connectBtn){
       }
       const pumpLaunchBtn = $("pumpLaunchBtn");
       if(pumpLaunchBtn){
+        const launchStatus = getRoomLaunchStatus(r);
+        const isSubmitting = isRoomLaunchSubmitting(r);
         const canLaunch = canCurrentWalletLaunchExternally(r);
-        pumpLaunchBtn.style.display = canLaunch ? "inline-block" : "none";
+        const showLaunch = isPumpfunRoom(r) && launchStatus === "draft" && (isSubmitting || canLaunch);
+        pumpLaunchBtn.style.display = showLaunch ? "inline-block" : "none";
         pumpLaunchBtn.disabled = !canLaunch;
+        pumpLaunchBtn.textContent = isSubmitting ? "submitting…" : "launch on pump.fun";
       }
 
       const pendingList = $("pendingList");
