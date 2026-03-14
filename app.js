@@ -172,6 +172,11 @@ const $ = (id) => document.getElementById(id);
         : "";
     }
 
+    function normalizeDistributionReceiptStatus(value){
+      const normalized = String(value || "").trim().toLowerCase();
+      return ["pending", "partial", "complete"].includes(normalized) ? normalized : "pending";
+    }
+
     function toSafeExternalTokenAmount(value, fallback = 0){
       const parsed = Number(value);
       if(Number.isFinite(parsed) && parsed >= 0) return Math.floor(parsed);
@@ -250,8 +255,6 @@ const $ = (id) => document.getElementById(id);
     }
 
     function resolveRoomExternalDistributionStatus(room){
-      const explicit = normalizeExternalDistributionStatus(room?.external_distribution_status);
-      if(explicit) return explicit;
       const launchStatus = getRoomLaunchStatus(room);
       const tokensReceived = toSafeExternalTokenAmount(room?.external_tokens_received, 0);
       const plannedTotal = toSafeExternalTokenAmount(
@@ -264,7 +267,6 @@ const $ = (id) => document.getElementById(id);
       );
       if(launchStatus !== "live") return "pending";
       if(tokensReceived <= 0) return "awaiting_token_receipt";
-      if(tokensSent > 0 && plannedTotal <= 0) return "distributed";
       if(plannedTotal > 0 && tokensSent >= plannedTotal) return "distributed";
       return "ready";
     }
@@ -634,10 +636,8 @@ const $ = (id) => document.getElementById(id);
           planned_tokens: toSafeExternalTokenAmount(row.planned_tokens, 0),
         }))
         : [];
-      room.external_distribution_total_tokens_planned = toSafeExternalTokenAmount(
-        room.distribution_snapshot_rows.reduce((sum, row) => sum + Number(row.planned_tokens || 0), 0),
-        0,
-      );
+      syncRoomDistributionReceiptsWithPlan(room);
+      snapshotRoomExternalDistributionPlan(room);
       validateDistributionSnapshot(room);
       return room;
     }
@@ -668,10 +668,132 @@ const $ = (id) => document.getElementById(id);
       return Number(getRoomPlannedDistributionRows(room).length || 0);
     }
 
+    function getRoomDistributionReceipts(room){
+      if(!room || typeof room !== "object") return {};
+      if(!room.external_distribution_receipts || typeof room.external_distribution_receipts !== "object" || Array.isArray(room.external_distribution_receipts)){
+        room.external_distribution_receipts = {};
+      }
+      const receipts = {};
+      for(const [wallet, receipt] of Object.entries(room.external_distribution_receipts)){
+        const key = String(wallet || "").trim();
+        if(!key) continue;
+        const source = receipt && typeof receipt === "object" ? receipt : {};
+        receipts[key] = {
+          planned_tokens: toSafeExternalTokenAmount(source.planned_tokens, 0),
+          sent_tokens: toSafeExternalTokenAmount(source.sent_tokens, 0),
+          tx_id: typeof source.tx_id === "string" ? source.tx_id.trim() : "",
+          sent_at: Number.isFinite(Number(source.sent_at)) && Number(source.sent_at) > 0 ? Number(source.sent_at) : null,
+          status: normalizeDistributionReceiptStatus(source.status),
+        };
+      }
+      room.external_distribution_receipts = receipts;
+      return receipts;
+    }
+
+    function getRoomDistributionReceipt(room, wallet){
+      const walletKey = String(wallet || "").trim();
+      if(!walletKey) return {
+        planned_tokens: 0,
+        sent_tokens: 0,
+        tx_id: "",
+        sent_at: null,
+        status: "pending",
+      };
+      const receipts = getRoomDistributionReceipts(room);
+      return receipts[walletKey] || {
+        planned_tokens: 0,
+        sent_tokens: 0,
+        tx_id: "",
+        sent_at: null,
+        status: "pending",
+      };
+    }
+
+    function getRoomDistributionReceiptStatus(room, wallet){
+      return getRoomDistributionReceipt(room, wallet).status;
+    }
+
+    function getRoomDistributionReceiptSentTokens(room, wallet){
+      return toSafeExternalTokenAmount(getRoomDistributionReceipt(room, wallet).sent_tokens, 0);
+    }
+
+    function getRoomDistributionReceiptPlannedTokens(room, wallet){
+      return toSafeExternalTokenAmount(getRoomDistributionReceipt(room, wallet).planned_tokens, 0);
+    }
+
+    function getRoomDistributionReceiptsRows(room){
+      const plannedRows = getRoomPlannedDistributionRows(room);
+      const receipts = getRoomDistributionReceipts(room);
+      return plannedRows.map((row) => {
+        const wallet = String(row?.wallet || "").trim();
+        const plannedTokens = toSafeExternalTokenAmount(row?.planned_tokens, 0);
+        const source = receipts[wallet] || {};
+        const sentTokens = toSafeExternalTokenAmount(source.sent_tokens, 0);
+        let status = "pending";
+        if(plannedTokens > 0 && sentTokens >= plannedTokens) status = "complete";
+        else if(sentTokens > 0 && sentTokens < plannedTokens) status = "partial";
+        return {
+          wallet,
+          planned_tokens: plannedTokens,
+          sent_tokens: sentTokens,
+          tx_id: typeof source.tx_id === "string" ? source.tx_id.trim() : "",
+          sent_at: Number.isFinite(Number(source.sent_at)) && Number(source.sent_at) > 0 ? Number(source.sent_at) : null,
+          status,
+        };
+      });
+    }
+
+    function getRoomDistributionTotalSentTokens(room){
+      const sum = getRoomDistributionReceiptsRows(room).reduce((acc, row) => acc + Number(row.sent_tokens || 0), 0);
+      return toSafeExternalTokenAmount(sum, 0);
+    }
+
+    function getRoomDistributionCompletedRecipientCount(room){
+      return Number(getRoomDistributionReceiptsRows(room).filter((row) => row.status === "complete").length || 0);
+    }
+
+    function getRoomDistributionPartialRecipientCount(room){
+      return Number(getRoomDistributionReceiptsRows(room).filter((row) => row.status === "partial").length || 0);
+    }
+
+    function getRoomDistributionPendingRecipientCount(room){
+      return Number(getRoomDistributionReceiptsRows(room).filter((row) => row.status === "pending").length || 0);
+    }
+
+    function syncRoomDistributionReceiptsWithPlan(room){
+      if(!room || typeof room !== "object") return room;
+      const plannedRows = getRoomPlannedDistributionRows(room);
+      const existing = getRoomDistributionReceipts(room);
+      const next = { ...existing };
+      for(const row of plannedRows){
+        const wallet = String(row?.wallet || "").trim();
+        if(!wallet) continue;
+        const plannedTokens = toSafeExternalTokenAmount(row?.planned_tokens, 0);
+        const source = existing[wallet] || {};
+        const sentTokens = toSafeExternalTokenAmount(source.sent_tokens, 0);
+        let status = "pending";
+        if(plannedTokens > 0 && sentTokens >= plannedTokens) status = "complete";
+        else if(sentTokens > 0 && sentTokens < plannedTokens) status = "partial";
+        next[wallet] = {
+          planned_tokens: plannedTokens,
+          sent_tokens: sentTokens,
+          tx_id: typeof source.tx_id === "string" ? source.tx_id.trim() : "",
+          sent_at: Number.isFinite(Number(source.sent_at)) && Number(source.sent_at) > 0 ? Number(source.sent_at) : null,
+          status,
+        };
+      }
+      room.external_distribution_receipts = next;
+      return room;
+    }
+
     function snapshotRoomExternalDistributionPlan(room){
       if(!room || typeof room !== "object") return room;
+      syncRoomDistributionReceiptsWithPlan(room);
       room.external_distribution_total_recipients = Number(getRoomPlannedDistributionRecipientCount(room) || 0);
       room.external_distribution_total_tokens_planned = toSafeExternalTokenAmount(getRoomPlannedDistributionTotal(room), 0);
+      room.external_distribution_total_tokens_sent = toSafeExternalTokenAmount(getRoomDistributionTotalSentTokens(room), 0);
+      room.external_tokens_distributed = room.external_distribution_total_tokens_sent;
+      room.external_distribution_status = resolveRoomExternalDistributionStatus(room);
       validateDistributionSnapshot(room);
       return room;
     }
@@ -713,6 +835,23 @@ const $ = (id) => document.getElementById(id);
           roomId: room.id,
           plannedTotal,
           storedPlannedTotal,
+        });
+      }
+      const receipts = getRoomDistributionReceipts(room);
+      const hasInvalidReceipt = Object.values(receipts).some((receipt) => {
+        const planned = Number(receipt?.planned_tokens);
+        const sent = Number(receipt?.sent_tokens);
+        return !Number.isInteger(planned)
+          || planned < 0
+          || !Number.isInteger(sent)
+          || sent < 0
+          || !["pending", "partial", "complete"].includes(normalizeDistributionReceiptStatus(receipt?.status));
+      });
+      if(hasInvalidReceipt){
+        valid = false;
+        console.warn("[pingy] distribution receipts invalid", {
+          roomId: room.id,
+          receipts,
         });
       }
       if(hasFrozenDistributionSnapshot(room)){
@@ -1173,30 +1312,46 @@ const $ = (id) => document.getElementById(id);
       return true;
     }
 
-    function simulateRoomDistributionComplete(roomId){
+    function simulateRoomDistributionSettlement(roomId){
       const room = roomById(roomId);
       if(!room || !canCurrentWalletSimulateDistribution(room)){
         showToast("Distribution simulation is limited to dev creator/approver/admin controls.");
         return false;
       }
-      snapshotRoomExternalDistributionPlan(room);
-      if(isPumpfunRoom(room) && isRoomLaunchLive(room) && !hasFrozenDistributionSnapshot(room)){
-        freezeRoomDistributionSnapshot(room);
-        snapshotRoomExternalDistributionPlan(room);
+      if(!isPumpfunRoom(room) || !isRoomLaunchLive(room)){
+        showToast("Settlement simulation requires a live Pump.fun room.");
+        return false;
       }
-      room.external_distribution_total_tokens_sent = toSafeExternalTokenAmount(
-        room.external_distribution_total_tokens_planned,
-        0,
-      );
-      room.external_tokens_distributed = room.external_distribution_total_tokens_sent;
-      room.external_distribution_updated_at = Date.now();
-      room.external_distribution_status = "distributed";
+      if(!hasFrozenDistributionSnapshot(room)) freezeRoomDistributionSnapshot(room);
+      syncRoomDistributionReceiptsWithPlan(room);
+      const ts = Date.now();
+      const txId = `dev-distribution-${String(ts).slice(-8)}`;
+      const receipts = getRoomDistributionReceipts(room);
+      for(const row of getRoomPlannedDistributionRows(room)){
+        const wallet = String(row?.wallet || "").trim();
+        if(!wallet) continue;
+        const plannedTokens = toSafeExternalTokenAmount(row?.planned_tokens, 0);
+        receipts[wallet] = {
+          planned_tokens: plannedTokens,
+          sent_tokens: plannedTokens,
+          tx_id: txId,
+          sent_at: ts,
+          status: "complete",
+        };
+      }
+      room.external_distribution_receipts = receipts;
+      room.external_distribution_updated_at = ts;
+      snapshotRoomExternalDistributionPlan(room);
       validateDistributionSnapshot(room);
       console.debug("[pingy] distribution preview", buildRoomDistributionPreview(room));
-      addSystemEvent(room.id, "Distribution marked complete (dev simulation).");
+      addSystemEvent(room.id, "Distribution settlement marked complete (dev simulation).");
       renderRoom(room.id);
       renderHome();
       return true;
+    }
+
+    function simulateRoomDistributionComplete(roomId){
+      return simulateRoomDistributionSettlement(roomId);
     }
 
     function openExternalLaunchForRoom(roomId){
@@ -1252,9 +1407,9 @@ const $ = (id) => document.getElementById(id);
           planned_tokens: toSafeExternalTokenAmount(row?.planned_tokens, 0),
         })).filter((row) => row.wallet)
         : [];
+      getRoomDistributionReceipts(room);
+      syncRoomDistributionReceiptsWithPlan(room);
       snapshotRoomExternalDistributionPlan(room);
-      room.external_distribution_status = normalizeExternalDistributionStatus(room.external_distribution_status)
-        || resolveRoomExternalDistributionStatus(room);
       if(isPumpfunLaunchBackend()){
         room.launch_backend = "pumpfun";
         room.launch_status = normalizePumpfunLaunchStatus(room.launch_status);
@@ -1334,13 +1489,11 @@ const $ = (id) => document.getElementById(id);
         );
       }
       snapshotRoomExternalDistributionPlan(room);
-      room.external_distribution_status = normalizedResult.has_distribution_status
-        ? normalizeExternalDistributionStatus(normalizedResult.distribution_status)
-        : resolveRoomExternalDistributionStatus(room);
       if(isPumpfunRoom(room) && normalizePumpfunLaunchStatus(normalizedResult.status || room.launch_status) === "live" && !hasFrozenDistributionSnapshot(room)){
         freezeRoomDistributionSnapshot(room);
-        snapshotRoomExternalDistributionPlan(room);
       }
+      syncRoomDistributionReceiptsWithPlan(room);
+      snapshotRoomExternalDistributionPlan(room);
       validateDistributionSnapshot(room);
 
       mirrorExternalLaunchLegacyFields(room, externalLaunch);
@@ -6926,17 +7079,22 @@ if(connectBtn){
 
       const distributionPanel = $("distributionPanel");
       const distributionSummary = $("distributionSummary");
+      const distributionReceiptsPreview = $("distributionReceiptsPreview");
       if(distributionPanel && distributionSummary){
         const showDistributionPanel = isPumpfunRoom(r) && getRoomLaunchStatus(r) !== "draft";
         distributionPanel.style.display = showDistributionPanel ? "block" : "none";
         if(showDistributionPanel){
           snapshotRoomExternalDistributionPlan(r);
+          const receiptRows = getRoomDistributionReceiptsRows(r);
           const lines = [
             `Mode: ${String(r.external_distribution_mode || "pro_rata").replaceAll("_", " ")}`,
             `Recipients: ${Number(r.external_distribution_total_recipients || 0).toLocaleString()}`,
             `Tokens received: ${toSafeExternalTokenAmount(r.external_tokens_received, 0).toLocaleString()}`,
             `Tokens planned: ${toSafeExternalTokenAmount(r.external_distribution_total_tokens_planned, 0).toLocaleString()}`,
             `Tokens sent: ${toSafeExternalTokenAmount(r.external_distribution_total_tokens_sent, 0).toLocaleString()}`,
+            `Completed recipients: ${getRoomDistributionCompletedRecipientCount(r).toLocaleString()}`,
+            `Partial recipients: ${getRoomDistributionPartialRecipientCount(r).toLocaleString()}`,
+            `Pending recipients: ${getRoomDistributionPendingRecipientCount(r).toLocaleString()}`,
             `Status: ${getRoomExternalDistributionStatusLabel(r)}`,
             `Snapshot: ${hasFrozenDistributionSnapshot(r) ? "frozen" : "live preview"}`,
           ];
@@ -6945,6 +7103,17 @@ if(connectBtn){
             if(lockedLabel) lines.push(`Locked: ${lockedLabel}`);
           }
           distributionSummary.innerHTML = lines.map((line) => `<div>${escapeText(line)}</div>`).join("");
+          if(distributionReceiptsPreview){
+            const previewRows = receiptRows.slice(0, 10);
+            const previewLines = previewRows.map((row) => {
+              const txLine = row.tx_id ? `<div class="tiny muted">tx: ${escapeText(row.tx_id)}</div>` : "";
+              return `<div style="margin-top:4px;"><div>${escapeText(displayName(row.wallet))} · planned ${toSafeExternalTokenAmount(row.planned_tokens, 0).toLocaleString()} · sent ${toSafeExternalTokenAmount(row.sent_tokens, 0).toLocaleString()} · ${escapeText(row.status)}</div>${txLine}</div>`;
+            });
+            if(receiptRows.length > 10) previewLines.push(`<div style="margin-top:4px;">+ ${(receiptRows.length - 10).toLocaleString()} more recipients</div>`);
+            distributionReceiptsPreview.innerHTML = previewLines.join("");
+          }
+        } else if(distributionReceiptsPreview){
+          distributionReceiptsPreview.innerHTML = "";
         }
       }
 
@@ -6962,12 +7131,12 @@ if(connectBtn){
         markLiveDevBtn.style.display = showMarkLive ? "inline-block" : "none";
         markLiveDevBtn.disabled = !canMarkLive;
       }
-      const simulateDistributionDevBtn = $("simulateDistributionDevBtn");
-      if(simulateDistributionDevBtn){
+      const simulateDistributionSettlementDevBtn = $("simulateDistributionSettlementDevBtn");
+      if(simulateDistributionSettlementDevBtn){
         const showSimulate = DEV_SIMULATION && isPumpfunRoom(r) && isRoomLaunchLive(r);
         const canSimulate = canCurrentWalletSimulateDistribution(r);
-        simulateDistributionDevBtn.style.display = showSimulate ? "inline-block" : "none";
-        simulateDistributionDevBtn.disabled = !canSimulate;
+        simulateDistributionSettlementDevBtn.style.display = showSimulate ? "inline-block" : "none";
+        simulateDistributionSettlementDevBtn.disabled = !canSimulate;
       }
       const pumpLaunchBtn = $("pumpLaunchBtn");
       if(pumpLaunchBtn){
@@ -7458,9 +7627,9 @@ if(connectBtn){
         distributionStatus: "ready",
       });
     });
-    const simulateDistributionDevBtn = $("simulateDistributionDevBtn");
-    if(simulateDistributionDevBtn) simulateDistributionDevBtn.addEventListener("click", () => {
-      if(activeRoomId) simulateRoomDistributionComplete(activeRoomId);
+    const simulateDistributionSettlementDevBtn = $("simulateDistributionSettlementDevBtn");
+    if(simulateDistributionSettlementDevBtn) simulateDistributionSettlementDevBtn.addEventListener("click", () => {
+      if(activeRoomId) simulateRoomDistributionSettlement(activeRoomId);
     });
     const pumpLaunchBtn = $("pumpLaunchBtn");
     if(pumpLaunchBtn) pumpLaunchBtn.addEventListener("click", () => {
