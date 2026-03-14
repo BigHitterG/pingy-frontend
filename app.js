@@ -182,10 +182,18 @@ const $ = (id) => document.getElementById(id);
       if(explicit) return explicit;
       const launchStatus = getRoomLaunchStatus(room);
       const tokensReceived = toSafeExternalTokenAmount(room?.external_tokens_received, 0);
-      const tokensDistributed = toSafeExternalTokenAmount(room?.external_tokens_distributed, 0);
+      const plannedTotal = toSafeExternalTokenAmount(
+        room?.external_distribution_total_tokens_planned,
+        getRoomPlannedDistributionTotal(room),
+      );
+      const tokensSent = toSafeExternalTokenAmount(
+        room?.external_distribution_total_tokens_sent,
+        toSafeExternalTokenAmount(room?.external_tokens_distributed, 0),
+      );
       if(launchStatus !== "live") return "pending";
-      if(tokensDistributed > 0 && tokensDistributed >= tokensReceived) return "distributed";
       if(tokensReceived <= 0) return "awaiting_token_receipt";
+      if(tokensSent > 0 && plannedTotal <= 0) return "distributed";
+      if(plannedTotal > 0 && tokensSent >= plannedTotal) return "distributed";
       return "ready";
     }
 
@@ -479,12 +487,75 @@ const $ = (id) => document.getElementById(id);
       return getRoomExternalDistributionSummary(room).label;
     }
 
+    function getRoomEligibleDistributionWallets(room){
+      if(!isPumpfunRoom(room)) return [];
+      const snapshot = getRoomEscrowSnapshot(room);
+      return (snapshot.approvedWallets || []).filter((wallet) => {
+        return Number(snapshot.byWallet?.[wallet]?.escrow_sol || 0) > 0;
+      });
+    }
+
+    function getRoomTotalDistributionWeight(room){
+      if(!isPumpfunRoom(room)) return 0;
+      const snapshot = getRoomEscrowSnapshot(room);
+      const wallets = getRoomEligibleDistributionWallets(room);
+      return Number(wallets.reduce((sum, wallet) => {
+        return sum + Number(snapshot.byWallet?.[wallet]?.escrow_sol || 0);
+      }, 0));
+    }
+
+    function getRoomPlannedDistributionRows(room){
+      if(!isPumpfunRoom(room)) return [];
+      const snapshot = getRoomEscrowSnapshot(room);
+      const wallets = getRoomEligibleDistributionWallets(room);
+      const totalWeight = Number(getRoomTotalDistributionWeight(room) || 0);
+      const tokenPool = toSafeExternalTokenAmount(room?.external_tokens_received, 0);
+      return wallets.map((wallet) => {
+        const committedSol = Number(snapshot.byWallet?.[wallet]?.escrow_sol || 0);
+        const weight = totalWeight > 0 ? (committedSol / totalWeight) : 0;
+        const plannedTokens = tokenPool > 0 ? (tokenPool * weight) : 0;
+        return {
+          wallet,
+          committed_sol: committedSol,
+          weight,
+          planned_tokens: plannedTokens,
+        };
+      });
+    }
+
+    function getRoomPlannedDistributionTotal(room){
+      return Number(getRoomPlannedDistributionRows(room).reduce((sum, row) => sum + Number(row.planned_tokens || 0), 0));
+    }
+
+    function getRoomPlannedDistributionRecipientCount(room){
+      return Number(getRoomPlannedDistributionRows(room).length || 0);
+    }
+
+    function snapshotRoomExternalDistributionPlan(room){
+      if(!room || typeof room !== "object") return room;
+      room.external_distribution_total_recipients = Number(getRoomPlannedDistributionRecipientCount(room) || 0);
+      room.external_distribution_total_tokens_planned = Number(getRoomPlannedDistributionTotal(room) || 0);
+      return room;
+    }
+
+    function buildRoomDistributionPreview(room){
+      const rows = getRoomPlannedDistributionRows(room);
+      return {
+        mode: String(room?.external_distribution_mode || "pro_rata"),
+        recipient_count: Number(rows.length || 0),
+        total_tokens_received: toSafeExternalTokenAmount(room?.external_tokens_received, 0),
+        total_tokens_planned: Number(rows.reduce((sum, row) => sum + Number(row.planned_tokens || 0), 0)),
+        rows,
+      };
+    }
+
     function snapshotRoomLaunchVaultAccounting(room){
       if(!room) return room;
       room.launch_vault_sol = Number(getRoomTotalCommittedSol(room) || 0);
       room.launch_fee_sol = Number(getRoomLaunchFeeEstimateSol(room) || 0);
       room.launch_vault_net_sol = Number(getRoomLaunchNetSol(room) || 0);
       room.launch_creator_buy_sol = Number(getRoomCreatorBuySol(room) || 0);
+      snapshotRoomExternalDistributionPlan(room);
       return room;
     }
 
@@ -581,6 +652,12 @@ const $ = (id) => document.getElementById(id);
       if(!isPumpfunRoom(room)) return false;
       const status = getRoomLaunchStatus(room);
       if(status !== "draft" && status !== "submitted") return false;
+      return isCreator(room, connectedWallet) || isApprover(room, connectedWallet) || isRoomAdminWallet(room, connectedWallet);
+    }
+
+    function canCurrentWalletSimulateDistribution(room){
+      if(!DEV_SIMULATION || !connectedWallet || !room) return false;
+      if(!isPumpfunRoom(room) || !isRoomLaunchLive(room)) return false;
       return isCreator(room, connectedWallet) || isApprover(room, connectedWallet) || isRoomAdminWallet(room, connectedWallet);
     }
 
@@ -843,6 +920,16 @@ const $ = (id) => document.getElementById(id);
         tokens_distributed: patch.tokens_distributed ?? room.external_tokens_distributed ?? 0,
         distribution_status: patch.distribution_status ?? room.external_distribution_status ?? resolveRoomExternalDistributionStatus(room),
       };
+      if(typeof patch.external_distribution_mode === "string" && patch.external_distribution_mode.trim()){
+        room.external_distribution_mode = patch.external_distribution_mode.trim();
+      }
+      if(typeof patch.external_distribution_notes === "string" && patch.external_distribution_notes.trim()){
+        room.external_distribution_notes = patch.external_distribution_notes;
+      }
+      if(patch.external_distribution_updated_at != null){
+        const nextUpdated = Number(patch.external_distribution_updated_at);
+        if(Number.isFinite(nextUpdated) && nextUpdated > 0) room.external_distribution_updated_at = nextUpdated;
+      }
       return applyExternalLaunchResult(roomId, merged);
     }
 
@@ -887,6 +974,27 @@ const $ = (id) => document.getElementById(id);
       return true;
     }
 
+    function simulateRoomDistributionComplete(roomId){
+      const room = roomById(roomId);
+      if(!room || !canCurrentWalletSimulateDistribution(room)){
+        showToast("Distribution simulation is limited to dev creator/approver/admin controls.");
+        return false;
+      }
+      snapshotRoomExternalDistributionPlan(room);
+      room.external_distribution_total_tokens_sent = toSafeExternalTokenAmount(
+        room.external_distribution_total_tokens_planned,
+        0,
+      );
+      room.external_tokens_distributed = room.external_distribution_total_tokens_sent;
+      room.external_distribution_updated_at = Date.now();
+      room.external_distribution_status = "distributed";
+      console.debug("[pingy] distribution preview", buildRoomDistributionPreview(room));
+      addSystemEvent(room.id, "Distribution marked complete (dev simulation).");
+      renderRoom(room.id);
+      renderHome();
+      return true;
+    }
+
     function openExternalLaunchForRoom(roomId){
       const room = roomById(roomId);
       if(!room) return;
@@ -913,6 +1021,18 @@ const $ = (id) => document.getElementById(id);
       room.launch_creator_buy_sol = toSafeNumber(room.launch_creator_buy_sol, 0);
       room.external_tokens_received = toSafeNumber(room.external_tokens_received, 0);
       room.external_tokens_distributed = toSafeNumber(room.external_tokens_distributed, 0);
+      room.external_distribution_mode = String(room.external_distribution_mode || "pro_rata").trim() || "pro_rata";
+      room.external_distribution_updated_at = Number.isFinite(Number(room.external_distribution_updated_at)) && Number(room.external_distribution_updated_at) > 0
+        ? Number(room.external_distribution_updated_at)
+        : null;
+      room.external_distribution_notes = typeof room.external_distribution_notes === "string" ? room.external_distribution_notes : "";
+      room.external_distribution_total_recipients = toSafeNumber(room.external_distribution_total_recipients, 0);
+      room.external_distribution_total_tokens_planned = toSafeNumber(room.external_distribution_total_tokens_planned, 0);
+      room.external_distribution_total_tokens_sent = toSafeNumber(
+        room.external_distribution_total_tokens_sent,
+        toSafeNumber(room.external_tokens_distributed, 0),
+      );
+      snapshotRoomExternalDistributionPlan(room);
       room.external_distribution_status = normalizeExternalDistributionStatus(room.external_distribution_status)
         || resolveRoomExternalDistributionStatus(room);
       if(isPumpfunLaunchBackend()){
@@ -988,7 +1108,12 @@ const $ = (id) => document.getElementById(id);
           normalizedResult.tokens_distributed,
           toSafeExternalTokenAmount(room.external_tokens_distributed, 0),
         );
+        room.external_distribution_total_tokens_sent = toSafeExternalTokenAmount(
+          normalizedResult.tokens_distributed,
+          toSafeExternalTokenAmount(room.external_distribution_total_tokens_sent, 0),
+        );
       }
+      snapshotRoomExternalDistributionPlan(room);
       room.external_distribution_status = normalizedResult.has_distribution_status
         ? normalizeExternalDistributionStatus(normalizedResult.distribution_status)
         : resolveRoomExternalDistributionStatus(room);
@@ -6568,6 +6693,25 @@ if(connectBtn){
         if(showExternalLaunchPanel) externalLaunchSummary.textContent = summary;
       }
 
+      const distributionPanel = $("distributionPanel");
+      const distributionSummary = $("distributionSummary");
+      if(distributionPanel && distributionSummary){
+        const showDistributionPanel = isPumpfunRoom(r) && getRoomLaunchStatus(r) !== "draft";
+        distributionPanel.style.display = showDistributionPanel ? "block" : "none";
+        if(showDistributionPanel){
+          snapshotRoomExternalDistributionPlan(r);
+          const lines = [
+            `Mode: ${String(r.external_distribution_mode || "pro_rata").replaceAll("_", " ")}`,
+            `Recipients: ${Number(r.external_distribution_total_recipients || 0).toLocaleString()}`,
+            `Tokens received: ${toSafeExternalTokenAmount(r.external_tokens_received, 0).toLocaleString()}`,
+            `Tokens planned: ${toSafeExternalTokenAmount(r.external_distribution_total_tokens_planned, 0).toLocaleString()}`,
+            `Tokens sent: ${toSafeExternalTokenAmount(r.external_distribution_total_tokens_sent, 0).toLocaleString()}`,
+            `Status: ${getRoomExternalDistributionStatusLabel(r)}`,
+          ];
+          distributionSummary.innerHTML = lines.map((line) => `<div>${escapeText(line)}</div>`).join("");
+        }
+      }
+
       const openPumpfunBtn = $("openPumpfunBtn");
       if(openPumpfunBtn){
         const hasExternalUrl = getRoomExternalLaunchUrl(r).trim().length > 0;
@@ -6581,6 +6725,13 @@ if(connectBtn){
         const showMarkLive = DEV_SIMULATION && isPumpfunRoom(r) && (status === "draft" || status === "submitted") && canMarkLive;
         markLiveDevBtn.style.display = showMarkLive ? "inline-block" : "none";
         markLiveDevBtn.disabled = !canMarkLive;
+      }
+      const simulateDistributionDevBtn = $("simulateDistributionDevBtn");
+      if(simulateDistributionDevBtn){
+        const showSimulate = DEV_SIMULATION && isPumpfunRoom(r) && isRoomLaunchLive(r);
+        const canSimulate = canCurrentWalletSimulateDistribution(r);
+        simulateDistributionDevBtn.style.display = showSimulate ? "inline-block" : "none";
+        simulateDistributionDevBtn.disabled = !canSimulate;
       }
       const pumpLaunchBtn = $("pumpLaunchBtn");
       if(pumpLaunchBtn){
@@ -7070,6 +7221,10 @@ if(connectBtn){
         tokensDistributed: 0,
         distributionStatus: "ready",
       });
+    });
+    const simulateDistributionDevBtn = $("simulateDistributionDevBtn");
+    if(simulateDistributionDevBtn) simulateDistributionDevBtn.addEventListener("click", () => {
+      if(activeRoomId) simulateRoomDistributionComplete(activeRoomId);
     });
     const pumpLaunchBtn = $("pumpLaunchBtn");
     if(pumpLaunchBtn) pumpLaunchBtn.addEventListener("click", () => {
