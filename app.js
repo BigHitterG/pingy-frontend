@@ -504,8 +504,72 @@ const $ = (id) => document.getElementById(id);
       }, 0));
     }
 
+    function hasFrozenDistributionSnapshot(room){
+      if(!room || typeof room !== "object") return false;
+      if(!Array.isArray(room.distribution_snapshot_rows) || room.distribution_snapshot_rows.length <= 0) return false;
+      const lockedAt = Number(room.distribution_snapshot_locked_at);
+      return Number.isFinite(lockedAt) && lockedAt > 0;
+    }
+
+    function buildRoomDistributionSnapshot(room){
+      if(!isPumpfunRoom(room)){
+        return {
+          locked_at: Date.now(),
+          source_status: getRoomLaunchStatus(room),
+          total_weight: 0,
+          total_recipients: 0,
+          rows: [],
+        };
+      }
+      const snapshot = getRoomEscrowSnapshot(room);
+      const wallets = (snapshot.approvedWallets || []).filter((wallet) => {
+        return Number(snapshot.byWallet?.[wallet]?.escrow_sol || 0) > 0;
+      });
+      const totalWeight = Number(wallets.reduce((sum, wallet) => {
+        return sum + Number(snapshot.byWallet?.[wallet]?.escrow_sol || 0);
+      }, 0));
+      const tokenPool = toSafeExternalTokenAmount(room?.external_tokens_received, 0);
+      const rows = wallets.map((wallet) => {
+        const committedSol = Number(snapshot.byWallet?.[wallet]?.escrow_sol || 0);
+        const weight = totalWeight > 0 ? (committedSol / totalWeight) : 0;
+        const plannedTokens = tokenPool > 0 ? (tokenPool * weight) : 0;
+        return {
+          wallet,
+          committed_sol: committedSol,
+          weight,
+          planned_tokens: plannedTokens,
+        };
+      });
+      return {
+        locked_at: Date.now(),
+        source_status: getRoomLaunchStatus(room),
+        total_weight: totalWeight,
+        total_recipients: Number(rows.length || 0),
+        rows,
+      };
+    }
+
+    function freezeRoomDistributionSnapshot(room){
+      if(!room || typeof room !== "object") return room;
+      const snapshot = buildRoomDistributionSnapshot(room);
+      room.distribution_snapshot_locked_at = Number(snapshot.locked_at || Date.now());
+      room.distribution_snapshot_source_status = String(snapshot.source_status || "");
+      room.distribution_snapshot_total_weight = Number(snapshot.total_weight || 0);
+      room.distribution_snapshot_total_recipients = Number(snapshot.total_recipients || 0);
+      room.distribution_snapshot_rows = Array.isArray(snapshot.rows)
+        ? snapshot.rows.map((row) => ({
+          wallet: row.wallet,
+          committed_sol: Number(row.committed_sol || 0),
+          weight: Number(row.weight || 0),
+          planned_tokens: Number(row.planned_tokens || 0),
+        }))
+        : [];
+      return room;
+    }
+
     function getRoomPlannedDistributionRows(room){
       if(!isPumpfunRoom(room)) return [];
+      if(hasFrozenDistributionSnapshot(room)) return room.distribution_snapshot_rows;
       const snapshot = getRoomEscrowSnapshot(room);
       const wallets = getRoomEligibleDistributionWallets(room);
       const totalWeight = Number(getRoomTotalDistributionWeight(room) || 0);
@@ -963,6 +1027,10 @@ const $ = (id) => document.getElementById(id);
       if(typeof distributionStatus === "string" && distributionStatus.trim()) patch.distribution_status = distributionStatus;
 
       const applied = applyExternalLaunchStatusPatch(roomId, patch);
+      if(applied && isPumpfunRoom(applied) && isRoomLaunchLive(applied) && !hasFrozenDistributionSnapshot(applied)){
+        freezeRoomDistributionSnapshot(applied);
+        snapshotRoomExternalDistributionPlan(applied);
+      }
       if(!applied){
         showToast("Failed to mark launch live.");
         return false;
@@ -981,6 +1049,10 @@ const $ = (id) => document.getElementById(id);
         return false;
       }
       snapshotRoomExternalDistributionPlan(room);
+      if(isPumpfunRoom(room) && isRoomLaunchLive(room) && !hasFrozenDistributionSnapshot(room)){
+        freezeRoomDistributionSnapshot(room);
+        snapshotRoomExternalDistributionPlan(room);
+      }
       room.external_distribution_total_tokens_sent = toSafeExternalTokenAmount(
         room.external_distribution_total_tokens_planned,
         0,
@@ -1032,6 +1104,22 @@ const $ = (id) => document.getElementById(id);
         room.external_distribution_total_tokens_sent,
         toSafeNumber(room.external_tokens_distributed, 0),
       );
+      room.distribution_snapshot_locked_at = Number.isFinite(Number(room.distribution_snapshot_locked_at)) && Number(room.distribution_snapshot_locked_at) > 0
+        ? Number(room.distribution_snapshot_locked_at)
+        : null;
+      room.distribution_snapshot_source_status = typeof room.distribution_snapshot_source_status === "string"
+        ? room.distribution_snapshot_source_status
+        : "";
+      room.distribution_snapshot_total_weight = toSafeNumber(room.distribution_snapshot_total_weight, 0);
+      room.distribution_snapshot_total_recipients = toSafeNumber(room.distribution_snapshot_total_recipients, 0);
+      room.distribution_snapshot_rows = Array.isArray(room.distribution_snapshot_rows)
+        ? room.distribution_snapshot_rows.map((row) => ({
+          wallet: typeof row?.wallet === "string" ? row.wallet : "",
+          committed_sol: toSafeNumber(row?.committed_sol, 0),
+          weight: toSafeNumber(row?.weight, 0),
+          planned_tokens: toSafeNumber(row?.planned_tokens, 0),
+        })).filter((row) => row.wallet)
+        : [];
       snapshotRoomExternalDistributionPlan(room);
       room.external_distribution_status = normalizeExternalDistributionStatus(room.external_distribution_status)
         || resolveRoomExternalDistributionStatus(room);
@@ -1117,6 +1205,10 @@ const $ = (id) => document.getElementById(id);
       room.external_distribution_status = normalizedResult.has_distribution_status
         ? normalizeExternalDistributionStatus(normalizedResult.distribution_status)
         : resolveRoomExternalDistributionStatus(room);
+      if(isPumpfunRoom(room) && normalizePumpfunLaunchStatus(normalizedResult.status || room.launch_status) === "live" && !hasFrozenDistributionSnapshot(room)){
+        freezeRoomDistributionSnapshot(room);
+        snapshotRoomExternalDistributionPlan(room);
+      }
 
       mirrorExternalLaunchLegacyFields(room, externalLaunch);
       console.log("[pingy] applied external launch result", {
@@ -6678,6 +6770,12 @@ if(connectBtn){
         if(externalMint) lines.push(`<div>External mint: ${escapeText(externalMint)}</div>`);
         if(isPumpfunRoom(r)){
           lines.push(`<div>Distribution: ${escapeText(getRoomExternalDistributionStatusLabel(r))}</div>`);
+          if(hasFrozenDistributionSnapshot(r)){
+            lines.push(`<div>Distribution snapshot: frozen</div>`);
+            lines.push(`<div>Snapshot recipients: ${Number(r.distribution_snapshot_total_recipients || getRoomPlannedDistributionRecipientCount(r) || 0).toLocaleString()}</div>`);
+            const lockedLabel = formatLaunchTimestamp(r.distribution_snapshot_locked_at);
+            if(lockedLabel) lines.push(`<div>Snapshot locked: ${escapeText(lockedLabel)}</div>`);
+          }
           const vaultNetSol = Number(r.launch_vault_net_sol || 0);
           if(vaultNetSol > 0) lines.push(`<div>Launch vault net: ${vaultNetSol.toFixed(3)} SOL</div>`);
         }
@@ -6707,7 +6805,12 @@ if(connectBtn){
             `Tokens planned: ${toSafeExternalTokenAmount(r.external_distribution_total_tokens_planned, 0).toLocaleString()}`,
             `Tokens sent: ${toSafeExternalTokenAmount(r.external_distribution_total_tokens_sent, 0).toLocaleString()}`,
             `Status: ${getRoomExternalDistributionStatusLabel(r)}`,
+            `Snapshot: ${hasFrozenDistributionSnapshot(r) ? "frozen" : "live preview"}`,
           ];
+          if(hasFrozenDistributionSnapshot(r)){
+            const lockedLabel = formatLaunchTimestamp(r.distribution_snapshot_locked_at);
+            if(lockedLabel) lines.push(`Locked: ${lockedLabel}`);
+          }
           distributionSummary.innerHTML = lines.map((line) => `<div>${escapeText(line)}</div>`).join("");
         }
       }
