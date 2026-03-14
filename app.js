@@ -82,6 +82,14 @@ const $ = (id) => document.getElementById(id);
     const SPAWN_FEE_BPS = 100;
     const POST_SPAWN_TRADING_FEE_BPS = 100;
     const BPS_DENOM = 10_000;
+    const PINGY_LAUNCH_BACKEND = "pumpfun";
+
+    function isPumpfunLaunchBackend(){
+      return PINGY_LAUNCH_BACKEND === "pumpfun";
+    }
+    function isNativeLaunchBackend(){
+      return PINGY_LAUNCH_BACKEND === "native";
+    }
 
     const DEV_SIMULATION = !!(window?.location?.hostname === "localhost" || window?.location?.hostname === "127.0.0.1" || window?.location?.hostname === "0.0.0.0" || window?.location?.hostname?.endsWith?.(".local") || window?.location?.search?.includes("devsim=1"));
     const DEBUG_WALLET_SMOKE_BEFORE_SPAWN_TX = false;
@@ -1774,6 +1782,7 @@ function encodeU64Arg(v){
       const walletPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
       const [threadPda] = await deriveThreadPda(rid);
       const [spawnPoolPda] = await deriveSpawnPoolPda(rid);
+      // Native Pingy curve path retained for future reactivation. Inactive in Pump.fun mode.
       const [curvePda] = await deriveCurvePda(rid);
       const [curveAuthorityPda] = await deriveCurveAuthorityPda(rid);
       const [mintPda] = await deriveMintPda(rid);
@@ -1847,6 +1856,7 @@ function encodeU64Arg(v){
       const walletPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
       const [threadPda] = await deriveThreadPda(rid);
       const [spawnPoolPda] = await deriveSpawnPoolPda(rid);
+      // Native Pingy curve path retained for future reactivation. Inactive in Pump.fun mode.
       const [curvePda] = await deriveCurvePda(rid);
       const [curveAuthorityPda] = await deriveCurveAuthorityPda(rid);
       const [mintPda] = await deriveMintPda(rid);
@@ -2095,6 +2105,7 @@ function encodeU64Arg(v){
       return sendProgramInstruction(new TransactionInstruction({ programId: PROGRAM_ID, keys, data }));
     }
 
+    // Native Pingy curve path retained for future reactivation. Inactive in Pump.fun mode.
     async function claimSpawnTokensTx(roomId){
       const rid = String(roomId || "");
       const userPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
@@ -2124,6 +2135,7 @@ function encodeU64Arg(v){
       return sendProgramInstruction(new TransactionInstruction({ programId: PROGRAM_ID, keys, data }));
     }
 
+    // Native Pingy curve path retained for future reactivation. Inactive in Pump.fun mode.
     async function buyTx(roomId, amountLamports){
       const rid = String(roomId || "");
       const lamports = Number(amountLamports);
@@ -2163,6 +2175,7 @@ function encodeU64Arg(v){
       return sendProgramInstruction(new TransactionInstruction({ programId: PROGRAM_ID, keys, data }));
     }
 
+    // Native Pingy curve path retained for future reactivation. Inactive in Pump.fun mode.
     async function sellTx(roomId, tokenAmount){
       const rid = String(roomId || "");
       const tokens = Number(tokenAmount);
@@ -2201,6 +2214,7 @@ function encodeU64Arg(v){
       return sendProgramInstruction(new TransactionInstruction({ programId: PROGRAM_ID, keys, data }));
     }
 
+    // Native Pingy curve path retained for future reactivation. Inactive in Pump.fun mode.
     async function maybeExecuteSpawnOnchain(room){
       if(!room || !shouldUseOnchain()) return false;
       if(room._spawnExecInFlight) return false;
@@ -2376,6 +2390,7 @@ function encodeU64Arg(v){
       };
     }
 
+    // Native Pingy curve path retained for future reactivation. Inactive in Pump.fun mode.
     function decodeCurveAccount(data){
       const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
       if(!bytes?.length || bytes.length < 8) return null;
@@ -3566,16 +3581,19 @@ if(connectBtn){
       const MC = Number(r?.market_cap_usd || 0);
       return clamp01((MC - MC_SPAWN_FLOOR) / (GRADUATION_MARKET_CAP - MC_SPAWN_FLOOR));
     }
+    // Native Pingy curve path retained for future reactivation. Inactive in Pump.fun mode.
     function graduationTargetSol(r){
       const targetLamports = Number(r?.onchain?.graduation_target_lamports || r?.graduation_target_lamports || 0);
       if(targetLamports > 0) return targetLamports / LAMPORTS_PER_SOL;
       return 78;
     }
+    // Native Pingy curve path retained for future reactivation. Inactive in Pump.fun mode.
     function currentBondingReserveSol(r){
       const reserveLamports = Number(r?.onchain?.real_sol_reserve || r?.real_sol_reserve || 0);
       if(reserveLamports > 0) return reserveLamports / LAMPORTS_PER_SOL;
       return legacyBondingProgress01(r) * graduationTargetSol(r);
     }
+    // Native Pingy curve path retained for future reactivation. Inactive in Pump.fun mode.
     function bondingProgress01(r){
       if(r?.state === "BONDED") return 1;
       const target = graduationTargetSol(r);
@@ -4726,7 +4744,7 @@ if(connectBtn){
         }
       }
       state.rooms.unshift(r);
-      state.chat[id] = [{ ts:"—", wallet:"SYSTEM", text: launchMode === "instant" ? "coin created. live on bonding curve." : "coin created. waiting for spawn." }];
+      state.chat[id] = [{ ts:"—", wallet:"SYSTEM", text: launchMode === "instant" ? "coin created. launched coins will trade externally." : "coin created. waiting for spawn." }];
 
       $("newName").value = "";
       $("newTicker").value = "";
@@ -5783,11 +5801,9 @@ if(connectBtn){
           `;
         }
       } else if(r.state === "BONDING"){
-        phaseLabel.textContent = "MARKET • live on bonding curve";
+        phaseLabel.textContent = "MARKET • external routing";
         statePill.textContent = visiblePhaseLabel;
         const bondProgress = bondingProgress01(r);
-        const reserveSol = currentBondingReserveSol(r);
-        const targetSol = graduationTargetSol(r);
         const hotBonding = bondProgress >= 0.9;
         phaseBar.style.width = Math.round(bondProgress*100) + "%";
         phaseBar.style.background = hotBonding ? "#46d36f" : "#84d4ff";
@@ -5802,9 +5818,9 @@ if(connectBtn){
           if(!hotBonding && sparkEl) sparkEl.remove();
         }
         const progressLine = $("spawnProgressLine");
-        if(progressLine) progressLine.textContent = `Bonding progress: ${reserveSol.toFixed(3)} / ${targetSol.toFixed(3)} SOL • trading fee: ${POST_SPAWN_TRADING_FEE_BPS / 100}% applied to bonding buys/sells`;
+        if(progressLine) progressLine.textContent = `External market routing will be used after spawn.`;
       } else {
-        phaseLabel.textContent = "BONDED • graduated from bonding";
+        phaseLabel.textContent = "BONDED • spawn complete";
         statePill.textContent = "BONDED";
         phaseBar.style.width = "100%";
         phaseBar.style.background = "#46d36f";
@@ -5815,9 +5831,7 @@ if(connectBtn){
         }
         const progressLine = $("spawnProgressLine");
         if(progressLine){
-          const reserveSol = currentBondingReserveSol(r);
-          const targetSol = graduationTargetSol(r);
-          progressLine.textContent = `Bonding target reached: ${reserveSol.toFixed(3)} / ${targetSol.toFixed(3)} SOL • post-graduation routing is the next phase`;
+          progressLine.textContent = `External market routing will be used after spawn.`;
         }
       }
 
@@ -5834,12 +5848,12 @@ if(connectBtn){
       if(spawnClosed){
         if(spawnSuccessTitle){
           spawnSuccessTitle.textContent = r.state === "BONDED"
-            ? "This coin has graduated from bonding."
-            : "Spawn successful. Token is now live.";
+            ? "This launch has completed its Pingy spawn phase."
+            : "External market routing will be used after spawn.";
         }
         if(spawnSuccessText){
           if(r.state === "BONDED"){
-            spawnSuccessText.textContent = "Bonding completed successfully. Post-graduation trading and routing are the next implementation step.";
+            spawnSuccessText.textContent = "Trading for launched coins is handled outside Pingy.";
           } else {
             spawnSuccessText.textContent = claimState.hasClaimable
               ? `You have ${Math.round(claimState.claimableTokens).toLocaleString()} spawn tokens ready to claim.`
@@ -5881,7 +5895,7 @@ if(connectBtn){
       const bondedStatusPanel = $("bondedStatusPanel");
       const bondedStatusLine = $("bondedStatusLine");
       if(bondedStatusPanel) bondedStatusPanel.style.display = r.state === "BONDED" ? "block" : "none";
-      if(bondedStatusLine && r.state === "BONDED") bondedStatusLine.textContent = "This coin has graduated from bonding. Post-graduation trading/routing is the next implementation step.";
+      if(bondedStatusLine && r.state === "BONDED") bondedStatusLine.textContent = "Trading for launched coins is handled outside Pingy.";
 
       setComposerState(r);
       renderChat(roomId);
@@ -5920,8 +5934,8 @@ if(connectBtn){
       const unpingConfirm = $("unpingConfirm");
       const unpingAmount = $("unpingAmount");
 
-      if(pingModalTitle) pingModalTitle.textContent = isBonded ? "graduated" : (isSpawning ? "ping" : "buy");
-      if(unpingModalTitle) unpingModalTitle.textContent = isBonded ? "graduated" : (isSpawning ? "unping" : "sell");
+      if(pingModalTitle) pingModalTitle.textContent = isBonded ? "launched" : (isSpawning ? "ping" : "buy");
+      if(unpingModalTitle) unpingModalTitle.textContent = isBonded ? "launched" : (isSpawning ? "unping" : "sell");
       if(pingAmountUnit) pingAmountUnit.textContent = "SOL";
       if(unpingAmountUnit) unpingAmountUnit.textContent = isSpawning ? "SOL" : "tokens";
 
@@ -5929,16 +5943,16 @@ if(connectBtn){
         pingModalHelp.textContent = isSpawning
           ? "During spawn, your ping funds escrow allocation. First ping may include small Solana network/storage costs and you can unping to withdraw before spawn completes."
           : isBonded
-            ? "This coin has graduated from bonding. Post-graduation trading will be connected in the next phase."
-            : "During bonding, buys route through the bonding curve and apply the trading fee shown in room stats.";
+            ? "Trading for launched coins is handled outside Pingy."
+            : "Trading for launched coins is handled outside Pingy.";
       }
 
       if(unpingModalHelp){
         unpingModalHelp.textContent = isSpawning
           ? "During spawn, unping performs a full escrow withdraw and returns funds to your wallet (minus network fees)."
           : isBonded
-            ? "This coin has graduated from bonding. Post-graduation sell routing will be connected in the next phase."
-            : "During bonding, sell an amount of tokens into the bonding curve; trading fees apply to each sell.";
+            ? "Trading for launched coins is handled outside Pingy."
+            : "Trading for launched coins is handled outside Pingy.";
       }
 
       if(isSpawning){
@@ -5959,10 +5973,10 @@ if(connectBtn){
           unpingAmount.value = "graduated";
           unpingAmount.readOnly = true;
         }
-        if(unpingConfirm) unpingConfirm.textContent = "post-graduation routing next";
+        if(unpingConfirm) unpingConfirm.textContent = "external routing";
       }
 
-      if(pingConfirm) pingConfirm.textContent = isBonded ? "post-graduation routing next" : (isSpawning ? "ping" : "buy");
+      if(pingConfirm) pingConfirm.textContent = isBonded ? "external routing" : (isSpawning ? "ping" : "buy");
     }
 
     function updatePingAllocationHint(roomId){
@@ -5978,8 +5992,8 @@ if(connectBtn){
       if(r.state !== "SPAWNING"){
         state.maxPingLamports = 0;
         hint.textContent = r.state === "BONDED"
-          ? "This coin has graduated from bonding. Post-graduation trading will be wired next."
-          : "For bonding buys, enter SOL to buy tokens from the curve.";
+          ? "Trading for launched coins is handled outside Pingy."
+          : "Trading for launched coins is handled outside Pingy.";
         if(pingConfirm) pingConfirm.disabled = r.state === "BONDED";
         return;
       }
@@ -5998,7 +6012,7 @@ if(connectBtn){
       if(!r) return;
       r.onchain = state.onchain?.[rid] || r.onchain || {};
       if(r.state === "BONDED"){
-        return alert("This coin has graduated from bonding. Post-graduation buy routing will be connected in the next phase.");
+        return alert("Trading for launched coins is handled outside Pingy.");
       }
       modalRoomId = rid;
       updateActionModalCopy(r);
@@ -6014,7 +6028,7 @@ if(connectBtn){
       const r = roomById(rid);
       if(!r) return;
       r.onchain = state.onchain?.[rid] || r.onchain || {};
-      if(r.state === "BONDED") return alert("This coin has graduated from bonding. Post-graduation sell routing will be connected in the next phase.");
+      if(r.state === "BONDED") return alert("Trading for launched coins is handled outside Pingy.");
       modalRoomId = rid;
       updateActionModalCopy(r);
       $("unpingRoomLine").textContent = `coin: ${r.name}  $${r.ticker}`;
@@ -6264,7 +6278,7 @@ if(connectBtn){
           state.chat[r.id].push({ ts: nowStamp(), wallet: connectedWallet, text:`sold ${sellTokens.toFixed(3)} tokens for ${sellFee.grossSol.toFixed(3)} SOL gross (${sellFee.feeSol.toFixed(3)} fee, ${sellFee.netSol.toFixed(3)} net received).`, kind: "activity" });
         }
       } else {
-        return alert("This coin has graduated from bonding. Post-graduation sell routing is part of the next phase.");
+        return alert("Trading for launched coins is handled outside Pingy.");
       }
 
       closeModal($("unpingBack"));
