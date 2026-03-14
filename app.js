@@ -2993,7 +2993,7 @@ function encodeU64Arg(v){
           escrow_sol: escrowSol,
         };
         state.onchain[roomId] = snapshot;
-        meLine.textContent = `you: ${escrowSol.toFixed(3)} SOL escrow`;
+        meLine.textContent = `you: ${escrowSol.toFixed(3)} SOL ${isNativeLaunchBackend() ? "escrow" : "committed"}`;
       } catch(err){
         console.warn("[pingy] failed to refresh connected wallet deposit", err);
       }
@@ -4432,7 +4432,7 @@ if(connectBtn){
       if(isCreator(room, wallet)) return "creator";
       if(isApprover(room, wallet)) return "approver";
       const escrowSol = getWalletEscrowInRoom(room, wallet);
-      if(escrowSol > 0) return `your escrow: ${escrowSol.toFixed(3)} SOL`;
+      if(escrowSol > 0) return isNativeLaunchBackend() ? `your escrow: ${escrowSol.toFixed(3)} SOL` : `your committed SOL: ${escrowSol.toFixed(3)} SOL`;
       const tokenBal = Number((room.positions?.[wallet]?.token_balance) || 0);
       if(tokenBal > 0) return "you hold this coin";
       return "participant";
@@ -4945,14 +4945,14 @@ if(connectBtn){
 
         const escrowsHeader = document.createElement("div");
         escrowsHeader.className = "muted tiny";
-        escrowsHeader.textContent = "Pingy escrows";
+        escrowsHeader.textContent = isNativeLaunchBackend() ? "Pingy escrows" : "Pingy launch vaults";
         sections.appendChild(escrowsHeader);
 
         const deposits = Object.values(snapshot.depositsByThread || {});
         if(!deposits.length){
           const none = document.createElement("div");
           none.className = "muted tiny";
-          none.textContent = "no escrow positions";
+          none.textContent = isNativeLaunchBackend() ? "no escrow positions" : "no launch contributions";
           sections.appendChild(none);
         } else {
           deposits.forEach((deposit) => {
@@ -4960,7 +4960,8 @@ if(connectBtn){
             const row = document.createElement("div");
             row.className = "btn subtle profileTabRow";
             const left = document.createElement("span");
-            left.innerHTML = `${escapeText(room ? `${room.name} $${room.ticker}` : deposit.threadId)} <span class="muted tiny">${escapeText(profileBalanceStatusLabel(deposit.status))} • ${Number(deposit.withdrawable_sol || 0).toFixed(4)} SOL</span>`;
+            const contributionLabel = isNativeLaunchBackend() ? profileBalanceStatusLabel(deposit.status) : `launch contribution • ${profileBalanceStatusLabel(deposit.status)}`;
+            left.innerHTML = `${escapeText(room ? `${room.name} $${room.ticker}` : deposit.threadId)} <span class="muted tiny">${escapeText(contributionLabel)} • ${Number(deposit.withdrawable_sol || 0).toFixed(4)} SOL</span>`;
             const right = document.createElement("span");
             right.style.display = "inline-flex";
             right.style.gap = "6px";
@@ -4992,14 +4993,14 @@ if(connectBtn){
 
         const spawnHeader = document.createElement("div");
         spawnHeader.className = "muted tiny";
-        spawnHeader.textContent = "Spawn allocations";
+        spawnHeader.textContent = isNativeLaunchBackend() ? "Spawn allocations" : "Launch allocations";
         sections.appendChild(spawnHeader);
 
         const spawnAllocations = getWalletSpawnAllocations(wallet, snapshot);
         if(!spawnAllocations.length){
           const none = document.createElement("div");
           none.className = "muted tiny";
-          none.textContent = "no spawn allocations";
+          none.textContent = isNativeLaunchBackend() ? "no spawn allocations" : "no launch allocations";
           sections.appendChild(none);
         } else {
           spawnAllocations.forEach((allocationRow) => {
@@ -5373,7 +5374,7 @@ if(connectBtn){
         if(!t) return false;
         if(/^bought .* tokens for .* SOL gross/i.test(t)) return true;
         if(/^sold .* tokens for .* SOL gross/i.test(t)) return true;
-        if(/^withdrew .* SOL \(full escrow withdrawal, returned to wallet\)\.?$/i.test(t)) return true;
+        if(/^withdrew .* SOL \(full (escrow|launch contribution) withdrawal, returned to wallet\)\.?$/i.test(t)) return true;
         return false;
       };
       const isMainChatMessage = (m) => {
@@ -5469,7 +5470,7 @@ if(connectBtn){
       const enabled = !!connectedWallet && !denied;
       $("msgInput").disabled = !enabled;
       $("sendBtn").disabled = !enabled;
-      $("msgInput").placeholder = denied ? "Denied from this spawn. Your SOL remains in escrow until you unping." : (enabled ? "message" : "connect wallet");
+      $("msgInput").placeholder = denied ? (isNativeLaunchBackend() ? "Denied from this spawn. Your SOL remains in escrow until you unping." : "Denied from this spawn. Your committed SOL stays in the launch vault until you unping.") : (enabled ? "message" : "connect wallet");
     }
 
 
@@ -5503,7 +5504,7 @@ if(connectBtn){
       r.blockedWallets[wallet] = true;
       r.approval = r.approval || {};
       r.approval[wallet] = "denied";
-      addSystemEvent(roomId, `@${shortWallet(wallet)} denied from pending. Denied from this spawn. Your SOL remains in escrow until you unping.`);
+      addSystemEvent(roomId, `@${shortWallet(wallet)} denied from pending. ${isNativeLaunchBackend() ? "Denied from this spawn. Your SOL remains in escrow until you unping." : "Denied from this spawn. Your committed SOL stays in the launch vault until you unping."}`);
       await refreshConnectedWalletEscrowLine(roomId);
       renderRoom(roomId);
       renderHome();
@@ -5629,6 +5630,7 @@ if(connectBtn){
           : null;
         const creatorCommit = Number(creatorCommitSol(r));
         const creatorCommitLine = creatorCommit > 0 ? `${creatorCommit.toFixed(3)} SOL` : "—";
+        const creatorLabel = isNativeLaunchBackend() ? "Creator commit" : "Creator buy";
         const approverCount = Number((approvers || []).length || 0);
 
         const lines = [];
@@ -5642,9 +5644,10 @@ if(connectBtn){
         } else {
           lines.push(`<div>Max wallet share: —</div>`);
         }
-        lines.push(`<div>Creator commit: ${creatorCommitLine}</div>`);
+        lines.push(`<div>${creatorLabel}: ${creatorCommitLine}</div>`);
         lines.push(`<div>Approver count: ${approverCount > 0 ? approverCount : "—"}</div>`);
         lines.push(`<div>Launch type: ${launchTypeLabel}</div>`);
+        lines.push(`<div>Launch backend: ${isPumpfunLaunchBackend() ? "Pump.fun" : "Native"}</div>`);
         launchTrustLines.innerHTML = lines.join("");
       }
 
@@ -5833,10 +5836,11 @@ if(connectBtn){
           const capPct = (capBps / 100).toFixed(1);
           const creatorCommit = creatorCommitSol(r);
           const creatorLine = creatorCommit > 0
-            ? `<div>Creator commit: ${creatorCommit.toFixed(3)} SOL</div>`
+            ? `<div>${isNativeLaunchBackend() ? "Creator commit" : "Creator buy"}: ${creatorCommit.toFixed(3)} SOL</div>`
             : "";
+          const committedLabel = isNativeLaunchBackend() ? "Allocated SOL" : "Committed SOL";
           progressLine.innerHTML = `
-            <div>Allocated SOL: ${allocated.toFixed(3)} / ${target.toFixed(3)} SOL</div>
+            <div>${committedLabel}: ${allocated.toFixed(3)} / ${target.toFixed(3)} SOL</div>
             <div>Approved wallets: ${approvedCount} / ${minApproved}</div>
             <div>Max per wallet: ${walletCapSol(r).toFixed(3)} SOL or ${capPct}%</div>
             ${creatorLine}
@@ -5924,8 +5928,8 @@ if(connectBtn){
 
       const me =
         (r.state === "SPAWNING")
-          ? `you: ${myEscrow(roomId).toFixed(3)} SOL escrow`
-           : `you: ${myBond(roomId).toFixed(3)} tokens on curve`;
+          ? `you: ${myEscrow(roomId).toFixed(3)} SOL ${isNativeLaunchBackend() ? "escrow" : "committed"}`
+           : (isNativeLaunchBackend() ? `you: ${myBond(roomId).toFixed(3)} tokens on curve` : "you: launch tracked on Pingy");
       $("meLine").textContent = connectedWallet ? me : "connect wallet";
       if(connectedWallet && r.state === "SPAWNING") refreshConnectedWalletEscrowLine(roomId);
 
@@ -5991,7 +5995,9 @@ if(connectBtn){
 
       if(pingModalHelp){
         pingModalHelp.textContent = isSpawning
-          ? "During spawn, your ping funds escrow allocation. First ping may include small Solana network/storage costs and you can unping to withdraw before spawn completes."
+          ? (isNativeLaunchBackend()
+            ? "During spawn, your ping funds escrow allocation. First ping may include small Solana network/storage costs and you can unping to withdraw before spawn completes."
+            : "Your ping contributes SOL to this launch room vault. First ping may include small Solana network/storage costs.")
           : isPumpPostSpawn
             ? "Launched coins trade outside Pingy. Pingy remains the coordination and watch layer."
             : isBonded
@@ -6001,7 +6007,9 @@ if(connectBtn){
 
       if(unpingModalHelp){
         unpingModalHelp.textContent = isSpawning
-          ? "During spawn, unping performs a full escrow withdraw and returns funds to your wallet (minus network fees)."
+          ? (isNativeLaunchBackend()
+            ? "During spawn, unping performs a full escrow withdraw and returns funds to your wallet (minus network fees)."
+            : "Before spawn completes, you can unping to withdraw your launch contribution (minus network fees).")
           : isPumpPostSpawn
             ? "Launched coins trade outside Pingy. Pingy remains the coordination and watch layer."
             : isBonded
@@ -6014,7 +6022,7 @@ if(connectBtn){
           unpingAmount.value = "full withdraw";
           unpingAmount.readOnly = true;
         }
-        if(unpingConfirm) unpingConfirm.textContent = "unping (full withdraw)";
+        if(unpingConfirm) unpingConfirm.textContent = isNativeLaunchBackend() ? "unping (full withdraw)" : "unping (withdraw contribution)";
       } else if(isBonding && !isPumpPostSpawn){
         if(unpingAmount){
           unpingAmount.value = "";
@@ -6055,7 +6063,9 @@ if(connectBtn){
       const maxLamports = computeMaxPingLamports(r, userDeposit);
       state.maxPingLamports = maxLamports;
       const maxSol = maxLamports / LAMPORTS_PER_SOL;
-      hint.textContent = maxLamports > 0 ? `Max escrow allocation: ${maxSol.toFixed(3)} SOL` : "Spawn is full or you're at cap.";
+      hint.textContent = maxLamports > 0
+        ? `${isNativeLaunchBackend() ? "Max escrow allocation" : "Max launch contribution"}: ${maxSol.toFixed(3)} SOL`
+        : "Spawn is full or you're at cap.";
       if(pingConfirm) pingConfirm.disabled = maxLamports <= 0;
     }
 
@@ -6133,7 +6143,7 @@ if(connectBtn){
       if(!s || Number.isNaN(solAmount) || solAmount <= 0) return alert("enter a valid SOL amount.");
 
       if(r.state === "SPAWNING"){
-        if(r.blockedWallets && r.blockedWallets[connectedWallet]) return alert("Denied from this spawn. Your SOL remains in escrow until you unping.");
+        if(r.blockedWallets && r.blockedWallets[connectedWallet]) return alert(isNativeLaunchBackend() ? "Denied from this spawn. Your SOL remains in escrow until you unping." : "Denied from this spawn. Your committed SOL stays in the launch vault until you unping.");
         if(!isCreator(r, connectedWallet)){
           r.approval = r.approval || {};
           if(!r.approval[connectedWallet]) r.approval[connectedWallet] = "pending";
@@ -6274,7 +6284,7 @@ if(connectBtn){
       if(r.state === "SPAWNING"){
         const curLamports = await fetchConnectedWalletDepositLamports(rid);
         const cur = Number(curLamports || 0) / LAMPORTS_PER_SOL;
-        if(cur <= 0) return alert("you have no escrow to withdraw.");
+        if(cur <= 0) return alert(isNativeLaunchBackend() ? "you have no escrow to withdraw." : "you have no launch contribution to withdraw.");
         if(shouldUseOnchain()){
           try{
             await unpingWithdrawTx(rid);
@@ -6288,7 +6298,7 @@ if(connectBtn){
         }
 
         state.chat[r.id] = state.chat[r.id] || [];
-        state.chat[r.id].push({ ts: nowStamp(), wallet: connectedWallet, text:`withdrew ${cur.toFixed(3)} SOL (full escrow withdrawal, returned to wallet).`, kind: "activity" });
+        state.chat[r.id].push({ ts: nowStamp(), wallet: connectedWallet, text:`withdrew ${cur.toFixed(3)} SOL (${isNativeLaunchBackend() ? "full escrow withdrawal" : "full launch contribution withdrawal"}, returned to wallet).`, kind: "activity" });
 
       } else if(r.state === "BONDING") {
         const s = ($("unpingAmount").value||"").trim();
