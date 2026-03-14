@@ -165,16 +165,74 @@ const $ = (id) => document.getElementById(id);
       return "draft";
     }
 
+    function normalizeExternalDistributionStatus(value){
+      const normalized = String(value || "").trim().toLowerCase();
+      return ["pending", "awaiting_token_receipt", "ready", "distributed"].includes(normalized)
+        ? normalized
+        : "";
+    }
+
+    function toSafeExternalTokenAmount(value, fallback = 0){
+      const parsed = Number(value);
+      return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+    }
+
+    function resolveRoomExternalDistributionStatus(room){
+      const explicit = normalizeExternalDistributionStatus(room?.external_distribution_status);
+      if(explicit) return explicit;
+      const launchStatus = getRoomLaunchStatus(room);
+      const tokensReceived = toSafeExternalTokenAmount(room?.external_tokens_received, 0);
+      const tokensDistributed = toSafeExternalTokenAmount(room?.external_tokens_distributed, 0);
+      if(launchStatus !== "live") return "pending";
+      if(tokensDistributed > 0 && tokensDistributed >= tokensReceived) return "distributed";
+      if(tokensReceived <= 0) return "awaiting_token_receipt";
+      return "ready";
+    }
+
+    // Canonical external launch backend response contract Pingy expects.
+    // Partial backend responses are accepted; missing fields are normalized
+    // and existing room state is preserved when applying live updates.
+    // {
+    //   ok: true,
+    //   platform: "pumpfun",
+    //   status: "submitted" | "live",
+    //   url: "https://...",
+    //   mint: "...",
+    //   payload: { ... },
+    //   submitted_at: 1234567890,
+    //   live_at: 1234567890,
+    //   tokens_received: number,
+    //   tokens_distributed: number,
+    //   distribution_status: "pending" | "awaiting_token_receipt" | "ready" | "distributed"
+    // }
     function normalizePumpfunLaunchResult(result, room){
       const source = result && typeof result === "object" ? result : {};
       const fallbackPayload = room ? buildPumpfunLaunchPayload(room) : null;
       const submittedAt = Number(source.submitted_at ?? source.submittedAt ?? source?.launch?.submitted_at ?? source?.data?.submitted_at);
       const liveAt = Number(source.live_at ?? source.liveAt ?? source?.launch?.live_at ?? source?.data?.live_at);
+      const rawTokensReceived = source.tokens_received
+        ?? source.external_tokens_received
+        ?? source.received_tokens
+        ?? source?.launch?.tokens_received
+        ?? source?.data?.tokens_received;
+      const rawTokensDistributed = source.tokens_distributed
+        ?? source.external_tokens_distributed
+        ?? source.distributed_tokens
+        ?? source?.launch?.tokens_distributed
+        ?? source?.data?.tokens_distributed;
+      const rawDistributionStatus = source.distribution_status
+        ?? source.external_distribution_status
+        ?? source?.launch?.distribution_status
+        ?? source?.data?.distribution_status;
+      const hasTokensReceived = rawTokensReceived != null && String(rawTokensReceived).trim() !== "";
+      const hasTokensDistributed = rawTokensDistributed != null && String(rawTokensDistributed).trim() !== "";
+      const hasDistributionStatus = normalizeExternalDistributionStatus(rawDistributionStatus) !== "";
       const payload = source.payload && typeof source.payload === "object"
         ? source.payload
         : (source?.launch?.payload && typeof source.launch.payload === "object"
           ? source.launch.payload
           : fallbackPayload);
+      const fallbackDistributionStatus = resolveRoomExternalDistributionStatus(room);
       return {
         platform: String(source.platform || source.backend || source.external_platform || "pumpfun").toLowerCase() || "pumpfun",
         status: getExternalLaunchResultStatus(source),
@@ -183,6 +241,12 @@ const $ = (id) => document.getElementById(id);
         payload,
         submitted_at: Number.isFinite(submittedAt) && submittedAt > 0 ? submittedAt : null,
         live_at: Number.isFinite(liveAt) && liveAt > 0 ? liveAt : null,
+        tokens_received: toSafeExternalTokenAmount(rawTokensReceived, 0),
+        tokens_distributed: toSafeExternalTokenAmount(rawTokensDistributed, 0),
+        distribution_status: normalizeExternalDistributionStatus(rawDistributionStatus) || fallbackDistributionStatus,
+        has_tokens_received: hasTokensReceived,
+        has_tokens_distributed: hasTokensDistributed,
+        has_distribution_status: hasDistributionStatus,
       };
     }
 
@@ -318,10 +382,10 @@ const $ = (id) => document.getElementById(id);
       const status = getRoomLaunchStatus(room);
       if(status === "draft") return "";
       if(status === "submitted") return "Submitted to Pump.fun. Waiting for external URL and mint.";
-      const externalUrl = getRoomExternalLaunchUrl(room).trim();
-      const externalMint = getRoomExternalMint(room).trim();
-      if(externalUrl && externalMint) return "Live on Pump.fun. External URL and mint recorded.";
-      return "Live externally. Launch record is missing some external details.";
+      const distributionStatus = resolveRoomExternalDistributionStatus(room);
+      if(distributionStatus === "distributed") return "Distribution complete.";
+      if(distributionStatus === "ready") return "Live externally. Tokens received and ready for distribution.";
+      return "Live externally. Waiting for token receipt.";
     }
 
     function getDisplayedPumpPreviewText(room){
@@ -404,13 +468,11 @@ const $ = (id) => document.getElementById(id);
     }
 
     function getRoomExternalDistributionSummary(room){
-      const status = getRoomLaunchStatus(room);
-      const tokensReceived = Number(room?.external_tokens_received || 0);
-      const tokensDistributed = Number(room?.external_tokens_distributed || 0);
-      if(status !== "live") return { status: "pending", label: "pending" };
-      if(tokensReceived <= 0) return { status: "awaiting_token_receipt", label: "awaiting token receipt" };
-      if(tokensDistributed > 0 && tokensDistributed >= tokensReceived) return { status: "distributed", label: "complete" };
-      return { status: "ready", label: "ready" };
+      const status = resolveRoomExternalDistributionStatus(room);
+      if(status === "distributed") return { status, label: "complete" };
+      if(status === "awaiting_token_receipt") return { status, label: "awaiting token receipt" };
+      if(status === "ready") return { status, label: "ready" };
+      return { status: "pending", label: "pending" };
     }
 
     function getRoomExternalDistributionStatusLabel(room){
@@ -777,11 +839,20 @@ const $ = (id) => document.getElementById(id);
         payload: patch.payload && typeof patch.payload === "object" ? patch.payload : current.payload || null,
         submitted_at: patch.submitted_at ?? current.submitted_at ?? null,
         live_at: patch.live_at ?? current.live_at ?? null,
+        tokens_received: patch.tokens_received ?? room.external_tokens_received ?? 0,
+        tokens_distributed: patch.tokens_distributed ?? room.external_tokens_distributed ?? 0,
+        distribution_status: patch.distribution_status ?? room.external_distribution_status ?? resolveRoomExternalDistributionStatus(room),
       };
       return applyExternalLaunchResult(roomId, merged);
     }
 
-    function markRoomLiveExternally(roomId, { externalLaunchUrl = "", externalMint = "" } = {}){
+    function markRoomLiveExternally(roomId, {
+      externalLaunchUrl = "",
+      externalMint = "",
+      tokensReceived = null,
+      tokensDistributed = null,
+      distributionStatus = "",
+    } = {}){
       const room = roomById(roomId);
       if(!room){
         showToast("Room not found.");
@@ -800,6 +871,9 @@ const $ = (id) => document.getElementById(id);
       };
       if(nextUrl) patch.url = nextUrl;
       if(nextMint) patch.mint = nextMint;
+      if(tokensReceived != null) patch.tokens_received = tokensReceived;
+      if(tokensDistributed != null) patch.tokens_distributed = tokensDistributed;
+      if(typeof distributionStatus === "string" && distributionStatus.trim()) patch.distribution_status = distributionStatus;
 
       const applied = applyExternalLaunchStatusPatch(roomId, patch);
       if(!applied){
@@ -839,9 +913,8 @@ const $ = (id) => document.getElementById(id);
       room.launch_creator_buy_sol = toSafeNumber(room.launch_creator_buy_sol, 0);
       room.external_tokens_received = toSafeNumber(room.external_tokens_received, 0);
       room.external_tokens_distributed = toSafeNumber(room.external_tokens_distributed, 0);
-      room.external_distribution_status = typeof room.external_distribution_status === "string" && room.external_distribution_status.trim()
-        ? room.external_distribution_status
-        : "pending";
+      room.external_distribution_status = normalizeExternalDistributionStatus(room.external_distribution_status)
+        || resolveRoomExternalDistributionStatus(room);
       if(isPumpfunLaunchBackend()){
         room.launch_backend = "pumpfun";
         room.launch_status = normalizePumpfunLaunchStatus(room.launch_status);
@@ -883,6 +956,7 @@ const $ = (id) => document.getElementById(id);
       if(!room || !result || typeof result !== "object") return null;
       if(result.ok === false) return null;
       const normalizedResult = normalizePumpfunLaunchResult(result, room);
+      console.log("[pingy] normalized external launch result", normalizedResult);
       normalizeLaunchRoom(room);
       const externalLaunch = normalizeExternalLaunchRecord(room);
       if(!externalLaunch) return null;
@@ -891,8 +965,8 @@ const $ = (id) => document.getElementById(id);
         const nextStatus = normalizePumpfunLaunchStatus(normalizedResult.status);
         if(["draft", "submitted", "live"].includes(nextStatus)) externalLaunch.status = nextStatus;
       }
-      externalLaunch.url = normalizedResult.url;
-      externalLaunch.mint = normalizedResult.mint;
+      if(typeof normalizedResult.url === "string" && normalizedResult.url.trim()) externalLaunch.url = normalizedResult.url.trim();
+      if(typeof normalizedResult.mint === "string" && normalizedResult.mint.trim()) externalLaunch.mint = normalizedResult.mint.trim();
       if(normalizedResult.payload && typeof normalizedResult.payload === "object") externalLaunch.payload = normalizedResult.payload;
 
       const submittedAt = Number(normalizedResult.submitted_at);
@@ -903,7 +977,32 @@ const $ = (id) => document.getElementById(id);
       const platform = String(normalizedResult.platform || "").toLowerCase();
       externalLaunch.backend = platform === "pumpfun" || !platform ? "pumpfun" : externalLaunch.backend;
 
+      if(normalizedResult.has_tokens_received){
+        room.external_tokens_received = toSafeExternalTokenAmount(
+          normalizedResult.tokens_received,
+          toSafeExternalTokenAmount(room.external_tokens_received, 0),
+        );
+      }
+      if(normalizedResult.has_tokens_distributed){
+        room.external_tokens_distributed = toSafeExternalTokenAmount(
+          normalizedResult.tokens_distributed,
+          toSafeExternalTokenAmount(room.external_tokens_distributed, 0),
+        );
+      }
+      room.external_distribution_status = normalizedResult.has_distribution_status
+        ? normalizeExternalDistributionStatus(normalizedResult.distribution_status)
+        : resolveRoomExternalDistributionStatus(room);
+
       mirrorExternalLaunchLegacyFields(room, externalLaunch);
+      console.log("[pingy] applied external launch result", {
+        roomId,
+        launch_status: room.launch_status,
+        external_launch_url: room.external_launch_url,
+        external_mint: room.external_mint,
+        external_tokens_received: room.external_tokens_received,
+        external_tokens_distributed: room.external_tokens_distributed,
+        external_distribution_status: room.external_distribution_status,
+      });
       saveLaunchRecordsToLocalStorage();
 
       renderRoom(room.id);
@@ -6964,7 +7063,13 @@ if(connectBtn){
     if(openPumpfunBtn) openPumpfunBtn.addEventListener("click", () => openExternalLaunchForRoom(activeRoomId));
     const markLiveDevBtn = $("markLiveDevBtn");
     if(markLiveDevBtn) markLiveDevBtn.addEventListener("click", () => {
-      if(activeRoomId) markRoomLiveExternally(activeRoomId, { externalLaunchUrl: "https://pump.fun", externalMint: "pending" });
+      if(activeRoomId) markRoomLiveExternally(activeRoomId, {
+        externalLaunchUrl: "https://pump.fun/coin/mock-room",
+        externalMint: "So11111111111111111111111111111111111111112",
+        tokensReceived: 1000000,
+        tokensDistributed: 0,
+        distributionStatus: "ready",
+      });
     });
     const pumpLaunchBtn = $("pumpLaunchBtn");
     if(pumpLaunchBtn) pumpLaunchBtn.addEventListener("click", () => {
