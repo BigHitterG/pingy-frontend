@@ -92,10 +92,44 @@ const $ = (id) => document.getElementById(id);
     }
 
     function launchStatusLabel(room){
-      const status = String(room?.launch_status || "draft").toLowerCase();
+      const status = normalizePumpfunLaunchStatus(room?.launch_status);
       if(status === "submitted") return "Submitted to Pump.fun";
       if(status === "live") return "Live externally";
       return "Draft";
+    }
+
+    function normalizePumpfunLaunchStatus(status){
+      const normalized = String(status || "draft").toLowerCase();
+      if(normalized === "submitted") return "submitted";
+      if(normalized === "live") return "live";
+      return "draft";
+    }
+
+    function isPumpfunRoom(room){
+      return !!room && String(room.launch_backend || "").toLowerCase() === "pumpfun";
+    }
+
+    function isRoomAdminWallet(room, wallet){
+      if(!room || !wallet) return false;
+      const thread = state.onchain?.[room.id] || room.onchain || {};
+      const threadAdminPubkey = thread.admin_pubkey || thread.admin;
+      return !!threadAdminPubkey && toBase58String(threadAdminPubkey) === toBase58String(wallet);
+    }
+
+    function canCurrentWalletLaunchExternally(room){
+      if(!connectedWallet || !room) return false;
+      if(!isPumpfunRoom(room)) return false;
+      if(room.state !== "SPAWNING") return false;
+      if(normalizePumpfunLaunchStatus(room.launch_status) !== "draft") return false;
+      return isCreator(room, connectedWallet) || isApprover(room, connectedWallet) || isRoomAdminWallet(room, connectedWallet);
+    }
+
+    function canCurrentWalletMarkLiveExternally(room){
+      if(!DEV_SIMULATION || !connectedWallet || !room) return false;
+      if(!isPumpfunRoom(room)) return false;
+      const status = normalizePumpfunLaunchStatus(room.launch_status);
+      if(status !== "draft" && status !== "submitted") return false;
+      return isCreator(room, connectedWallet) || isApprover(room, connectedWallet) || isRoomAdminWallet(room, connectedWallet);
     }
 
     function buildPumpfunLaunchPayload(room){
@@ -124,7 +158,26 @@ const $ = (id) => document.getElementById(id);
 
     function launchRoomOnPumpfun(roomId){
       const room = roomById(roomId);
-      if(!room) return null;
+      if(!room){
+        showToast("Room not found.");
+        return null;
+      }
+      if(!isPumpfunRoom(room)){
+        showToast("This room is not set to Pump.fun launch mode.");
+        return null;
+      }
+      if(room.state !== "SPAWNING"){
+        showToast("Launch handoff is only available during spawn formation.");
+        return null;
+      }
+      if(normalizePumpfunLaunchStatus(room.launch_status) !== "draft"){
+        showToast("Launch handoff has already been submitted.");
+        return null;
+      }
+      if(!canCurrentWalletLaunchExternally(room)){
+        showToast("Creator, approver, or admin required to submit launch handoff.");
+        return null;
+      }
       const payload = buildPumpfunLaunchPayload(room);
       room.launch_status = "submitted";
       room.external_platform = "pumpfun";
@@ -137,12 +190,21 @@ const $ = (id) => document.getElementById(id);
 
     function markRoomLiveExternally(roomId, { externalLaunchUrl = "", externalMint = "" } = {}){
       const room = roomById(roomId);
-      if(!room) return false;
+      if(!room){
+        showToast("Room not found.");
+        return false;
+      }
+      if(!canCurrentWalletMarkLiveExternally(room)){
+        showToast("Mark live is limited to dev simulation creator/approver/admin controls.");
+        return false;
+      }
 
       room.launch_status = "live";
       room.external_platform = room.external_platform || "pumpfun";
-      room.external_launch_url = typeof externalLaunchUrl === "string" ? externalLaunchUrl : "";
-      room.external_mint = typeof externalMint === "string" ? externalMint : "";
+      const nextUrl = typeof externalLaunchUrl === "string" ? externalLaunchUrl.trim() : "";
+      const nextMint = typeof externalMint === "string" ? externalMint.trim() : "";
+      if(nextUrl) room.external_launch_url = nextUrl;
+      if(nextMint) room.external_mint = nextMint;
 
       addSystemEvent(room.id, "Launch is now live externally.");
       renderRoom(room.id);
@@ -168,7 +230,7 @@ const $ = (id) => document.getElementById(id);
       const normalizedCommit = Number.isFinite(parsedCommit) && parsedCommit > 0 ? parsedCommit : 0;
       if(isPumpfunLaunchBackend()){
         room.launch_backend = "pumpfun";
-        room.launch_status = room.launch_status || "draft";
+        room.launch_status = normalizePumpfunLaunchStatus(room.launch_status);
         room.external_platform = room.external_platform || "pumpfun";
         room.external_launch_url = typeof room.external_launch_url === "string" ? room.external_launch_url : "";
         room.external_mint = typeof room.external_mint === "string" ? room.external_mint : "";
@@ -178,7 +240,7 @@ const $ = (id) => document.getElementById(id);
         room.market_cap_usd = 0;
       } else {
         room.launch_backend = room.launch_backend || "native";
-        room.launch_status = room.launch_status || "draft";
+        room.launch_status = normalizePumpfunLaunchStatus(room.launch_status);
         room.external_platform = room.external_platform || "";
         room.external_launch_url = typeof room.external_launch_url === "string" ? room.external_launch_url : "";
         room.external_mint = typeof room.external_mint === "string" ? room.external_mint : "";
@@ -4177,7 +4239,7 @@ if(connectBtn){
       const isBonded = r.state === "BONDED";
       const barClass = isHotBonding ? "bar barActive barBonding barHot" : "bar barActive barBonding";
       const subline = isBonded
-        ? (isPumpfunLaunchBackend() ? "Trading handled outside Pingy" : "Graduated from bonding")
+        ? (isPumpfunRoom(r) ? "Trading handled outside Pingy" : "Graduated from bonding")
         : escapeText(r.desc || "—");
 
       return `
@@ -4186,7 +4248,7 @@ if(connectBtn){
           <div style="min-width:0;">
             <div class="row" style="justify-content:space-between;align-items:baseline;">
               <div class="name">${escapeText(r.name)} <span class="k">$${escapeText(r.ticker)}</span></div>
-              <span class="k">${chip}${isBonded ? (isPumpfunLaunchBackend() ? " • live external" : " • graduated") : ""}</span>
+              <span class="k">${chip}${isBonded ? (isPumpfunRoom(r) ? " • live external" : " • graduated") : ""}</span>
             </div>
             <div class="tiny subline">${subline}</div>
             <div class="${barClass}"><i style="width:${pct}%"></i>${isHotBonding ? `<span class="barSpark"></span>` : ""}</div>
@@ -4492,8 +4554,14 @@ if(connectBtn){
       const system = msgs.find((m) => m && String(m.text || "").trim());
       if(system) return String(system.text).trim().slice(0, 90);
       if(room?.state === "SPAWNING") return "Spawn discussion active";
-      if(room?.state === "BONDING") return isPumpfunLaunchBackend() ? "Submitted • pending external market" : "Market is live";
-      if(room?.state === "BONDED") return isPumpfunLaunchBackend() ? "Spawn completed • trading external" : "Graduated from bonding";
+      if(isPumpfunRoom(room)){
+        const status = normalizePumpfunLaunchStatus(room?.launch_status);
+        if(status === "submitted") return "Submitted to Pump.fun • Pending external market";
+        if(status === "live") return "Live externally • Trading handled outside Pingy";
+        return "Spawn in progress • Draft";
+      }
+      if(room?.state === "BONDING") return "Market is live";
+      if(room?.state === "BONDED") return "Graduated from bonding";
       return "Thread active";
     }
 
@@ -5716,7 +5784,7 @@ if(connectBtn){
         lines.push(`<div>${creatorLabel}: ${creatorCommitLine}</div>`);
         lines.push(`<div>Approver count: ${approverCount > 0 ? approverCount : "—"}</div>`);
         lines.push(`<div>Launch type: ${launchTypeLabel}</div>`);
-        lines.push(`<div>Launch backend: ${isPumpfunLaunchBackend() ? "Pump.fun" : "Native"}</div>`);
+        lines.push(`<div>Launch backend: ${isPumpfunRoom(r) ? "Pump.fun" : "Native"}</div>`);
         lines.push(`<div>Launch status: ${launchStatusLabel(r)}</div>`);
         if(r.external_launch_url) lines.push(`<div>External launch: <a href="${escapeText(r.external_launch_url)}" target="_blank" rel="noopener noreferrer">${escapeText(r.external_launch_url)}</a></div>`);
         if(r.external_mint) lines.push(`<div>External mint: ${escapeText(r.external_mint)}</div>`);
@@ -5726,12 +5794,20 @@ if(connectBtn){
       const openPumpfunBtn = $("openPumpfunBtn");
       if(openPumpfunBtn){
         const hasExternalUrl = typeof r.external_launch_url === "string" && r.external_launch_url.trim().length > 0;
-        const showOpenButton = r.launch_backend === "pumpfun" && hasExternalUrl;
+        const showOpenButton = isPumpfunRoom(r) && hasExternalUrl;
         openPumpfunBtn.style.display = showOpenButton ? "inline-block" : "none";
       }
       const markLiveDevBtn = $("markLiveDevBtn");
       if(markLiveDevBtn){
-        markLiveDevBtn.style.display = DEV_SIMULATION ? "inline-block" : "none";
+        const canMarkLive = canCurrentWalletMarkLiveExternally(r);
+        markLiveDevBtn.style.display = canMarkLive ? "inline-block" : "none";
+        markLiveDevBtn.disabled = !canMarkLive;
+      }
+      const pumpLaunchBtn = $("pumpLaunchBtn");
+      if(pumpLaunchBtn){
+        const canLaunch = canCurrentWalletLaunchExternally(r);
+        pumpLaunchBtn.style.display = canLaunch ? "inline-block" : "none";
+        pumpLaunchBtn.disabled = !canLaunch;
       }
 
       const pendingList = $("pendingList");
@@ -5897,8 +5973,13 @@ if(connectBtn){
       const visiblePhaseLabel = lifecyclePhaseLabel(r.state);
 
       if(r.state === "SPAWNING"){
-        phaseLabel.textContent = "PING PHASE • spawn progress";
-        statePill.textContent = visiblePhaseLabel;
+        if(isPumpfunRoom(r)){
+          phaseLabel.textContent = "Spawn in progress";
+          statePill.textContent = launchStatusLabel(r);
+        } else {
+          phaseLabel.textContent = "PING PHASE • spawn progress";
+          statePill.textContent = visiblePhaseLabel;
+        }
         const target = spawnTargetSol(r);
         const allocated = Number(r?.onchain?.total_allocated_lamports || 0) / 1e9;
         const progress = target > 0
@@ -5930,8 +6011,13 @@ if(connectBtn){
           `;
         }
       } else if(r.state === "BONDING"){
-        phaseLabel.textContent = isPumpfunLaunchBackend() ? "SUBMITTED • pending external market" : "MARKET • external routing";
-        statePill.textContent = visiblePhaseLabel;
+        if(isPumpfunRoom(r)){
+          phaseLabel.textContent = "Submitted to Pump.fun • Pending external market";
+          statePill.textContent = launchStatusLabel(r);
+        } else {
+          phaseLabel.textContent = "MARKET • external routing";
+          statePill.textContent = visiblePhaseLabel;
+        }
         const bondProgress = bondingProgress01(r);
         const hotBonding = bondProgress >= 0.9;
         phaseBar.style.width = Math.round(bondProgress*100) + "%";
@@ -5951,8 +6037,13 @@ if(connectBtn){
           ? "Spawn completed. Trading follows external launch."
           : `External market routing will be used after spawn.`;
       } else {
-        phaseLabel.textContent = isPumpfunLaunchBackend() ? "LIVE EXTERNAL • spawn complete" : "BONDED • spawn complete";
-        statePill.textContent = "BONDED";
+        if(isPumpfunRoom(r)){
+          phaseLabel.textContent = "Live externally • Trading handled outside Pingy";
+          statePill.textContent = launchStatusLabel(r);
+        } else {
+          phaseLabel.textContent = "BONDED • spawn complete";
+          statePill.textContent = "BONDED";
+        }
         phaseBar.style.width = "100%";
         phaseBar.style.background = "#46d36f";
         if(phaseBarWrap){
@@ -6204,6 +6295,10 @@ if(connectBtn){
     const markLiveDevBtn = $("markLiveDevBtn");
     if(markLiveDevBtn) markLiveDevBtn.addEventListener("click", () => {
       if(activeRoomId) markRoomLiveExternally(activeRoomId, { externalLaunchUrl: "https://pump.fun", externalMint: "pending" });
+    });
+    const pumpLaunchBtn = $("pumpLaunchBtn");
+    if(pumpLaunchBtn) pumpLaunchBtn.addEventListener("click", () => {
+      if(activeRoomId) launchRoomOnPumpfun(activeRoomId);
     });
 
     const devSimStart5Btn = $("devSimStart5");
