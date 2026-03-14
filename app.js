@@ -1111,7 +1111,7 @@ const $ = (id) => document.getElementById(id);
 
     async function postJsonToEndpoint(endpoint, payload, { defaultErrorMessage = "Request failed." } = {}){
       const url = String(endpoint || "").trim();
-      if(!url) return { ok: false, error: defaultErrorMessage };
+      if(!url) return { ok: false, error: defaultErrorMessage, status: null };
       try {
         const response = await fetch(url, {
           method: "POST",
@@ -1131,10 +1131,25 @@ const $ = (id) => document.getElementById(id);
           return { ok: false, error: message, status: response.status, body };
         }
         if(!body || typeof body !== "object") return { ok: false, error: `Invalid response body from ${url}.`, status: response.status };
-        return { ok: true, data: body, status: response.status };
+        return { ok: true, data: body, status: response.status, error: null };
       } catch (_err) {
-        return { ok: false, error: `${defaultErrorMessage} (network error).` };
+        return { ok: false, error: `${defaultErrorMessage} (network error).`, status: null };
       }
+    }
+
+    function setRoomExternalDebug(room, patch = {}){
+      if(!room || typeof room !== "object") return room;
+      const current = room.external_debug && typeof room.external_debug === "object" ? room.external_debug : {};
+      room.external_debug = {
+        ...current,
+        ...patch,
+        updated_at: Date.now(),
+      };
+      return room;
+    }
+
+    function getRoomExternalDebug(room){
+      return room?.external_debug && typeof room.external_debug === "object" ? room.external_debug : null;
     }
 
     function buildExternalSettlementErrorResult(error){
@@ -1226,11 +1241,32 @@ const $ = (id) => document.getElementById(id);
       return String(configuredEndpoint || "").trim();
     }
 
+    function hasPumpfunSettlementEndpoint(){
+      return hasConfiguredEndpoint(getPumpfunSettlementEndpoint());
+    }
+
     function getPumpfunStatusEndpoint(){
       const configuredEndpoint = typeof window?.PINGY_PUMPFUN_STATUS_ENDPOINT === "string"
         ? window.PINGY_PUMPFUN_STATUS_ENDPOINT
         : PINGY_PUMPFUN_STATUS_ENDPOINT;
       return String(configuredEndpoint || "").trim();
+    }
+
+    function hasPumpfunStatusEndpoint(){
+      return hasConfiguredEndpoint(getPumpfunStatusEndpoint());
+    }
+
+    function getPumpfunBackendModeSummary(){
+      return {
+        launch: hasPumpfunLaunchEndpoint() ? "live" : (DEV_SIMULATION ? "mock" : "missing"),
+        status: hasPumpfunStatusEndpoint() ? "live" : (DEV_SIMULATION ? "mock" : "missing"),
+        settlement: hasPumpfunSettlementEndpoint() ? "live" : (DEV_SIMULATION ? "mock" : "missing"),
+      };
+    }
+
+    function getPumpfunBackendModeLabel(){
+      const summary = getPumpfunBackendModeSummary();
+      return `launch:${summary.launch} • status:${summary.status} • settlement:${summary.settlement}`;
     }
 
     function normalizeExternalStatusResult(result, room){
@@ -1280,23 +1316,24 @@ const $ = (id) => document.getElementById(id);
 
     async function fetchPumpfunRoomStatus(room){
       // a) validate room
-      if(!room) return buildExternalLaunchErrorResult("Room not found.");
+      if(!room) return { ...buildExternalLaunchErrorResult("Room not found."), _httpStatus: null, _requestKind: "invalid" };
 
       // b) resolve endpoint
       const endpoint = getPumpfunStatusEndpoint();
+      const requestKind = shouldUseDevMockEndpoint(endpoint) ? "mock" : "live";
 
       // c) dev mock fallback path
-      if(shouldUseDevMockEndpoint(endpoint)) return buildExternalStatusMockResult(room);
+      if(shouldUseDevMockEndpoint(endpoint)) return { ...buildExternalStatusMockResult(room), _httpStatus: null, _requestKind: requestKind };
 
       // d) non-dev missing endpoint path
-      if(!hasConfiguredEndpoint(endpoint)) return buildExternalLaunchErrorResult("No status endpoint configured.");
+      if(!hasConfiguredEndpoint(endpoint)) return { ...buildExternalLaunchErrorResult("No status endpoint configured."), _httpStatus: null, _requestKind: requestKind };
 
       const payload = buildPumpfunStatusRequest(room);
 
       // e) live POST path
       const response = await postJsonToEndpoint(endpoint, payload, { defaultErrorMessage: "Status refresh failed" });
-      if(!response.ok) return buildExternalLaunchErrorResult(response.error || "Status refresh failed.");
-      return response.data;
+      if(!response.ok) return { ...buildExternalLaunchErrorResult(response.error || "Status refresh failed."), _httpStatus: response.status ?? null, _requestKind: requestKind };
+      return { ...response.data, _httpStatus: response.status ?? null, _requestKind: requestKind };
     }
 
     function applyExternalStatusSettlementResult(roomId, normalized){
@@ -1339,7 +1376,19 @@ const $ = (id) => document.getElementById(id);
       renderRoom(room.id);
       renderHome();
       try {
+        setRoomExternalDebug(room, {
+          last_action: "status_request",
+          last_request_kind: shouldUseDevMockEndpoint(getPumpfunStatusEndpoint()) ? "mock" : "live",
+          last_response_kind: "",
+          last_http_status: null,
+          last_error: "",
+        });
         const rawResult = await fetchPumpfunRoomStatus(room);
+        setRoomExternalDebug(room, {
+          last_response_kind: rawResult?.ok === false ? "error" : "success",
+          last_http_status: rawResult?._httpStatus ?? null,
+          last_error: rawResult?.ok === false ? String(rawResult?.error || "Status refresh failed.") : "",
+        });
         const normalized = normalizePumpfunStatusResponse(rawResult, room);
         if(DEBUG_EXTERNAL_STATUS) console.log("[pingy] status refresh normalized", { roomId: room.id, normalized });
         if(normalized.ok === false){
@@ -1348,10 +1397,16 @@ const $ = (id) => document.getElementById(id);
         }
         applyExternalLaunchResult(room.id, normalized);
         applyExternalStatusSettlementResult(room.id, normalized);
+        if(!silent) showToast("Status refreshed.");
         return normalized;
       } catch (err) {
         console.error("[pingy] refreshRoomExternalStatus failed", err);
         const failed = buildExternalLaunchErrorResult("Status refresh failed.");
+        setRoomExternalDebug(room, {
+          last_response_kind: "error",
+          last_http_status: null,
+          last_error: String(err?.message || failed.error || "Status refresh failed."),
+        });
         if(!silent) showToast(failed.error);
         return failed;
       } finally {
@@ -1474,17 +1529,18 @@ const $ = (id) => document.getElementById(id);
 
       // b) resolve endpoint
       const endpoint = getPumpfunSettlementEndpoint();
+      const requestKind = shouldUseDevMockEndpoint(endpoint) ? "mock" : "live";
 
       // c) dev mock fallback path
-      if(shouldUseDevMockEndpoint(endpoint)) return submitPumpfunSettlementMock(room);
+      if(shouldUseDevMockEndpoint(endpoint)) return { ...submitPumpfunSettlementMock(room), _httpStatus: null, _requestKind: requestKind };
 
       // d) non-dev missing endpoint path
-      if(!hasConfiguredEndpoint(endpoint)) return buildExternalSettlementErrorResult("No settlement endpoint configured.");
+      if(!hasConfiguredEndpoint(endpoint)) return { ...buildExternalSettlementErrorResult("No settlement endpoint configured."), _httpStatus: null, _requestKind: requestKind };
 
       // e) live POST path
       const response = await postJsonToEndpoint(endpoint, payload, { defaultErrorMessage: "Settlement submission failed" });
-      if(!response.ok) return buildExternalSettlementErrorResult(response.error || "Settlement submission failed.");
-      return response.data;
+      if(!response.ok) return { ...buildExternalSettlementErrorResult(response.error || "Settlement submission failed."), _httpStatus: response.status ?? null, _requestKind: requestKind };
+      return { ...response.data, _httpStatus: response.status ?? null, _requestKind: requestKind };
     }
 
     async function submitRoomSettlementExternally(roomId){
@@ -1495,7 +1551,12 @@ const $ = (id) => document.getElementById(id);
 
       try {
         const rawResult = await submitPumpfunSettlement(room);
-        return normalizePumpfunSettlementResponse(rawResult, room);
+        const normalized = normalizePumpfunSettlementResponse(rawResult, room);
+        return {
+          ...normalized,
+          _httpStatus: rawResult?._httpStatus ?? null,
+          _requestKind: rawResult?._requestKind || (shouldUseDevMockEndpoint(getPumpfunSettlementEndpoint()) ? "mock" : "live"),
+        };
       } catch (err) {
         console.error("[pingy] submitRoomSettlementExternally failed", err);
         return buildExternalSettlementErrorResult("Settlement submission failed.");
@@ -1521,7 +1582,19 @@ const $ = (id) => document.getElementById(id);
       renderRoom(room.id);
       renderHome();
       try {
+        setRoomExternalDebug(room, {
+          last_action: "settlement_request",
+          last_request_kind: shouldUseDevMockEndpoint(getPumpfunSettlementEndpoint()) ? "mock" : "live",
+          last_response_kind: "",
+          last_http_status: null,
+          last_error: "",
+        });
         const result = await submitRoomSettlementExternally(room.id);
+        setRoomExternalDebug(room, {
+          last_response_kind: result?.ok === false ? "error" : "success",
+          last_http_status: result?._httpStatus ?? null,
+          last_error: result?.ok === false ? String(result?.error || "Settlement submission failed.") : "",
+        });
         const normalized = normalizePumpfunSettlementResponse(result, room);
         if(normalized.ok === false){
           showToast(normalized.error || "Settlement submission failed.");
@@ -1539,6 +1612,11 @@ const $ = (id) => document.getElementById(id);
       } catch (err) {
         console.error("[pingy] settleRoomDistributionOnPumpfun failed", err);
         const failed = buildExternalSettlementErrorResult("Settlement submission failed.");
+        setRoomExternalDebug(room, {
+          last_response_kind: "error",
+          last_http_status: null,
+          last_error: String(err?.message || failed.error || "Settlement submission failed."),
+        });
         showToast(failed.error);
         return failed;
       } finally {
@@ -1702,6 +1780,10 @@ const $ = (id) => document.getElementById(id);
       return String(configuredEndpoint || "").trim();
     }
 
+    function hasPumpfunLaunchEndpoint(){
+      return hasConfiguredEndpoint(getPumpfunLaunchEndpoint());
+    }
+
     async function submitPumpfunLaunch(room){
       // a) validate room
       if(!room) return buildExternalLaunchErrorResult("Room not found.");
@@ -1709,12 +1791,13 @@ const $ = (id) => document.getElementById(id);
 
       // b) resolve endpoint
       const endpoint = getPumpfunLaunchEndpoint();
+      const requestKind = shouldUseDevMockEndpoint(endpoint) ? "mock" : "live";
 
       // c) dev mock fallback path
-      if(shouldUseDevMockEndpoint(endpoint)) return submitPumpfunLaunchMock(room);
+      if(shouldUseDevMockEndpoint(endpoint)) return { ...submitPumpfunLaunchMock(room), _httpStatus: null, _requestKind: requestKind };
 
       // d) non-dev missing endpoint path
-      if(!hasConfiguredEndpoint(endpoint)) return buildExternalLaunchErrorResult("No launch endpoint configured.");
+      if(!hasConfiguredEndpoint(endpoint)) return { ...buildExternalLaunchErrorResult("No launch endpoint configured."), _httpStatus: null, _requestKind: requestKind };
 
       // e) live POST path
       const response = await postJsonToEndpoint(endpoint, payload, { defaultErrorMessage: "Launch submission failed" });
@@ -1722,10 +1805,16 @@ const $ = (id) => document.getElementById(id);
         ? response.data
         : buildExternalLaunchErrorResult(response.error || "Launch submission failed.");
 
-      if(rawResult?.payload && typeof rawResult.payload === "object"){
-        return rawResult;
+      const withDebugMeta = {
+        ...rawResult,
+        _httpStatus: response.status ?? null,
+        _requestKind: requestKind,
+      };
+
+      if(withDebugMeta?.payload && typeof withDebugMeta.payload === "object"){
+        return withDebugMeta;
       }
-      return { ...rawResult, payload };
+      return { ...withDebugMeta, payload };
     }
 
     async function submitRoomLaunchExternally(roomId){
@@ -1736,7 +1825,12 @@ const $ = (id) => document.getElementById(id);
 
       try {
         const rawResult = await submitPumpfunLaunch(room);
-        return normalizePumpfunLaunchResponse(rawResult, room);
+        const normalized = normalizePumpfunLaunchResponse(rawResult, room);
+        return {
+          ...normalized,
+          _httpStatus: rawResult?._httpStatus ?? null,
+          _requestKind: rawResult?._requestKind || (shouldUseDevMockEndpoint(getPumpfunLaunchEndpoint()) ? "mock" : "live"),
+        };
       } catch (err) {
         console.error("[pingy] submitRoomLaunchExternally failed", err);
         return buildExternalLaunchErrorResult("Launch submission failed.");
@@ -1762,7 +1856,19 @@ const $ = (id) => document.getElementById(id);
       renderRoom(room.id);
       renderHome();
       try {
+        setRoomExternalDebug(room, {
+          last_action: "launch_request",
+          last_request_kind: shouldUseDevMockEndpoint(getPumpfunLaunchEndpoint()) ? "mock" : "live",
+          last_response_kind: "",
+          last_http_status: null,
+          last_error: "",
+        });
         const result = await submitRoomLaunchExternally(room.id);
+        setRoomExternalDebug(room, {
+          last_response_kind: result?.ok === false ? "error" : "success",
+          last_http_status: result?._httpStatus ?? null,
+          last_error: result?.ok === false ? String(result?.error || "Launch submission failed.") : "",
+        });
         if(result?.ok === false){
           showToast(result.error || "Launch submission failed.");
           return result;
@@ -1781,6 +1887,11 @@ const $ = (id) => document.getElementById(id);
       } catch (err) {
         console.error("[pingy] launchRoomOnPumpfun failed", err);
         const failedResult = buildExternalLaunchErrorResult("Launch submission failed.");
+        setRoomExternalDebug(room, {
+          last_response_kind: "error",
+          last_http_status: null,
+          last_error: String(err?.message || failedResult.error || "Launch submission failed."),
+        });
         showToast(failedResult.error);
         return failedResult;
       } finally {
@@ -7611,6 +7722,7 @@ if(connectBtn){
         const externalMint = getRoomExternalMint(r).trim();
         if(externalMint) lines.push(`<div>External mint: ${escapeText(externalMint)}</div>`);
         if(isPumpfunRoom(r)){
+          lines.push(`<div>Backend mode: ${escapeText(getPumpfunBackendModeLabel())}</div>`);
           lines.push(`<div>Distribution: ${escapeText(getRoomExternalDistributionStatusLabel(r))}</div>`);
           if(isRoomStatusRefreshing(r)) lines.push("<div>Refreshing: yes</div>");
           const settlementStatus = String(r?.external_settlement_status || "").trim();
@@ -7625,6 +7737,19 @@ if(connectBtn){
           }
           const vaultNetSol = Number(r.launch_vault_net_sol || 0);
           if(vaultNetSol > 0) lines.push(`<div>Launch vault net: ${vaultNetSol.toFixed(3)} SOL</div>`);
+          const launchReadyButMissingEndpoint = !DEV_SIMULATION
+            && getRoomLaunchStatus(r) === "draft"
+            && validatePumpfunLaunchReadiness(r).ok
+            && !hasPumpfunLaunchEndpoint();
+          const refreshReadyButMissingEndpoint = !DEV_SIMULATION
+            && canRefreshRoomExternalStatus(r)
+            && !hasPumpfunStatusEndpoint();
+          const settleReadyButMissingEndpoint = !DEV_SIMULATION
+            && validatePumpfunSettlementReadiness(r).ok
+            && !hasPumpfunSettlementEndpoint();
+          if(launchReadyButMissingEndpoint) lines.push("<div>Launch endpoint: missing</div>");
+          if(refreshReadyButMissingEndpoint) lines.push("<div>Status endpoint: missing</div>");
+          if(settleReadyButMissingEndpoint) lines.push("<div>Settlement endpoint: missing</div>");
         }
         launchTrustLines.innerHTML = lines.join("");
       }
@@ -7636,6 +7761,39 @@ if(connectBtn){
         const showExternalLaunchPanel = isPumpfunRoom(r) && !!summary;
         externalLaunchPanel.style.display = showExternalLaunchPanel ? "block" : "none";
         if(showExternalLaunchPanel) externalLaunchSummary.textContent = summary;
+      }
+
+      const externalDebugPanel = $("externalDebugPanel");
+      const externalDebugSummary = $("externalDebugSummary");
+      if(externalDebugPanel && externalDebugSummary){
+        const debugInfo = getRoomExternalDebug(r);
+        const showExternalDebugPanel = isPumpfunRoom(r) && (DEV_SIMULATION || DEBUG_EXTERNAL_STATUS || !!debugInfo);
+        externalDebugPanel.style.display = showExternalDebugPanel ? "block" : "none";
+        if(showExternalDebugPanel){
+          const updatedLabel = debugInfo?.updated_at ? formatLaunchTimestamp(debugInfo.updated_at) : "—";
+          const lines = [
+            `Last action: ${debugInfo?.last_action ? String(debugInfo.last_action) : "—"}`,
+            `Request mode: ${debugInfo?.last_request_kind ? String(debugInfo.last_request_kind) : "—"}`,
+            `Response: ${debugInfo?.last_response_kind ? String(debugInfo.last_response_kind) : "—"}`,
+            `HTTP status: ${debugInfo?.last_http_status ?? "—"}`,
+            `Error: ${debugInfo?.last_error ? String(debugInfo.last_error) : "—"}`,
+            `Updated: ${updatedLabel || "—"}`,
+          ];
+          const launchReadyButMissingEndpoint = !DEV_SIMULATION
+            && getRoomLaunchStatus(r) === "draft"
+            && validatePumpfunLaunchReadiness(r).ok
+            && !hasPumpfunLaunchEndpoint();
+          const refreshReadyButMissingEndpoint = !DEV_SIMULATION
+            && canRefreshRoomExternalStatus(r)
+            && !hasPumpfunStatusEndpoint();
+          const settleReadyButMissingEndpoint = !DEV_SIMULATION
+            && validatePumpfunSettlementReadiness(r).ok
+            && !hasPumpfunSettlementEndpoint();
+          if(launchReadyButMissingEndpoint) lines.push("Launch endpoint: missing");
+          if(refreshReadyButMissingEndpoint) lines.push("Status endpoint: missing");
+          if(settleReadyButMissingEndpoint) lines.push("Settlement endpoint: missing");
+          externalDebugSummary.innerHTML = lines.map((line) => `<div>${escapeText(line)}</div>`).join("");
+        }
       }
 
       const distributionPanel = $("distributionPanel");
@@ -7695,8 +7853,9 @@ if(connectBtn){
       if(refreshExternalStatusBtn){
         const launchStatus = getRoomLaunchStatus(r);
         const canRefresh = canRefreshRoomExternalStatus(r);
+        const endpointReady = DEV_SIMULATION || hasPumpfunStatusEndpoint();
         const refreshing = isRoomStatusRefreshing(r);
-        const showRefresh = isPumpfunRoom(r) && (launchStatus === "submitted" || launchStatus === "live") && (refreshing || canRefresh);
+        const showRefresh = isPumpfunRoom(r) && endpointReady && (launchStatus === "submitted" || launchStatus === "live") && (refreshing || canRefresh);
         refreshExternalStatusBtn.style.display = showRefresh ? "inline-block" : "none";
         refreshExternalStatusBtn.disabled = refreshing || !canRefresh;
         refreshExternalStatusBtn.textContent = refreshing ? "refreshing…" : "refresh status";
@@ -7721,7 +7880,8 @@ if(connectBtn){
         const launchStatus = getRoomLaunchStatus(r);
         const isSubmitting = isRoomLaunchSubmitting(r);
         const canLaunch = canCurrentWalletLaunchExternally(r);
-        const showLaunch = isPumpfunRoom(r) && launchStatus === "draft" && (isSubmitting || canLaunch);
+        const endpointReady = DEV_SIMULATION || hasPumpfunLaunchEndpoint();
+        const showLaunch = isPumpfunRoom(r) && endpointReady && launchStatus === "draft" && (isSubmitting || canLaunch);
         pumpLaunchBtn.style.display = showLaunch ? "inline-block" : "none";
         pumpLaunchBtn.disabled = !canLaunch;
         pumpLaunchBtn.textContent = isSubmitting ? "submitting…" : "launch on pump.fun";
@@ -7734,7 +7894,9 @@ if(connectBtn){
         const hasExternalMint = String(getRoomExternalMint(r) || "").trim().length > 0;
         const hasTokensReceived = toSafeExternalTokenAmount(r?.external_tokens_received, 0) > 0;
         const fullyDistributed = distributionStatus === "distributed";
+        const endpointReady = DEV_SIMULATION || hasPumpfunSettlementEndpoint();
         const showSettle = isPumpfunRoom(r)
+          && endpointReady
           && isRoomLaunchLive(r)
           && hasFrozenDistributionSnapshot(r)
           && hasExternalMint
