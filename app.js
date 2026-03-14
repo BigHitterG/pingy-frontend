@@ -91,6 +91,34 @@ const $ = (id) => document.getElementById(id);
       return PINGY_LAUNCH_BACKEND === "native";
     }
 
+    function normalizeLaunchRoom(room, { launchMode = null, creatorCommitSol = null } = {}){
+      if(!room || typeof room !== "object") return room;
+      const mode = String(launchMode || room.launch_mode || "spawn").toLowerCase() === "instant" ? "instant" : "spawn";
+      const parsedCommit = Number(creatorCommitSol);
+      const normalizedCommit = Number.isFinite(parsedCommit) && parsedCommit > 0 ? parsedCommit : 0;
+      if(isPumpfunLaunchBackend()){
+        room.launch_backend = "pumpfun";
+        room.launch_status = room.launch_status || "draft";
+        room.external_platform = room.external_platform || "pumpfun";
+        room.external_launch_url = typeof room.external_launch_url === "string" ? room.external_launch_url : "";
+        room.external_mint = typeof room.external_mint === "string" ? room.external_mint : "";
+        room.funding_mode = room.funding_mode || "vault";
+        room.creator_commit_sol = normalizedCommit;
+        room.state = "SPAWNING";
+        room.market_cap_usd = 0;
+      } else {
+        room.launch_backend = room.launch_backend || "native";
+        room.launch_status = room.launch_status || "draft";
+        room.external_platform = room.external_platform || "";
+        room.external_launch_url = typeof room.external_launch_url === "string" ? room.external_launch_url : "";
+        room.external_mint = typeof room.external_mint === "string" ? room.external_mint : "";
+        room.funding_mode = room.funding_mode || "vault";
+        if(typeof room.creator_commit_sol !== "number") room.creator_commit_sol = normalizedCommit;
+        if(mode === "instant") room.state = room.state || "BONDING";
+      }
+      return room;
+    }
+
     const DEV_SIMULATION = !!(window?.location?.hostname === "localhost" || window?.location?.hostname === "127.0.0.1" || window?.location?.hostname === "0.0.0.0" || window?.location?.hostname?.endsWith?.(".local") || window?.location?.search?.includes("devsim=1"));
     const DEBUG_WALLET_SMOKE_BEFORE_SPAWN_TX = false;
     const DEV_SIM_DEFAULT_SEED = 1337;
@@ -2855,7 +2883,7 @@ function encodeU64Arg(v){
       const config = launchConfig || getCreateLaunchConfig();
       const mode = config.launchMode || "spawn";
       const isInstant = mode === "instant";
-      return {
+      const room = {
         id, name, ticker, desc,
         creator_wallet,
         socials: { x:'', tg:'', web:'' },
@@ -2882,6 +2910,7 @@ function encodeU64Arg(v){
         image: null,
         series: null
       };
+      return normalizeLaunchRoom(room, { launchMode: mode });
     }
 
     function roomById(id){ return state.rooms.find(r => r.id === id); }
@@ -4672,7 +4701,7 @@ if(connectBtn){
       }
       const id = "r" + Math.random().toString(16).slice(2,6);
 
-      if(shouldUseOnchain()){
+      if(shouldUseOnchain() && isNativeLaunchBackend()){
         if(DEBUG_WALLET_SMOKE_BEFORE_SPAWN_TX && launchMode === "spawn"){
           const smokeRes = await runWalletSmokeTest();
           if(!smokeRes?.ok && isInvalidWalletArgumentsError(smokeRes?.error)){
@@ -4723,6 +4752,7 @@ if(connectBtn){
       }
 
       const r = mkRoom(id, name, ticker, desc, launchConfig);
+      normalizeLaunchRoom(r, { launchMode, creatorCommitSol: commit });
       r.creator_wallet = connectedWallet;
       r.approval = { [connectedWallet]: "approved" };
       r.approverWallets = r.approverWallets || {};
@@ -4731,7 +4761,7 @@ if(connectBtn){
       r.socials = { x: xUrl, tg: tgUrl, web: webUrl };
       if(newImgData) r.image = newImgData;
       if(newBannerData) r.banner = newBannerData;
-      if(launchMode === "instant"){
+      if(launchMode === "instant" && isNativeLaunchBackend()){
         r.token_address = mockTokenAddress(r.ticker || r.name || "PINGY");
         if(!shouldUseOnchain() && commit > 0){
           r.positions[connectedWallet] = r.positions[connectedWallet] || {escrow_sol:0, net_sol_in:0, spawn_tokens:0, token_balance:0};
@@ -4756,7 +4786,7 @@ if(connectBtn){
         }
       }
       state.rooms.unshift(r);
-      state.chat[id] = [{ ts:"—", wallet:"SYSTEM", text: launchMode === "instant" ? "coin created. launched coins will trade externally." : "coin created. waiting for spawn." }];
+      state.chat[id] = [{ ts:"—", wallet:"SYSTEM", text: launchMode === "instant" ? "coin created. ready for external launch." : "coin created. waiting for spawn." }];
 
       $("newName").value = "";
       $("newTicker").value = "";
@@ -4788,7 +4818,7 @@ if(connectBtn){
       renderHome();
       openRoom(id);
 
-      if(shouldUseOnchain()){
+      if(shouldUseOnchain() && isNativeLaunchBackend()){
         await fetchRoomOnchainSnapshot(id);
         await refreshConnectedWalletEscrowLine(id);
         await fetchConnectedWalletDepositSnapshot();
