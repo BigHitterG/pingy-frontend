@@ -264,9 +264,17 @@ const $ = (id) => document.getElementById(id);
     }
 
     function primaryActionForRoom(room){
+      if(isPumpfunLaunchBackend()){
+        if(room?.state === "SPAWNING") return { label: "ping", opensTrade: true };
+        return { label: "open", opensTrade: false };
+      }
       if(room?.state === "BONDING") return { label: "buy", opensTrade: true };
       if(room?.state === "BONDED") return { label: "graduated", opensTrade: false };
       return { label: "ping", opensTrade: true };
+    }
+
+    function isPumpfunPostSpawnRoom(room){
+      return isPumpfunLaunchBackend() && room?.state !== "SPAWNING";
     }
 
 
@@ -2293,6 +2301,10 @@ function encodeU64Arg(v){
 
     async function claimConnectedWalletSpawnTokens(room){
       if(!room || !connectedWallet) return false;
+      if(isPumpfunPostSpawnRoom(room)){
+        alert("Trading for launched coins is handled outside Pingy.");
+        return false;
+      }
       if(room._spawnClaimInFlight) return false;
       room._spawnClaimInFlight = true;
       try {
@@ -5801,7 +5813,7 @@ if(connectBtn){
           `;
         }
       } else if(r.state === "BONDING"){
-        phaseLabel.textContent = "MARKET • external routing";
+        phaseLabel.textContent = isPumpfunLaunchBackend() ? "BONDING • spawn complete" : "MARKET • external routing";
         statePill.textContent = visiblePhaseLabel;
         const bondProgress = bondingProgress01(r);
         const hotBonding = bondProgress >= 0.9;
@@ -5818,7 +5830,9 @@ if(connectBtn){
           if(!hotBonding && sparkEl) sparkEl.remove();
         }
         const progressLine = $("spawnProgressLine");
-        if(progressLine) progressLine.textContent = `External market routing will be used after spawn.`;
+        if(progressLine) progressLine.textContent = isPumpfunLaunchBackend()
+          ? "Spawn completed. External market routing follows launch."
+          : `External market routing will be used after spawn.`;
       } else {
         phaseLabel.textContent = "BONDED • spawn complete";
         statePill.textContent = "BONDED";
@@ -5831,7 +5845,9 @@ if(connectBtn){
         }
         const progressLine = $("spawnProgressLine");
         if(progressLine){
-          progressLine.textContent = `External market routing will be used after spawn.`;
+          progressLine.textContent = isPumpfunLaunchBackend()
+            ? "This launch has completed its Pingy spawn phase."
+            : `External market routing will be used after spawn.`;
         }
       }
 
@@ -5847,12 +5863,14 @@ if(connectBtn){
       }
       if(spawnClosed){
         if(spawnSuccessTitle){
-          spawnSuccessTitle.textContent = r.state === "BONDED"
-            ? "This launch has completed its Pingy spawn phase."
-            : "External market routing will be used after spawn.";
+          spawnSuccessTitle.textContent = isPumpfunPostSpawnRoom(r)
+            ? "Spawn completed. Trading for launched coins is handled outside Pingy."
+            : r.state === "BONDED"
+              ? "This launch has completed its Pingy spawn phase."
+              : "External market routing will be used after spawn.";
         }
         if(spawnSuccessText){
-          if(r.state === "BONDED"){
+          if(isPumpfunPostSpawnRoom(r) || r.state === "BONDED"){
             spawnSuccessText.textContent = "Trading for launched coins is handled outside Pingy.";
           } else {
             spawnSuccessText.textContent = claimState.hasClaimable
@@ -5865,7 +5883,7 @@ if(connectBtn){
           }
         }
         if(spawnSuccessActions){
-          const canClaimNow = !!connectedWallet && claimState.hasClaimable;
+          const canClaimNow = !!connectedWallet && claimState.hasClaimable && !isPumpfunPostSpawnRoom(r);
           spawnSuccessActions.style.display = canClaimNow ? "flex" : "none";
           if(claimSpawnBtn){
             claimSpawnBtn.disabled = !canClaimNow || !!r._spawnClaimInFlight;
@@ -5883,8 +5901,9 @@ if(connectBtn){
 
       const pingBtn = $("pingBtn");
       const unpingBtn = $("unpingBtn");
-      if(pingBtn) pingBtn.textContent = r.state === "SPAWNING" ? "ping" : "buy";
-      if(unpingBtn) unpingBtn.textContent = r.state === "SPAWNING" ? "unping" : "sell";
+      const isPumpPostSpawn = isPumpfunPostSpawnRoom(r);
+      if(pingBtn) pingBtn.textContent = isPumpPostSpawn ? "market external" : (r.state === "SPAWNING" ? "ping" : "buy");
+      if(unpingBtn) unpingBtn.textContent = isPumpPostSpawn ? "market external" : (r.state === "SPAWNING" ? "unping" : "sell");
 
       const bondedTradeLocked = r.state === "BONDED";
 
@@ -5894,8 +5913,8 @@ if(connectBtn){
 
       const bondedStatusPanel = $("bondedStatusPanel");
       const bondedStatusLine = $("bondedStatusLine");
-      if(bondedStatusPanel) bondedStatusPanel.style.display = r.state === "BONDED" ? "block" : "none";
-      if(bondedStatusLine && r.state === "BONDED") bondedStatusLine.textContent = "Trading for launched coins is handled outside Pingy.";
+      if(bondedStatusPanel) bondedStatusPanel.style.display = (r.state === "BONDED" || isPumpPostSpawn) ? "block" : "none";
+      if(bondedStatusLine && (r.state === "BONDED" || isPumpPostSpawn)) bondedStatusLine.textContent = "Trading for launched coins is handled outside Pingy.";
 
       setComposerState(r);
       renderChat(roomId);
@@ -5923,6 +5942,7 @@ if(connectBtn){
       const isSpawning = r.state === "SPAWNING";
       const isBonding = r.state === "BONDING";
       const isBonded = r.state === "BONDED";
+      const isPumpPostSpawn = isPumpfunPostSpawnRoom(r);
 
       const pingModalTitle = $("pingModalTitle");
       const unpingModalTitle = $("unpingModalTitle");
@@ -5934,25 +5954,29 @@ if(connectBtn){
       const unpingConfirm = $("unpingConfirm");
       const unpingAmount = $("unpingAmount");
 
-      if(pingModalTitle) pingModalTitle.textContent = isBonded ? "launched" : (isSpawning ? "ping" : "buy");
-      if(unpingModalTitle) unpingModalTitle.textContent = isBonded ? "launched" : (isSpawning ? "unping" : "sell");
+      if(pingModalTitle) pingModalTitle.textContent = isPumpPostSpawn ? "launch follow" : (isBonded ? "launched" : (isSpawning ? "ping" : "buy"));
+      if(unpingModalTitle) unpingModalTitle.textContent = isPumpPostSpawn ? "launch follow" : (isBonded ? "launched" : (isSpawning ? "unping" : "sell"));
       if(pingAmountUnit) pingAmountUnit.textContent = "SOL";
       if(unpingAmountUnit) unpingAmountUnit.textContent = isSpawning ? "SOL" : "tokens";
 
       if(pingModalHelp){
         pingModalHelp.textContent = isSpawning
           ? "During spawn, your ping funds escrow allocation. First ping may include small Solana network/storage costs and you can unping to withdraw before spawn completes."
-          : isBonded
-            ? "Trading for launched coins is handled outside Pingy."
-            : "Trading for launched coins is handled outside Pingy.";
+          : isPumpPostSpawn
+            ? "Launched coins trade outside Pingy. Pingy remains the coordination and watch layer."
+            : isBonded
+              ? "Trading for launched coins is handled outside Pingy."
+              : "Trading for launched coins is handled outside Pingy.";
       }
 
       if(unpingModalHelp){
         unpingModalHelp.textContent = isSpawning
           ? "During spawn, unping performs a full escrow withdraw and returns funds to your wallet (minus network fees)."
-          : isBonded
-            ? "Trading for launched coins is handled outside Pingy."
-            : "Trading for launched coins is handled outside Pingy.";
+          : isPumpPostSpawn
+            ? "Launched coins trade outside Pingy. Pingy remains the coordination and watch layer."
+            : isBonded
+              ? "Trading for launched coins is handled outside Pingy."
+              : "Trading for launched coins is handled outside Pingy.";
       }
 
       if(isSpawning){
@@ -5961,14 +5985,14 @@ if(connectBtn){
           unpingAmount.readOnly = true;
         }
         if(unpingConfirm) unpingConfirm.textContent = "unping (full withdraw)";
-      } else if(isBonding){
+      } else if(isBonding && !isPumpPostSpawn){
         if(unpingAmount){
           unpingAmount.value = "";
           unpingAmount.readOnly = false;
           unpingAmount.placeholder = "e.g. 100";
         }
         if(unpingConfirm) unpingConfirm.textContent = "sell";
-      } else if(isBonded){
+      } else if(isBonded || isPumpPostSpawn){
         if(unpingAmount){
           unpingAmount.value = "graduated";
           unpingAmount.readOnly = true;
@@ -5976,7 +6000,7 @@ if(connectBtn){
         if(unpingConfirm) unpingConfirm.textContent = "external routing";
       }
 
-      if(pingConfirm) pingConfirm.textContent = isBonded ? "external routing" : (isSpawning ? "ping" : "buy");
+      if(pingConfirm) pingConfirm.textContent = (isBonded || isPumpPostSpawn) ? "external routing" : (isSpawning ? "ping" : "buy");
     }
 
     function updatePingAllocationHint(roomId){
@@ -6011,7 +6035,7 @@ if(connectBtn){
       const r = roomById(rid);
       if(!r) return;
       r.onchain = state.onchain?.[rid] || r.onchain || {};
-      if(r.state === "BONDED"){
+      if(r.state === "BONDED" || isPumpfunPostSpawnRoom(r)){
         return alert("Trading for launched coins is handled outside Pingy.");
       }
       modalRoomId = rid;
@@ -6028,7 +6052,7 @@ if(connectBtn){
       const r = roomById(rid);
       if(!r) return;
       r.onchain = state.onchain?.[rid] || r.onchain || {};
-      if(r.state === "BONDED") return alert("Trading for launched coins is handled outside Pingy.");
+      if(r.state === "BONDED" || isPumpfunPostSpawnRoom(r)) return alert("Trading for launched coins is handled outside Pingy.");
       modalRoomId = rid;
       updateActionModalCopy(r);
       $("unpingRoomLine").textContent = `coin: ${r.name}  $${r.ticker}`;
@@ -6073,6 +6097,7 @@ if(connectBtn){
       const r = roomById(rid);
       if(!r) return;
       r.onchain = state.onchain?.[rid] || r.onchain || {};
+      if(isPumpfunPostSpawnRoom(r)) return alert("Trading for launched coins is handled outside Pingy.");
       const s = ($("pingAmount").value||"").trim();
       const solAmount = Number(s);
       if(!s || Number.isNaN(solAmount) || solAmount <= 0) return alert("enter a valid SOL amount.");
@@ -6215,6 +6240,7 @@ if(connectBtn){
       const r = roomById(rid);
       if(!r) return;
       r.onchain = state.onchain?.[rid] || r.onchain || {};
+      if(isPumpfunPostSpawnRoom(r)) return alert("Trading for launched coins is handled outside Pingy.");
       if(r.state === "SPAWNING"){
         const curLamports = await fetchConnectedWalletDepositLamports(rid);
         const cur = Number(curLamports || 0) / LAMPORTS_PER_SOL;
