@@ -107,6 +107,85 @@ const $ = (id) => document.getElementById(id);
       return "draft";
     }
 
+    function getExternalLaunchResultMint(result){
+      if(!result || typeof result !== "object") return "";
+      const candidates = [
+        result.mint,
+        result.external_mint,
+        result.token_mint,
+        result.tokenMint,
+        result.mint_address,
+        result.address,
+        result?.launch?.mint,
+        result?.launch?.token_mint,
+        result?.data?.mint,
+        result?.data?.token_mint,
+      ];
+      const mint = candidates.find((value) => typeof value === "string" && value.trim());
+      return typeof mint === "string" ? mint.trim() : "";
+    }
+
+    function getExternalLaunchResultUrl(result){
+      if(!result || typeof result !== "object") return "";
+      const candidates = [
+        result.url,
+        result.launch_url,
+        result.external_launch_url,
+        result.pumpfun_url,
+        result.link,
+        result?.launch?.url,
+        result?.launch?.launch_url,
+        result?.data?.url,
+        result?.data?.launch_url,
+      ];
+      const url = candidates.find((value) => typeof value === "string" && value.trim());
+      return typeof url === "string" ? url.trim() : "";
+    }
+
+    function getExternalLaunchResultStatus(result){
+      if(!result || typeof result !== "object") return "draft";
+      const explicit = [
+        result.status,
+        result.launch_status,
+        result.state,
+        result?.launch?.status,
+        result?.data?.status,
+      ];
+      for(const raw of explicit){
+        const normalized = normalizePumpfunLaunchStatus(raw);
+        if(raw != null && normalized !== "draft") return normalized;
+        if(String(raw || "").toLowerCase() === "draft") return "draft";
+      }
+      const liveAt = Number(result.live_at ?? result.liveAt ?? result?.launch?.live_at ?? result?.data?.live_at);
+      if(Number.isFinite(liveAt) && liveAt > 0) return "live";
+      if(result.live === true || result.is_live === true || result?.launch?.live === true) return "live";
+      const submittedAt = Number(result.submitted_at ?? result.submittedAt ?? result?.launch?.submitted_at ?? result?.data?.submitted_at);
+      if(Number.isFinite(submittedAt) && submittedAt > 0) return "submitted";
+      if(result.ok === true) return "submitted";
+      return "draft";
+    }
+
+    function normalizePumpfunLaunchResult(result, room){
+      const source = result && typeof result === "object" ? result : {};
+      const fallbackPayload = room ? buildPumpfunLaunchPayload(room) : null;
+      const submittedAt = Number(source.submitted_at ?? source.submittedAt ?? source?.launch?.submitted_at ?? source?.data?.submitted_at);
+      const liveAt = Number(source.live_at ?? source.liveAt ?? source?.launch?.live_at ?? source?.data?.live_at);
+      const payload = source.payload && typeof source.payload === "object"
+        ? source.payload
+        : (source?.launch?.payload && typeof source.launch.payload === "object"
+          ? source.launch.payload
+          : fallbackPayload);
+      return {
+        platform: String(source.platform || source.backend || source.external_platform || "pumpfun").toLowerCase() || "pumpfun",
+        status: getExternalLaunchResultStatus(source),
+        url: getExternalLaunchResultUrl(source),
+        mint: getExternalLaunchResultMint(source),
+        payload,
+        submitted_at: Number.isFinite(submittedAt) && submittedAt > 0 ? submittedAt : null,
+        live_at: Number.isFinite(liveAt) && liveAt > 0 ? liveAt : null,
+      };
+    }
+
     function isPumpfunRoom(room){
       return !!room && String(room.launch_backend || "").toLowerCase() === "pumpfun";
     }
@@ -291,6 +370,62 @@ const $ = (id) => document.getElementById(id);
       return String(room?.external_platform || "").toLowerCase();
     }
 
+    function getRoomTotalCommittedSol(room){
+      if(!room) return 0;
+      const snapshot = getRoomEscrowSnapshot(room);
+      return Number((snapshot.approvedWallets || []).reduce((sum, wallet) => {
+        return sum + Number(snapshot.byWallet?.[wallet]?.escrow_sol || 0);
+      }, 0));
+    }
+
+    function getRoomCreatorBuySol(room){
+      if(!room) return 0;
+      const direct = Number(room.creator_commit_sol);
+      if(Number.isFinite(direct) && direct > 0) return direct;
+      return Math.max(0, Number(creatorCommitSol(room) || 0));
+    }
+
+    function getRoomParticipantCommittedSol(room){
+      const total = Number(getRoomTotalCommittedSol(room) || 0);
+      const creatorBuy = Number(getRoomCreatorBuySol(room) || 0);
+      return Math.max(0, total - creatorBuy);
+    }
+
+    function getRoomLaunchFeeEstimateSol(room){
+      const total = Number(getRoomTotalCommittedSol(room) || 0);
+      if(total <= 0) return 0;
+      return total * (SPAWN_FEE_BPS / BPS_DENOM);
+    }
+
+    function getRoomLaunchNetSol(room){
+      const total = Number(getRoomTotalCommittedSol(room) || 0);
+      const fee = Number(getRoomLaunchFeeEstimateSol(room) || 0);
+      return Math.max(0, total - fee);
+    }
+
+    function getRoomExternalDistributionSummary(room){
+      const status = getRoomLaunchStatus(room);
+      const tokensReceived = Number(room?.external_tokens_received || 0);
+      const tokensDistributed = Number(room?.external_tokens_distributed || 0);
+      if(status !== "live") return { status: "pending", label: "pending" };
+      if(tokensReceived <= 0) return { status: "awaiting_token_receipt", label: "awaiting token receipt" };
+      if(tokensDistributed > 0 && tokensDistributed >= tokensReceived) return { status: "distributed", label: "complete" };
+      return { status: "ready", label: "ready" };
+    }
+
+    function getRoomExternalDistributionStatusLabel(room){
+      return getRoomExternalDistributionSummary(room).label;
+    }
+
+    function snapshotRoomLaunchVaultAccounting(room){
+      if(!room) return room;
+      room.launch_vault_sol = Number(getRoomTotalCommittedSol(room) || 0);
+      room.launch_fee_sol = Number(getRoomLaunchFeeEstimateSol(room) || 0);
+      room.launch_vault_net_sol = Number(getRoomLaunchNetSol(room) || 0);
+      room.launch_creator_buy_sol = Number(getRoomCreatorBuySol(room) || 0);
+      return room;
+    }
+
     function mirrorExternalLaunchLegacyFields(room, externalLaunch = null){
       if(!room || typeof room !== "object") return;
       const launchRecord = externalLaunch || getRoomExternalLaunchRecord(room);
@@ -462,10 +597,9 @@ const $ = (id) => document.getElementById(id);
     }
 
     function normalizeExternalLaunchSubmissionResult(result, room){
-      const fallbackPayload = room ? buildPumpfunLaunchPayload(room) : null;
       if(!result || typeof result !== "object") {
         const invalidResult = buildExternalLaunchErrorResult("Launch submission failed.");
-        invalidResult.payload = fallbackPayload;
+        invalidResult.payload = room ? buildPumpfunLaunchPayload(room) : null;
         return invalidResult;
       }
 
@@ -473,20 +607,18 @@ const $ = (id) => document.getElementById(id);
         const errorResult = buildExternalLaunchErrorResult(result.error || "Launch submission failed.");
         errorResult.payload = result.payload && typeof result.payload === "object"
           ? result.payload
-          : fallbackPayload;
+          : (room ? buildPumpfunLaunchPayload(room) : null);
         return errorResult;
       }
-
-      const submittedAt = Number(result.submitted_at);
-      const liveAt = Number(result.live_at);
+      const normalized = normalizePumpfunLaunchResult(result, room);
       return buildExternalLaunchSuccessResult({
-        platform: result.platform || "pumpfun",
-        status: result.status || "submitted",
-        url: typeof result.url === "string" ? result.url.trim() : "",
-        mint: typeof result.mint === "string" ? result.mint.trim() : "",
-        payload: result.payload && typeof result.payload === "object" ? result.payload : fallbackPayload,
-        submitted_at: Number.isFinite(submittedAt) && submittedAt > 0 ? submittedAt : null,
-        live_at: Number.isFinite(liveAt) && liveAt > 0 ? liveAt : null,
+        platform: normalized.platform || "pumpfun",
+        status: normalized.status || "submitted",
+        url: normalized.url,
+        mint: normalized.mint,
+        payload: normalized.payload,
+        submitted_at: normalized.submitted_at,
+        live_at: normalized.live_at,
       });
     }
 
@@ -614,6 +746,8 @@ const $ = (id) => document.getElementById(id);
           showToast(failedResult.error);
           return failedResult;
         }
+        snapshotRoomLaunchVaultAccounting(applied);
+        saveLaunchRecordsToLocalStorage();
         addSystemEvent(room.id, "Launch submitted to Pump.fun.");
         showToast("Launch submitted.");
         return result;
@@ -695,6 +829,19 @@ const $ = (id) => document.getElementById(id);
       const mode = String(launchMode || room.launch_mode || "spawn").toLowerCase() === "instant" ? "instant" : "spawn";
       const parsedCommit = Number(creatorCommitSol);
       const normalizedCommit = Number.isFinite(parsedCommit) && parsedCommit > 0 ? parsedCommit : 0;
+      const toSafeNumber = (value, fallback = 0) => {
+        const parsed = Number(value);
+        return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+      };
+      room.launch_vault_sol = toSafeNumber(room.launch_vault_sol, 0);
+      room.launch_vault_net_sol = toSafeNumber(room.launch_vault_net_sol, 0);
+      room.launch_fee_sol = toSafeNumber(room.launch_fee_sol, 0);
+      room.launch_creator_buy_sol = toSafeNumber(room.launch_creator_buy_sol, 0);
+      room.external_tokens_received = toSafeNumber(room.external_tokens_received, 0);
+      room.external_tokens_distributed = toSafeNumber(room.external_tokens_distributed, 0);
+      room.external_distribution_status = typeof room.external_distribution_status === "string" && room.external_distribution_status.trim()
+        ? room.external_distribution_status
+        : "pending";
       if(isPumpfunLaunchBackend()){
         room.launch_backend = "pumpfun";
         room.launch_status = normalizePumpfunLaunchStatus(room.launch_status);
@@ -735,24 +882,25 @@ const $ = (id) => document.getElementById(id);
       const room = roomById(roomId);
       if(!room || !result || typeof result !== "object") return null;
       if(result.ok === false) return null;
+      const normalizedResult = normalizePumpfunLaunchResult(result, room);
       normalizeLaunchRoom(room);
       const externalLaunch = normalizeExternalLaunchRecord(room);
       if(!externalLaunch) return null;
 
-      if(typeof result.status === "string"){
-        const nextStatus = normalizePumpfunLaunchStatus(result.status);
+      if(typeof normalizedResult.status === "string"){
+        const nextStatus = normalizePumpfunLaunchStatus(normalizedResult.status);
         if(["draft", "submitted", "live"].includes(nextStatus)) externalLaunch.status = nextStatus;
       }
-      if(typeof result.url === "string") externalLaunch.url = result.url.trim();
-      if(typeof result.mint === "string") externalLaunch.mint = result.mint.trim();
-      if(result.payload && typeof result.payload === "object") externalLaunch.payload = result.payload;
+      externalLaunch.url = normalizedResult.url;
+      externalLaunch.mint = normalizedResult.mint;
+      if(normalizedResult.payload && typeof normalizedResult.payload === "object") externalLaunch.payload = normalizedResult.payload;
 
-      const submittedAt = Number(result.submitted_at);
+      const submittedAt = Number(normalizedResult.submitted_at);
       if(Number.isFinite(submittedAt) && submittedAt > 0) externalLaunch.submitted_at = submittedAt;
-      const liveAt = Number(result.live_at);
+      const liveAt = Number(normalizedResult.live_at);
       if(Number.isFinite(liveAt) && liveAt > 0) externalLaunch.live_at = liveAt;
 
-      const platform = String(result.platform || "").toLowerCase();
+      const platform = String(normalizedResult.platform || "").toLowerCase();
       externalLaunch.backend = platform === "pumpfun" || !platform ? "pumpfun" : externalLaunch.backend;
 
       mirrorExternalLaunchLegacyFields(room, externalLaunch);
@@ -6304,6 +6452,11 @@ if(connectBtn){
         if(externalUrl) lines.push(`<div>External launch: <a href="${escapeText(externalUrl)}" target="_blank" rel="noopener noreferrer">${escapeText(externalUrl)}</a></div>`);
         const externalMint = getRoomExternalMint(r).trim();
         if(externalMint) lines.push(`<div>External mint: ${escapeText(externalMint)}</div>`);
+        if(isPumpfunRoom(r)){
+          lines.push(`<div>Distribution: ${escapeText(getRoomExternalDistributionStatusLabel(r))}</div>`);
+          const vaultNetSol = Number(r.launch_vault_net_sol || 0);
+          if(vaultNetSol > 0) lines.push(`<div>Launch vault net: ${vaultNetSol.toFixed(3)} SOL</div>`);
+        }
         launchTrustLines.innerHTML = lines.join("");
       }
 
