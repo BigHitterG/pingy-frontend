@@ -174,7 +174,79 @@ const $ = (id) => document.getElementById(id);
 
     function toSafeExternalTokenAmount(value, fallback = 0){
       const parsed = Number(value);
-      return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+      if(Number.isFinite(parsed) && parsed >= 0) return Math.floor(parsed);
+      const parsedFallback = Number(fallback);
+      return Number.isFinite(parsedFallback) && parsedFallback >= 0 ? Math.floor(parsedFallback) : 0;
+    }
+
+    function allocateProRataIntegerAmounts(totalTokens, rows){
+      const safeRows = Array.isArray(rows) ? rows : [];
+      if(!safeRows.length) return [];
+      const total = toSafeExternalTokenAmount(totalTokens, 0);
+      const normalized = safeRows.map((row, index) => ({
+        index,
+        wallet: typeof row?.wallet === "string" ? row.wallet : "",
+        committed_sol: Number(row?.committed_sol || 0),
+        weight: Number(row?.weight || 0),
+      })).filter((row) => row.wallet);
+      if(!normalized.length) return [];
+      if(total <= 0){
+        return normalized.map((row) => ({
+          wallet: row.wallet,
+          committed_sol: row.committed_sol,
+          weight: row.weight,
+          planned_tokens: 0,
+        }));
+      }
+      const totalWeight = normalized.reduce((sum, row) => sum + (Number.isFinite(row.weight) && row.weight > 0 ? row.weight : 0), 0);
+      if(totalWeight <= 0){
+        return normalized.map((row) => ({
+          wallet: row.wallet,
+          committed_sol: row.committed_sol,
+          weight: row.weight,
+          planned_tokens: 0,
+        }));
+      }
+
+      const ranked = normalized.map((row) => {
+        const safeWeight = Number.isFinite(row.weight) && row.weight > 0 ? row.weight : 0;
+        const exactShare = safeWeight > 0 ? ((total * safeWeight) / totalWeight) : 0;
+        const baseTokens = Math.floor(exactShare);
+        return {
+          ...row,
+          base_tokens: baseTokens,
+          fractional_remainder: exactShare - baseTokens,
+          planned_tokens: baseTokens,
+        };
+      });
+      const baseTotal = ranked.reduce((sum, row) => sum + Number(row.base_tokens || 0), 0);
+      let remainder = Math.max(0, total - baseTotal);
+      const remainderRank = ranked
+        .slice()
+        .sort((a, b) => {
+          if(b.fractional_remainder !== a.fractional_remainder) {
+            return b.fractional_remainder - a.fractional_remainder;
+          }
+          if(a.wallet !== b.wallet) {
+            return a.wallet.localeCompare(b.wallet);
+          }
+          return a.index - b.index;
+        });
+
+      for(const row of remainderRank){
+        if(remainder <= 0) break;
+        row.planned_tokens += 1;
+        remainder -= 1;
+      }
+
+      return ranked
+        .sort((a, b) => a.index - b.index)
+        .map((row) => ({
+          wallet: row.wallet,
+          committed_sol: row.committed_sol,
+          weight: row.weight,
+          planned_tokens: Number(row.planned_tokens || 0),
+        }));
     }
 
     function resolveRoomExternalDistributionStatus(room){
@@ -529,17 +601,15 @@ const $ = (id) => document.getElementById(id);
         return sum + Number(snapshot.byWallet?.[wallet]?.escrow_sol || 0);
       }, 0));
       const tokenPool = toSafeExternalTokenAmount(room?.external_tokens_received, 0);
-      const rows = wallets.map((wallet) => {
+      const weightedRows = wallets.map((wallet) => {
         const committedSol = Number(snapshot.byWallet?.[wallet]?.escrow_sol || 0);
-        const weight = totalWeight > 0 ? (committedSol / totalWeight) : 0;
-        const plannedTokens = tokenPool > 0 ? (tokenPool * weight) : 0;
         return {
           wallet,
           committed_sol: committedSol,
-          weight,
-          planned_tokens: plannedTokens,
+          weight: committedSol,
         };
       });
+      const rows = allocateProRataIntegerAmounts(tokenPool, weightedRows);
       return {
         locked_at: Date.now(),
         source_status: getRoomLaunchStatus(room),
@@ -561,9 +631,14 @@ const $ = (id) => document.getElementById(id);
           wallet: row.wallet,
           committed_sol: Number(row.committed_sol || 0),
           weight: Number(row.weight || 0),
-          planned_tokens: Number(row.planned_tokens || 0),
+          planned_tokens: toSafeExternalTokenAmount(row.planned_tokens, 0),
         }))
         : [];
+      room.external_distribution_total_tokens_planned = toSafeExternalTokenAmount(
+        room.distribution_snapshot_rows.reduce((sum, row) => sum + Number(row.planned_tokens || 0), 0),
+        0,
+      );
+      validateDistributionSnapshot(room);
       return room;
     }
 
@@ -572,23 +647,21 @@ const $ = (id) => document.getElementById(id);
       if(hasFrozenDistributionSnapshot(room)) return room.distribution_snapshot_rows;
       const snapshot = getRoomEscrowSnapshot(room);
       const wallets = getRoomEligibleDistributionWallets(room);
-      const totalWeight = Number(getRoomTotalDistributionWeight(room) || 0);
       const tokenPool = toSafeExternalTokenAmount(room?.external_tokens_received, 0);
-      return wallets.map((wallet) => {
+      const weightedRows = wallets.map((wallet) => {
         const committedSol = Number(snapshot.byWallet?.[wallet]?.escrow_sol || 0);
-        const weight = totalWeight > 0 ? (committedSol / totalWeight) : 0;
-        const plannedTokens = tokenPool > 0 ? (tokenPool * weight) : 0;
         return {
           wallet,
           committed_sol: committedSol,
-          weight,
-          planned_tokens: plannedTokens,
+          weight: committedSol,
         };
       });
+      return allocateProRataIntegerAmounts(tokenPool, weightedRows);
     }
 
     function getRoomPlannedDistributionTotal(room){
-      return Number(getRoomPlannedDistributionRows(room).reduce((sum, row) => sum + Number(row.planned_tokens || 0), 0));
+      const sum = getRoomPlannedDistributionRows(room).reduce((sum, row) => sum + Number(row.planned_tokens || 0), 0);
+      return toSafeExternalTokenAmount(sum, 0);
     }
 
     function getRoomPlannedDistributionRecipientCount(room){
@@ -598,7 +671,8 @@ const $ = (id) => document.getElementById(id);
     function snapshotRoomExternalDistributionPlan(room){
       if(!room || typeof room !== "object") return room;
       room.external_distribution_total_recipients = Number(getRoomPlannedDistributionRecipientCount(room) || 0);
-      room.external_distribution_total_tokens_planned = Number(getRoomPlannedDistributionTotal(room) || 0);
+      room.external_distribution_total_tokens_planned = toSafeExternalTokenAmount(getRoomPlannedDistributionTotal(room), 0);
+      validateDistributionSnapshot(room);
       return room;
     }
 
@@ -608,9 +682,66 @@ const $ = (id) => document.getElementById(id);
         mode: String(room?.external_distribution_mode || "pro_rata"),
         recipient_count: Number(rows.length || 0),
         total_tokens_received: toSafeExternalTokenAmount(room?.external_tokens_received, 0),
-        total_tokens_planned: Number(rows.reduce((sum, row) => sum + Number(row.planned_tokens || 0), 0)),
+        total_tokens_planned: toSafeExternalTokenAmount(rows.reduce((sum, row) => sum + Number(row.planned_tokens || 0), 0), 0),
         rows,
       };
+    }
+
+    function validateDistributionSnapshot(room){
+      if(!room || typeof room !== "object" || !isPumpfunRoom(room)) return true;
+      let valid = true;
+      const plannedRows = getRoomPlannedDistributionRows(room);
+      const plannedTotal = toSafeExternalTokenAmount(
+        plannedRows.reduce((sum, row) => sum + Number(row?.planned_tokens || 0), 0),
+        0,
+      );
+      const storedPlannedTotal = toSafeExternalTokenAmount(room.external_distribution_total_tokens_planned, 0);
+      const hasInvalidPlannedRow = plannedRows.some((row) => {
+        const planned = Number(row?.planned_tokens);
+        return !Number.isInteger(planned) || planned < 0;
+      });
+      if(hasInvalidPlannedRow){
+        valid = false;
+        console.warn("[pingy] distribution planned rows invalid", {
+          roomId: room.id,
+          rows: plannedRows,
+        });
+      }
+      if(plannedTotal !== storedPlannedTotal){
+        valid = false;
+        console.warn("[pingy] distribution planned total mismatch", {
+          roomId: room.id,
+          plannedTotal,
+          storedPlannedTotal,
+        });
+      }
+      if(hasFrozenDistributionSnapshot(room)){
+        const frozenRows = Array.isArray(room.distribution_snapshot_rows) ? room.distribution_snapshot_rows : [];
+        const frozenTotal = toSafeExternalTokenAmount(
+          frozenRows.reduce((sum, row) => sum + Number(row?.planned_tokens || 0), 0),
+          0,
+        );
+        const hasInvalidFrozenRow = frozenRows.some((row) => {
+          const planned = Number(row?.planned_tokens);
+          return !Number.isInteger(planned) || planned < 0;
+        });
+        if(hasInvalidFrozenRow){
+          valid = false;
+          console.warn("[pingy] distribution frozen rows invalid", {
+            roomId: room.id,
+            rows: frozenRows,
+          });
+        }
+        if(frozenTotal !== storedPlannedTotal){
+          valid = false;
+          console.warn("[pingy] distribution frozen total mismatch", {
+            roomId: room.id,
+            frozenTotal,
+            storedPlannedTotal,
+          });
+        }
+      }
+      return valid;
     }
 
     function snapshotRoomLaunchVaultAccounting(room){
@@ -1060,6 +1191,7 @@ const $ = (id) => document.getElementById(id);
       room.external_tokens_distributed = room.external_distribution_total_tokens_sent;
       room.external_distribution_updated_at = Date.now();
       room.external_distribution_status = "distributed";
+      validateDistributionSnapshot(room);
       console.debug("[pingy] distribution preview", buildRoomDistributionPreview(room));
       addSystemEvent(room.id, "Distribution marked complete (dev simulation).");
       renderRoom(room.id);
@@ -1091,18 +1223,18 @@ const $ = (id) => document.getElementById(id);
       room.launch_vault_net_sol = toSafeNumber(room.launch_vault_net_sol, 0);
       room.launch_fee_sol = toSafeNumber(room.launch_fee_sol, 0);
       room.launch_creator_buy_sol = toSafeNumber(room.launch_creator_buy_sol, 0);
-      room.external_tokens_received = toSafeNumber(room.external_tokens_received, 0);
-      room.external_tokens_distributed = toSafeNumber(room.external_tokens_distributed, 0);
+      room.external_tokens_received = toSafeExternalTokenAmount(room.external_tokens_received, 0);
+      room.external_tokens_distributed = toSafeExternalTokenAmount(room.external_tokens_distributed, 0);
       room.external_distribution_mode = String(room.external_distribution_mode || "pro_rata").trim() || "pro_rata";
       room.external_distribution_updated_at = Number.isFinite(Number(room.external_distribution_updated_at)) && Number(room.external_distribution_updated_at) > 0
         ? Number(room.external_distribution_updated_at)
         : null;
       room.external_distribution_notes = typeof room.external_distribution_notes === "string" ? room.external_distribution_notes : "";
       room.external_distribution_total_recipients = toSafeNumber(room.external_distribution_total_recipients, 0);
-      room.external_distribution_total_tokens_planned = toSafeNumber(room.external_distribution_total_tokens_planned, 0);
-      room.external_distribution_total_tokens_sent = toSafeNumber(
+      room.external_distribution_total_tokens_planned = toSafeExternalTokenAmount(room.external_distribution_total_tokens_planned, 0);
+      room.external_distribution_total_tokens_sent = toSafeExternalTokenAmount(
         room.external_distribution_total_tokens_sent,
-        toSafeNumber(room.external_tokens_distributed, 0),
+        toSafeExternalTokenAmount(room.external_tokens_distributed, 0),
       );
       room.distribution_snapshot_locked_at = Number.isFinite(Number(room.distribution_snapshot_locked_at)) && Number(room.distribution_snapshot_locked_at) > 0
         ? Number(room.distribution_snapshot_locked_at)
@@ -1117,7 +1249,7 @@ const $ = (id) => document.getElementById(id);
           wallet: typeof row?.wallet === "string" ? row.wallet : "",
           committed_sol: toSafeNumber(row?.committed_sol, 0),
           weight: toSafeNumber(row?.weight, 0),
-          planned_tokens: toSafeNumber(row?.planned_tokens, 0),
+          planned_tokens: toSafeExternalTokenAmount(row?.planned_tokens, 0),
         })).filter((row) => row.wallet)
         : [];
       snapshotRoomExternalDistributionPlan(room);
@@ -1209,6 +1341,7 @@ const $ = (id) => document.getElementById(id);
         freezeRoomDistributionSnapshot(room);
         snapshotRoomExternalDistributionPlan(room);
       }
+      validateDistributionSnapshot(room);
 
       mirrorExternalLaunchLegacyFields(room, externalLaunch);
       console.log("[pingy] applied external launch result", {
