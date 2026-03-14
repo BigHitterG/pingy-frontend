@@ -1433,7 +1433,7 @@ const $ = (id) => document.getElementById(id);
 
       if(status){
         if(room?.state === "SPAWNING") status.textContent = "spawn accumulation lifecycle chart";
-        else if(room?.state === "BONDED") status.textContent = "bonded lifecycle chart";
+        else if(room?.state === "BONDED") status.textContent = isPumpfunLaunchBackend() ? "external market lifecycle chart" : "bonded lifecycle chart";
         else status.textContent = "spawn to market lifecycle chart";
       }
 
@@ -4177,7 +4177,7 @@ if(connectBtn){
       const isBonded = r.state === "BONDED";
       const barClass = isHotBonding ? "bar barActive barBonding barHot" : "bar barActive barBonding";
       const subline = isBonded
-        ? "Graduated from bonding"
+        ? (isPumpfunLaunchBackend() ? "Trading handled outside Pingy" : "Graduated from bonding")
         : escapeText(r.desc || "—");
 
       return `
@@ -4186,7 +4186,7 @@ if(connectBtn){
           <div style="min-width:0;">
             <div class="row" style="justify-content:space-between;align-items:baseline;">
               <div class="name">${escapeText(r.name)} <span class="k">$${escapeText(r.ticker)}</span></div>
-              <span class="k">${chip}${isBonded ? " • graduated" : ""}</span>
+              <span class="k">${chip}${isBonded ? (isPumpfunLaunchBackend() ? " • live external" : " • graduated") : ""}</span>
             </div>
             <div class="tiny subline">${subline}</div>
             <div class="${barClass}"><i style="width:${pct}%"></i>${isHotBonding ? `<span class="barSpark"></span>` : ""}</div>
@@ -4492,8 +4492,8 @@ if(connectBtn){
       const system = msgs.find((m) => m && String(m.text || "").trim());
       if(system) return String(system.text).trim().slice(0, 90);
       if(room?.state === "SPAWNING") return "Spawn discussion active";
-      if(room?.state === "BONDING") return "Market is live";
-      if(room?.state === "BONDED") return "Graduated from bonding";
+      if(room?.state === "BONDING") return isPumpfunLaunchBackend() ? "Submitted • pending external market" : "Market is live";
+      if(room?.state === "BONDED") return isPumpfunLaunchBackend() ? "Spawn completed • trading external" : "Graduated from bonding";
       return "Thread active";
     }
 
@@ -4688,7 +4688,6 @@ if(connectBtn){
     }
 
     $("searchBtn").addEventListener("click", runExploreSearch);
-    $("moveCardsBtn")?.addEventListener("click", moveBottomLiveCardToTop);
     $("searchInput").addEventListener("keydown", (e) => {
       if(e.key === "Enter"){ e.preventDefault(); runExploreSearch(); }
     });
@@ -5707,7 +5706,7 @@ if(connectBtn){
         if(requiredWallets !== null) lines.push(`<div>Approved wallets: ${approvedCount} / ${requiredWallets}</div>`);
         else lines.push(`<div>Approved wallets: ${approvedCount} / —</div>`);
         if(maxWalletSharePct !== null){
-          const shareLabel = r.state === "BONDING" || r.state === "BONDED"
+          const shareLabel = (r.state === "BONDING" || r.state === "BONDED") && isNativeLaunchBackend()
             ? "Max wallet share (formation)"
             : "Max wallet share";
           lines.push(`<div>${shareLabel}: ${maxWalletSharePct}%</div>`);
@@ -5931,7 +5930,7 @@ if(connectBtn){
           `;
         }
       } else if(r.state === "BONDING"){
-        phaseLabel.textContent = isPumpfunLaunchBackend() ? "BONDING • spawn complete" : "MARKET • external routing";
+        phaseLabel.textContent = isPumpfunLaunchBackend() ? "SUBMITTED • pending external market" : "MARKET • external routing";
         statePill.textContent = visiblePhaseLabel;
         const bondProgress = bondingProgress01(r);
         const hotBonding = bondProgress >= 0.9;
@@ -5949,10 +5948,10 @@ if(connectBtn){
         }
         const progressLine = $("spawnProgressLine");
         if(progressLine) progressLine.textContent = isPumpfunLaunchBackend()
-          ? "Spawn completed. External market routing follows launch."
+          ? "Spawn completed. Trading follows external launch."
           : `External market routing will be used after spawn.`;
       } else {
-        phaseLabel.textContent = "BONDED • spawn complete";
+        phaseLabel.textContent = isPumpfunLaunchBackend() ? "LIVE EXTERNAL • spawn complete" : "BONDED • spawn complete";
         statePill.textContent = "BONDED";
         phaseBar.style.width = "100%";
         phaseBar.style.background = "#46d36f";
