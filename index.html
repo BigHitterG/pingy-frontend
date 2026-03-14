@@ -38,7 +38,7 @@
         <div class="collapseBody" id="createCoinBody">
           <div class="col" style="gap:10px;">
             <div class="panel">
-              <div class="muted" style="margin-bottom:8px;">spawns later • can exit anytime before spawn</div>
+              <div class="muted" style="margin-bottom:8px;">community launch room • launches to market after spawn</div>
               <div class="h">details</div>
               <div class="muted">name</div>
               <input id="newName" placeholder="e.g. cats" maxlength="32" />
@@ -83,7 +83,7 @@
                 </div>
                 <div class="muted tiny" id="presetCapHint" style="margin-top:6px;">Cap per wallet: 0.350 SOL (7%) • Launch requires 20 approved wallets and 5.0 SOL.</div>
               </div>
-              <div class="muted tiny" id="instantLaunchHint" style="margin-top:6px; display:none;">Launches immediately to bonding curve. No spawn phase.</div>
+              <div class="muted tiny" id="instantLaunchHint" style="margin-top:6px; display:none;">Launches directly to market routing. No spawn phase.</div>
               <div class="row" style="margin-top:8px; justify-content:space-between;">
                 <div class="muted">coin image</div>
                 <button class="infoIconBtn" id="coinImageInfoBtn" type="button" aria-expanded="false" title="image requirements">i</button>
@@ -128,13 +128,13 @@
             </div>
 
             <div class="panel">
-              <div class="h">optional commit</div>
-              <div class="muted">you are committing SOL escrow. this is returned to you as creator if you unping before spawn.</div>
+              <div class="h">optional creator buy</div>
+              <div class="muted">Optional creator buy used at launch.</div>
               <div class="row" style="margin-top:8px;">
                 <div class="muted" style="min-width:120px;">SOL</div>
                 <input id="newCommit" placeholder="e.g. 0.50" inputmode="decimal" style="max-width:220px;" />
               </div>
-              <div class="muted" style="margin-top:8px;">creators also incur a small spawn-pool creation fee for the community escrow pool. this fee is not returned.</div>
+              <div class="muted" style="margin-top:8px;">Launch fees and creator buy routing will be finalized during launch.</div>
             </div>
 
             <div class="row" style="justify-content:flex-end;">
@@ -167,7 +167,7 @@
         <div class="panel" style="margin-top:10px;">
           <div class="row" style="justify-content:space-between;align-items:baseline;">
             <div class="h" style="margin:0;">live</div>
-            <div class="muted">spawning → bonding → bonded</div>
+            <div class="muted">spawning → external market → bonded</div>
           </div>
           <div class="cardsRow" id="cardsRow" style="margin-top:8px;"></div>
         </div>
@@ -282,7 +282,7 @@
       </div>
 
       <div class="panel" id="bondedStatusPanel" style="margin-bottom:8px; display:none;">
-        <div class="muted tiny" id="bondedStatusLine">This coin has graduated from bonding.</div>
+        <div class="muted tiny" id="bondedStatusLine">This launch has completed its Pingy spawn phase.</div>
       </div>
 
       <div class="panel" id="launchTrustPanel" style="margin-bottom:8px;">
@@ -492,7 +492,7 @@
             <input id="pingAmount" placeholder="e.g. 0.10" inputmode="decimal" style="max-width:220px;" />
             <button class="btn subtle" id="pingMaxBtn" type="button">MAX</button>
           </div>
-          <div class="muted" id="pingModalHelp" style="margin-top:8px;">first ping may include a small Solana network/storage cost. you can fully unping before spawn to withdraw your escrow (minus network fees).</div>
+          <div class="muted" id="pingModalHelp" style="margin-top:8px;">first ping may include a small Solana network/storage cost during spawn setup.</div>
           <div class="muted" id="pingAllocationHint" style="margin-top:8px;">This will allocate up to 0.000 SOL, remainder stays refundable.</div>
         </div>
 
