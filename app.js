@@ -92,7 +92,7 @@ const $ = (id) => document.getElementById(id);
     }
 
     function launchStatusLabel(room){
-      const status = normalizePumpfunLaunchStatus(room?.launch_status);
+      const status = getRoomLaunchStatus(room);
       if(status === "submitted") return "Submitted to Pump.fun";
       if(status === "live") return "Live externally";
       return "Draft";
@@ -109,6 +109,73 @@ const $ = (id) => document.getElementById(id);
       return !!room && String(room.launch_backend || "").toLowerCase() === "pumpfun";
     }
 
+    function normalizeExternalLaunchRecord(room){
+      if(!room || typeof room !== "object") return null;
+      const legacyStatus = normalizePumpfunLaunchStatus(room.launch_status);
+      const legacyPlatform = typeof room.external_platform === "string" ? room.external_platform : "";
+      const legacyUrl = typeof room.external_launch_url === "string" ? room.external_launch_url : "";
+      const legacyMint = typeof room.external_mint === "string" ? room.external_mint : "";
+      const legacyPayload = room._lastLaunchPayload && typeof room._lastLaunchPayload === "object" ? room._lastLaunchPayload : null;
+      const existing = room.external_launch && typeof room.external_launch === "object" ? room.external_launch : null;
+      const inferredBackend = String(existing?.backend || legacyPlatform || room.launch_backend || "").toLowerCase() === "pumpfun" ? "pumpfun" : "";
+
+      if(!existing && !isPumpfunRoom(room) && inferredBackend !== "pumpfun"){
+        room.external_launch = null;
+        return null;
+      }
+
+      const submittedAt = Number(existing?.submitted_at);
+      const liveAt = Number(existing?.live_at);
+      const normalized = {
+        backend: "pumpfun",
+        status: normalizePumpfunLaunchStatus(existing?.status || legacyStatus),
+        submitted_at: Number.isFinite(submittedAt) && submittedAt > 0 ? submittedAt : null,
+        live_at: Number.isFinite(liveAt) && liveAt > 0 ? liveAt : null,
+        url: typeof existing?.url === "string" ? existing.url : legacyUrl,
+        mint: typeof existing?.mint === "string" ? existing.mint : legacyMint,
+        payload: existing?.payload && typeof existing.payload === "object" ? existing.payload : legacyPayload,
+      };
+      room.external_launch = normalized;
+
+      room.launch_status = normalized.status;
+      room.external_platform = "pumpfun";
+      room.external_launch_url = normalized.url;
+      room.external_mint = normalized.mint;
+      if(normalized.payload) room._lastLaunchPayload = normalized.payload;
+
+      return normalized;
+    }
+
+    function getRoomLaunchStatus(room){
+      const recordStatus = room?.external_launch?.status;
+      if(recordStatus) return normalizePumpfunLaunchStatus(recordStatus);
+      return normalizePumpfunLaunchStatus(room?.launch_status);
+    }
+
+    function getRoomExternalLaunchUrl(room){
+      const recordUrl = typeof room?.external_launch?.url === "string" ? room.external_launch.url : "";
+      if(recordUrl.trim()) return recordUrl;
+      return typeof room?.external_launch_url === "string" ? room.external_launch_url : "";
+    }
+
+    function getRoomExternalMint(room){
+      const recordMint = typeof room?.external_launch?.mint === "string" ? room.external_launch.mint : "";
+      if(recordMint.trim()) return recordMint;
+      return typeof room?.external_mint === "string" ? room.external_mint : "";
+    }
+
+    function getRoomExternalPlatform(room){
+      const recordBackend = String(room?.external_launch?.backend || "").toLowerCase();
+      if(recordBackend) return recordBackend;
+      return String(room?.external_platform || "").toLowerCase();
+    }
+
+    function formatLaunchTimestamp(ts){
+      const num = Number(ts);
+      if(!Number.isFinite(num) || num <= 0) return "";
+      return new Date(num).toLocaleString();
+    }
+
     function isRoomAdminWallet(room, wallet){
       if(!room || !wallet) return false;
       const thread = state.onchain?.[room.id] || room.onchain || {};
@@ -120,14 +187,14 @@ const $ = (id) => document.getElementById(id);
       if(!connectedWallet || !room) return false;
       if(!isPumpfunRoom(room)) return false;
       if(room.state !== "SPAWNING") return false;
-      if(normalizePumpfunLaunchStatus(room.launch_status) !== "draft") return false;
+      if(getRoomLaunchStatus(room) !== "draft") return false;
       return isCreator(room, connectedWallet) || isApprover(room, connectedWallet) || isRoomAdminWallet(room, connectedWallet);
     }
 
     function canCurrentWalletMarkLiveExternally(room){
       if(!DEV_SIMULATION || !connectedWallet || !room) return false;
       if(!isPumpfunRoom(room)) return false;
-      const status = normalizePumpfunLaunchStatus(room.launch_status);
+      const status = getRoomLaunchStatus(room);
       if(status !== "draft" && status !== "submitted") return false;
       return isCreator(room, connectedWallet) || isApprover(room, connectedWallet) || isRoomAdminWallet(room, connectedWallet);
     }
@@ -152,7 +219,7 @@ const $ = (id) => document.getElementById(id);
         maxWalletShareBps: Number(room.max_wallet_share_bps || 0),
         fundingMode: room.funding_mode || "vault",
         launchBackend: room.launch_backend || "pumpfun",
-        externalPlatform: room.external_platform || "pumpfun",
+        externalPlatform: getRoomExternalPlatform(room) || "pumpfun",
       };
     }
 
@@ -170,7 +237,7 @@ const $ = (id) => document.getElementById(id);
         showToast("Launch handoff is only available during spawn formation.");
         return null;
       }
-      if(normalizePumpfunLaunchStatus(room.launch_status) !== "draft"){
+      if(getRoomLaunchStatus(room) !== "draft"){
         showToast("Launch handoff has already been submitted.");
         return null;
       }
@@ -179,6 +246,13 @@ const $ = (id) => document.getElementById(id);
         return null;
       }
       const payload = buildPumpfunLaunchPayload(room);
+      const externalLaunch = normalizeExternalLaunchRecord(room);
+      if(externalLaunch){
+        externalLaunch.backend = "pumpfun";
+        externalLaunch.status = "submitted";
+        externalLaunch.submitted_at = Date.now();
+        externalLaunch.payload = payload;
+      }
       room.launch_status = "submitted";
       room.external_platform = "pumpfun";
       room._lastLaunchPayload = payload;
@@ -198,13 +272,20 @@ const $ = (id) => document.getElementById(id);
         showToast("Mark live is limited to dev simulation creator/approver/admin controls.");
         return false;
       }
-
-      room.launch_status = "live";
-      room.external_platform = room.external_platform || "pumpfun";
+      const externalLaunch = normalizeExternalLaunchRecord(room);
       const nextUrl = typeof externalLaunchUrl === "string" ? externalLaunchUrl.trim() : "";
       const nextMint = typeof externalMint === "string" ? externalMint.trim() : "";
-      if(nextUrl) room.external_launch_url = nextUrl;
-      if(nextMint) room.external_mint = nextMint;
+      if(externalLaunch){
+        externalLaunch.status = "live";
+        externalLaunch.live_at = Date.now();
+        if(nextUrl) externalLaunch.url = nextUrl;
+        if(nextMint) externalLaunch.mint = nextMint;
+      }
+
+      room.launch_status = "live";
+      room.external_platform = getRoomExternalPlatform(room) || "pumpfun";
+      room.external_launch_url = externalLaunch ? externalLaunch.url : (room.external_launch_url || "");
+      room.external_mint = externalLaunch ? externalLaunch.mint : (room.external_mint || "");
 
       addSystemEvent(room.id, "Launch is now live externally.");
       renderRoom(room.id);
@@ -215,7 +296,7 @@ const $ = (id) => document.getElementById(id);
     function openExternalLaunchForRoom(roomId){
       const room = roomById(roomId);
       if(!room) return;
-      const url = typeof room.external_launch_url === "string" ? room.external_launch_url.trim() : "";
+      const url = getRoomExternalLaunchUrl(room).trim();
       if(!url){
         showToast("No external launch URL yet.");
         return;
@@ -238,6 +319,18 @@ const $ = (id) => document.getElementById(id);
         room.creator_commit_sol = normalizedCommit;
         room.state = "SPAWNING";
         room.market_cap_usd = 0;
+        const externalLaunch = normalizeExternalLaunchRecord(room);
+        if(externalLaunch){
+          externalLaunch.backend = "pumpfun";
+          externalLaunch.status = normalizePumpfunLaunchStatus(externalLaunch.status || room.launch_status);
+          externalLaunch.url = room.external_launch_url;
+          externalLaunch.mint = room.external_mint;
+          if(room._lastLaunchPayload && typeof room._lastLaunchPayload === "object") externalLaunch.payload = room._lastLaunchPayload;
+          room.launch_status = externalLaunch.status;
+          room.external_platform = "pumpfun";
+          room.external_launch_url = externalLaunch.url;
+          room.external_mint = externalLaunch.mint;
+        }
       } else {
         room.launch_backend = room.launch_backend || "native";
         room.launch_status = normalizePumpfunLaunchStatus(room.launch_status);
@@ -247,7 +340,42 @@ const $ = (id) => document.getElementById(id);
         room.funding_mode = room.funding_mode || "vault";
         if(typeof room.creator_commit_sol !== "number") room.creator_commit_sol = normalizedCommit;
         if(mode === "instant") room.state = room.state || "BONDING";
+        normalizeExternalLaunchRecord(room);
       }
+      return room;
+    }
+
+    function applyExternalLaunchResult(roomId, result = {}){
+      const room = roomById(roomId);
+      if(!room || !result || typeof result !== "object") return null;
+      normalizeLaunchRoom(room);
+      const externalLaunch = normalizeExternalLaunchRecord(room);
+      if(!externalLaunch) return null;
+
+      if(typeof result.status === "string"){
+        const nextStatus = normalizePumpfunLaunchStatus(result.status);
+        if(["draft", "submitted", "live"].includes(nextStatus)) externalLaunch.status = nextStatus;
+      }
+      if(typeof result.url === "string") externalLaunch.url = result.url.trim();
+      if(typeof result.mint === "string") externalLaunch.mint = result.mint.trim();
+      if(result.payload && typeof result.payload === "object") externalLaunch.payload = result.payload;
+
+      const submittedAt = Number(result.submitted_at);
+      if(Number.isFinite(submittedAt) && submittedAt > 0) externalLaunch.submitted_at = submittedAt;
+      const liveAt = Number(result.live_at);
+      if(Number.isFinite(liveAt) && liveAt > 0) externalLaunch.live_at = liveAt;
+
+      const platform = String(result.platform || "").toLowerCase();
+      externalLaunch.backend = platform === "pumpfun" || !platform ? "pumpfun" : externalLaunch.backend;
+
+      room.launch_status = externalLaunch.status;
+      room.external_platform = externalLaunch.backend;
+      room.external_launch_url = externalLaunch.url;
+      room.external_mint = externalLaunch.mint;
+      if(externalLaunch.payload) room._lastLaunchPayload = externalLaunch.payload;
+
+      renderRoom(room.id);
+      renderHome();
       return room;
     }
 
@@ -4555,7 +4683,7 @@ if(connectBtn){
       if(system) return String(system.text).trim().slice(0, 90);
       if(room?.state === "SPAWNING") return "Spawn discussion active";
       if(isPumpfunRoom(room)){
-        const status = normalizePumpfunLaunchStatus(room?.launch_status);
+        const status = getRoomLaunchStatus(room);
         if(status === "submitted") return "Submitted to Pump.fun • Pending external market";
         if(status === "live") return "Live externally • Trading handled outside Pingy";
         return "Spawn in progress • Draft";
@@ -5786,14 +5914,20 @@ if(connectBtn){
         lines.push(`<div>Launch type: ${launchTypeLabel}</div>`);
         lines.push(`<div>Launch backend: ${isPumpfunRoom(r) ? "Pump.fun" : "Native"}</div>`);
         lines.push(`<div>Launch status: ${launchStatusLabel(r)}</div>`);
-        if(r.external_launch_url) lines.push(`<div>External launch: <a href="${escapeText(r.external_launch_url)}" target="_blank" rel="noopener noreferrer">${escapeText(r.external_launch_url)}</a></div>`);
-        if(r.external_mint) lines.push(`<div>External mint: ${escapeText(r.external_mint)}</div>`);
+        const externalUrl = getRoomExternalLaunchUrl(r).trim();
+        if(externalUrl) lines.push(`<div>External launch: <a href="${escapeText(externalUrl)}" target="_blank" rel="noopener noreferrer">${escapeText(externalUrl)}</a></div>`);
+        const externalMint = getRoomExternalMint(r).trim();
+        if(externalMint) lines.push(`<div>External mint: ${escapeText(externalMint)}</div>`);
+        const submittedLabel = formatLaunchTimestamp(r.external_launch?.submitted_at);
+        const liveLabel = formatLaunchTimestamp(r.external_launch?.live_at);
+        if(isPumpfunRoom(r) && submittedLabel) lines.push(`<div>Submitted: ${escapeText(submittedLabel)}</div>`);
+        if(isPumpfunRoom(r) && liveLabel) lines.push(`<div>Live: ${escapeText(liveLabel)}</div>`);
         launchTrustLines.innerHTML = lines.join("");
       }
 
       const openPumpfunBtn = $("openPumpfunBtn");
       if(openPumpfunBtn){
-        const hasExternalUrl = typeof r.external_launch_url === "string" && r.external_launch_url.trim().length > 0;
+        const hasExternalUrl = getRoomExternalLaunchUrl(r).trim().length > 0;
         const showOpenButton = isPumpfunRoom(r) && hasExternalUrl;
         openPumpfunBtn.style.display = showOpenButton ? "inline-block" : "none";
       }
