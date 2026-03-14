@@ -954,7 +954,7 @@ const $ = (id) => document.getElementById(id);
       const url = getRoomExternalLaunchUrl(room);
       const mint = getRoomExternalMint(room);
       const payload = record?.payload || room?._lastLaunchPayload || null;
-      console.log("[pingy] launch record", {
+      if(DEBUG_EXTERNAL_STATUS) console.log("[pingy] launch record", {
         roomId,
         status,
         url,
@@ -1029,6 +1029,16 @@ const $ = (id) => document.getElementById(id);
       return true;
     }
 
+    function hasConfiguredEndpoint(value){
+      return typeof value === "string" && value.trim().length > 0;
+    }
+
+    function shouldUseDevMockEndpoint(endpoint){
+      return DEV_SIMULATION && !hasConfiguredEndpoint(endpoint);
+    }
+
+    // Pump.fun status request contract sent by Pingy
+    // { roomId, mint, launchUrl, launchStatus, distributionStatus, settlementStatus }
     function buildPumpfunStatusRequest(room){
       return {
         roomId: String(room?.id || "").trim(),
@@ -1073,6 +1083,8 @@ const $ = (id) => document.getElementById(id);
       };
     }
 
+    // Pump.fun settlement request contract sent by Pingy
+    // { roomId, platform, mint, launchUrl, distributionMode, totalTokensReceived, totalTokensPlanned, totalTokensSent, recipientCount, snapshotLockedAt, rows: [{ wallet, plannedTokens, sentTokens, remainingTokens, status }] }
     function buildPumpfunSettlementRequest(room){
       const payload = buildPumpfunSettlementPayload(room);
       const snapshotLockedAt = Number(payload.snapshotLockedAt);
@@ -1267,14 +1279,21 @@ const $ = (id) => document.getElementById(id);
     }
 
     async function fetchPumpfunRoomStatus(room){
+      // a) validate room
       if(!room) return buildExternalLaunchErrorResult("Room not found.");
+
+      // b) resolve endpoint
       const endpoint = getPumpfunStatusEndpoint();
-      if(!endpoint){
-        if(DEV_SIMULATION) return buildExternalStatusMockResult(room);
-        return buildExternalLaunchErrorResult("No status endpoint configured.");
-      }
+
+      // c) dev mock fallback path
+      if(shouldUseDevMockEndpoint(endpoint)) return buildExternalStatusMockResult(room);
+
+      // d) non-dev missing endpoint path
+      if(!hasConfiguredEndpoint(endpoint)) return buildExternalLaunchErrorResult("No status endpoint configured.");
 
       const payload = buildPumpfunStatusRequest(room);
+
+      // e) live POST path
       const response = await postJsonToEndpoint(endpoint, payload, { defaultErrorMessage: "Status refresh failed" });
       if(!response.ok) return buildExternalLaunchErrorResult(response.error || "Status refresh failed.");
       return response.data;
@@ -1449,12 +1468,20 @@ const $ = (id) => document.getElementById(id);
     }
 
     async function submitPumpfunSettlement(room){
+      // a) validate room
       if(!room) return buildExternalSettlementErrorResult("Room not found.");
       const payload = buildPumpfunSettlementRequest(room);
-      if(DEV_SIMULATION) return submitPumpfunSettlementMock(room);
-      const endpoint = getPumpfunSettlementEndpoint();
-      if(!endpoint) return submitPumpfunSettlementMock(room);
 
+      // b) resolve endpoint
+      const endpoint = getPumpfunSettlementEndpoint();
+
+      // c) dev mock fallback path
+      if(shouldUseDevMockEndpoint(endpoint)) return submitPumpfunSettlementMock(room);
+
+      // d) non-dev missing endpoint path
+      if(!hasConfiguredEndpoint(endpoint)) return buildExternalSettlementErrorResult("No settlement endpoint configured.");
+
+      // e) live POST path
       const response = await postJsonToEndpoint(endpoint, payload, { defaultErrorMessage: "Settlement submission failed" });
       if(!response.ok) return buildExternalSettlementErrorResult(response.error || "Settlement submission failed.");
       return response.data;
@@ -1545,6 +1572,8 @@ const $ = (id) => document.getElementById(id);
       };
     }
 
+    // Pump.fun launch request contract sent by Pingy
+    // { roomId, name, symbol, description, image, banner, twitter, telegram, website, creatorWallet, creatorBuySol, launchMode, launchPreset, minApprovedWallets, spawnTargetSol, maxWalletShareBps, fundingMode, launchBackend, externalPlatform }
     function buildPumpfunLaunchRequest(room){
       const payload = buildPumpfunLaunchPayload(room);
       return {
@@ -1674,14 +1703,20 @@ const $ = (id) => document.getElementById(id);
     }
 
     async function submitPumpfunLaunch(room){
+      // a) validate room
       if(!room) return buildExternalLaunchErrorResult("Room not found.");
       const payload = buildPumpfunLaunchRequest(room);
 
-      if(DEV_SIMULATION) return submitPumpfunLaunchMock(room);
-
+      // b) resolve endpoint
       const endpoint = getPumpfunLaunchEndpoint();
-      if(!endpoint) return submitPumpfunLaunchMock(room);
 
+      // c) dev mock fallback path
+      if(shouldUseDevMockEndpoint(endpoint)) return submitPumpfunLaunchMock(room);
+
+      // d) non-dev missing endpoint path
+      if(!hasConfiguredEndpoint(endpoint)) return buildExternalLaunchErrorResult("No launch endpoint configured.");
+
+      // e) live POST path
       const response = await postJsonToEndpoint(endpoint, payload, { defaultErrorMessage: "Launch submission failed" });
       const rawResult = response.ok
         ? response.data
