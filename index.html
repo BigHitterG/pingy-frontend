@@ -492,8 +492,8 @@
             <input id="pingAmount" placeholder="e.g. 0.10" inputmode="decimal" style="max-width:220px;" />
             <button class="btn subtle" id="pingMaxBtn" type="button">MAX</button>
           </div>
-          <div class="muted" id="pingModalHelp" style="margin-top:8px;">first ping may include a small Solana network/storage cost during spawn setup.</div>
-          <div class="muted" id="pingAllocationHint" style="margin-top:8px;">This will allocate up to 0.000 SOL, remainder stays refundable.</div>
+          <div class="muted" id="pingModalHelp" style="margin-top:8px;">Your ping contributes SOL to this launch room.</div>
+          <div class="muted" id="pingAllocationHint" style="margin-top:8px;">This contributes up to 0.000 SOL to the launch vault.</div>
         </div>
 
         <div class="row" style="justify-content:flex-end;">
@@ -521,11 +521,11 @@
             <div class="muted" id="unpingAmountUnit" style="min-width:120px;">SOL</div>
             <input id="unpingAmount" value="full withdraw" readonly style="max-width:220px;" />
           </div>
-          <div class="muted" id="unpingModalHelp" style="margin-top:8px;">full withdraw only. funds return to your wallet immediately after unping.</div>
+          <div class="muted" id="unpingModalHelp" style="margin-top:8px;">Before spawn completes, you can unping to withdraw your contribution.</div>
         </div>
 
         <div class="row" style="justify-content:flex-end;">
-          <button class="btn" id="unpingConfirm">unping (full withdraw)</button>
+          <button class="btn" id="unpingConfirm">unping (withdraw contribution)</button>
         </div>
       </div>
     </div>
