@@ -1029,6 +1029,17 @@ const $ = (id) => document.getElementById(id);
       return true;
     }
 
+    function buildPumpfunStatusRequest(room){
+      return {
+        roomId: String(room?.id || "").trim(),
+        mint: String(getRoomExternalMint(room) || "").trim(),
+        launchUrl: String(getRoomExternalLaunchUrl(room) || "").trim(),
+        launchStatus: String(getRoomLaunchStatus(room) || "").trim(),
+        distributionStatus: String(resolveRoomExternalDistributionStatus(room) || "").trim(),
+        settlementStatus: String(room?.external_settlement_status || "").trim(),
+      };
+    }
+
     function buildPumpfunSettlementPayload(room){
       const receiptRows = getRoomDistributionReceiptsRows(room);
       const rows = receiptRows.map((row) => {
@@ -1060,6 +1071,58 @@ const $ = (id) => document.getElementById(id);
         snapshotLockedAt: Number(room?.distribution_snapshot_locked_at || 0) || null,
         rows,
       };
+    }
+
+    function buildPumpfunSettlementRequest(room){
+      const payload = buildPumpfunSettlementPayload(room);
+      const snapshotLockedAt = Number(payload.snapshotLockedAt);
+      return {
+        roomId: String(payload.roomId || "").trim(),
+        platform: String(payload.platform || "pumpfun").trim(),
+        mint: String(payload.mint || "").trim(),
+        launchUrl: String(payload.launchUrl || "").trim(),
+        distributionMode: String(payload.distributionMode || "pro_rata").trim(),
+        totalTokensReceived: toSafeExternalTokenAmount(payload.totalTokensReceived, 0),
+        totalTokensPlanned: toSafeExternalTokenAmount(payload.totalTokensPlanned, 0),
+        totalTokensSent: toSafeExternalTokenAmount(payload.totalTokensSent, 0),
+        recipientCount: Number(payload.recipientCount || 0),
+        snapshotLockedAt: Number.isFinite(snapshotLockedAt) && snapshotLockedAt > 0 ? snapshotLockedAt : null,
+        rows: Array.isArray(payload.rows) ? payload.rows.map((row) => ({
+          wallet: String(row?.wallet || "").trim(),
+          plannedTokens: toSafeExternalTokenAmount(row?.plannedTokens, 0),
+          sentTokens: toSafeExternalTokenAmount(row?.sentTokens, 0),
+          remainingTokens: toSafeExternalTokenAmount(row?.remainingTokens, 0),
+          status: String(row?.status || "pending").trim(),
+        })).filter((row) => row.wallet) : [],
+      };
+    }
+
+    async function postJsonToEndpoint(endpoint, payload, { defaultErrorMessage = "Request failed." } = {}){
+      const url = String(endpoint || "").trim();
+      if(!url) return { ok: false, error: defaultErrorMessage };
+      try {
+        const response = await fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload || {}),
+        });
+        let body = null;
+        try {
+          body = await response.json();
+        } catch (_jsonErr) {
+          return { ok: false, error: `Invalid JSON response from ${url}.`, status: response.status };
+        }
+        if(!response.ok){
+          const message = typeof body?.error === "string" && body.error.trim()
+            ? body.error.trim()
+            : `${defaultErrorMessage} (${response.status}).`;
+          return { ok: false, error: message, status: response.status, body };
+        }
+        if(!body || typeof body !== "object") return { ok: false, error: `Invalid response body from ${url}.`, status: response.status };
+        return { ok: true, data: body, status: response.status };
+      } catch (_err) {
+        return { ok: false, error: `${defaultErrorMessage} (network error).` };
+      }
     }
 
     function buildExternalSettlementErrorResult(error){
@@ -1138,6 +1201,12 @@ const $ = (id) => document.getElementById(id);
       });
     }
 
+    // Pump.fun settlement response adapter for Pingy
+    // Normalizes backend settlement responses into Pingy's internal shape.
+    function normalizePumpfunSettlementResponse(result, room){
+      return normalizeExternalSettlementResult(result, room);
+    }
+
     function getPumpfunSettlementEndpoint(){
       const configuredEndpoint = typeof window?.PINGY_PUMPFUN_SETTLEMENT_ENDPOINT === "string"
         ? window.PINGY_PUMPFUN_SETTLEMENT_ENDPOINT
@@ -1171,6 +1240,12 @@ const $ = (id) => document.getElementById(id);
       };
     }
 
+    // Pump.fun status response adapter for Pingy
+    // Normalizes backend status responses into Pingy's internal shape.
+    function normalizePumpfunStatusResponse(result, room){
+      return normalizeExternalStatusResult(result, room);
+    }
+
     function buildExternalStatusMockResult(room){
       const launchRecord = getRoomExternalLaunchRecord(room);
       const receiptRows = getRoomDistributionReceiptsRows(room);
@@ -1199,36 +1274,10 @@ const $ = (id) => document.getElementById(id);
         return buildExternalLaunchErrorResult("No status endpoint configured.");
       }
 
-      const payload = {
-        roomId: room.id || "",
-        mint: getRoomExternalMint(room),
-        launchUrl: getRoomExternalLaunchUrl(room),
-        launch_status: getRoomLaunchStatus(room),
-      };
-
-      try {
-        const response = await fetch(endpoint, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        let body = null;
-        try {
-          body = await response.json();
-        } catch (_jsonErr) {
-          return buildExternalLaunchErrorResult("Invalid status response from backend.");
-        }
-        if(!response.ok){
-          const message = typeof body?.error === "string"
-            ? body.error
-            : `Status refresh failed (${response.status}).`;
-          return buildExternalLaunchErrorResult(message);
-        }
-        return body && typeof body === "object" ? body : buildExternalLaunchErrorResult("Invalid status response from backend.");
-      } catch (err) {
-        console.error("[pingy] fetchPumpfunRoomStatus failed", err);
-        return buildExternalLaunchErrorResult("Network error while refreshing status.");
-      }
+      const payload = buildPumpfunStatusRequest(room);
+      const response = await postJsonToEndpoint(endpoint, payload, { defaultErrorMessage: "Status refresh failed" });
+      if(!response.ok) return buildExternalLaunchErrorResult(response.error || "Status refresh failed.");
+      return response.data;
     }
 
     function applyExternalStatusSettlementResult(roomId, normalized){
@@ -1250,7 +1299,7 @@ const $ = (id) => document.getElementById(id);
         ok: true,
         platform: normalized.platform || "pumpfun",
         settlement_status: hasSettlementStatus ? normalized.settlement_status : resolveRoomExternalDistributionStatus(room),
-        settled_at: hasSettledAt ? normalized.settled_at : Date.now(),
+        settled_at: hasSettledAt ? normalized.settled_at : null,
         rows: fallbackRows,
       });
     }
@@ -1272,14 +1321,14 @@ const $ = (id) => document.getElementById(id);
       renderHome();
       try {
         const rawResult = await fetchPumpfunRoomStatus(room);
-        const normalized = normalizeExternalStatusResult(rawResult, room);
+        const normalized = normalizePumpfunStatusResponse(rawResult, room);
+        if(DEBUG_EXTERNAL_STATUS) console.log("[pingy] status refresh normalized", { roomId: room.id, normalized });
         if(normalized.ok === false){
           if(!silent) showToast(normalized.error || "Status refresh failed.");
           return normalized;
         }
         applyExternalLaunchResult(room.id, normalized);
         applyExternalStatusSettlementResult(room.id, normalized);
-        room.last_status_refresh_at = Date.now();
         return normalized;
       } catch (err) {
         console.error("[pingy] refreshRoomExternalStatus failed", err);
@@ -1318,12 +1367,19 @@ const $ = (id) => document.getElementById(id);
     function applyExternalSettlementResult(roomId, result){
       const room = roomById(roomId);
       if(!room || !result || typeof result !== "object" || result.ok === false) return null;
-      const normalized = normalizeExternalSettlementResult(result, room);
+      const normalized = normalizePumpfunSettlementResponse(result, room);
       if(!normalized.ok) return null;
 
       syncRoomDistributionReceiptsWithPlan(room);
       const receipts = getRoomDistributionReceipts(room);
-      const settledAt = Number.isFinite(Number(normalized.settled_at)) && Number(normalized.settled_at) > 0 ? Number(normalized.settled_at) : Date.now();
+      const existingSettledAt = Number.isFinite(Number(room.external_settled_at)) && Number(room.external_settled_at) > 0
+        ? Number(room.external_settled_at)
+        : (Number.isFinite(Number(room.external_distribution_updated_at)) && Number(room.external_distribution_updated_at) > 0
+          ? Number(room.external_distribution_updated_at)
+          : null);
+      const settledAt = Number.isFinite(Number(normalized.settled_at)) && Number(normalized.settled_at) > 0
+        ? Number(normalized.settled_at)
+        : existingSettledAt;
       for(const row of normalized.rows || []){
         const wallet = String(row?.wallet || "").trim();
         if(!wallet) continue;
@@ -1342,17 +1398,28 @@ const $ = (id) => document.getElementById(id);
           planned_tokens: plannedTokens,
           sent_tokens: cappedSentTokens,
           tx_id: typeof row?.tx_id === "string" ? row.tx_id.trim() : (typeof current.tx_id === "string" ? current.tx_id.trim() : ""),
-          sent_at: Number.isFinite(Number(row?.sent_at)) && Number(row.sent_at) > 0 ? Number(row.sent_at) : (Number.isFinite(Number(current.sent_at)) && Number(current.sent_at) > 0 ? Number(current.sent_at) : settledAt),
+          sent_at: Number.isFinite(Number(row?.sent_at)) && Number(row.sent_at) > 0
+            ? Number(row.sent_at)
+            : (Number.isFinite(Number(current.sent_at)) && Number(current.sent_at) > 0
+              ? Number(current.sent_at)
+              : (Number.isFinite(Number(settledAt)) && settledAt > 0 ? settledAt : null)),
           status,
         };
       }
       room.external_distribution_receipts = receipts;
-      room.external_distribution_updated_at = settledAt;
+      if(Number.isFinite(Number(settledAt)) && Number(settledAt) > 0) room.external_distribution_updated_at = Number(settledAt);
       room.external_settlement_status = normalized.settlement_status;
-      room.external_settled_at = settledAt;
+      if(Number.isFinite(Number(settledAt)) && Number(settledAt) > 0) room.external_settled_at = Number(settledAt);
       room.external_distribution_status = normalized.settlement_status === "complete"
         ? "distributed"
         : (normalized.settlement_status === "partial" ? "ready" : resolveRoomExternalDistributionStatus(room));
+      if(DEBUG_EXTERNAL_STATUS) console.log("[pingy] applied settlement result", {
+        roomId,
+        settlement_status: room.external_settlement_status,
+        external_distribution_status: room.external_distribution_status,
+        external_distribution_updated_at: room.external_distribution_updated_at,
+        external_settled_at: room.external_settled_at,
+      });
       snapshotRoomExternalDistributionPlan(room);
       validateDistributionSnapshot(room);
       if(DEV_SIMULATION) saveLaunchRecordsToLocalStorage();
@@ -1383,34 +1450,14 @@ const $ = (id) => document.getElementById(id);
 
     async function submitPumpfunSettlement(room){
       if(!room) return buildExternalSettlementErrorResult("Room not found.");
-      const payload = buildPumpfunSettlementPayload(room);
+      const payload = buildPumpfunSettlementRequest(room);
       if(DEV_SIMULATION) return submitPumpfunSettlementMock(room);
       const endpoint = getPumpfunSettlementEndpoint();
       if(!endpoint) return submitPumpfunSettlementMock(room);
 
-      try {
-        const response = await fetch(endpoint, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(payload || {}),
-        });
-        let responseBody = null;
-        try {
-          responseBody = await response.json();
-        } catch (_jsonErr) {
-          return buildExternalSettlementErrorResult("Invalid settlement response from backend.");
-        }
-        if(!response.ok){
-          const message = typeof responseBody?.error === "string"
-            ? responseBody.error
-            : `Settlement submission failed (${response.status}).`;
-          return buildExternalSettlementErrorResult(message);
-        }
-        return responseBody;
-      } catch (err) {
-        console.error("[pingy] submitPumpfunSettlement failed", err);
-        return buildExternalSettlementErrorResult("Network error while submitting settlement.");
-      }
+      const response = await postJsonToEndpoint(endpoint, payload, { defaultErrorMessage: "Settlement submission failed" });
+      if(!response.ok) return buildExternalSettlementErrorResult(response.error || "Settlement submission failed.");
+      return response.data;
     }
 
     async function submitRoomSettlementExternally(roomId){
@@ -1421,7 +1468,7 @@ const $ = (id) => document.getElementById(id);
 
       try {
         const rawResult = await submitPumpfunSettlement(room);
-        return normalizeExternalSettlementResult(rawResult, room);
+        return normalizePumpfunSettlementResponse(rawResult, room);
       } catch (err) {
         console.error("[pingy] submitRoomSettlementExternally failed", err);
         return buildExternalSettlementErrorResult("Settlement submission failed.");
@@ -1448,7 +1495,7 @@ const $ = (id) => document.getElementById(id);
       renderHome();
       try {
         const result = await submitRoomSettlementExternally(room.id);
-        const normalized = normalizeExternalSettlementResult(result, room);
+        const normalized = normalizePumpfunSettlementResponse(result, room);
         if(normalized.ok === false){
           showToast(normalized.error || "Settlement submission failed.");
           return normalized;
@@ -1495,6 +1542,31 @@ const $ = (id) => document.getElementById(id);
         fundingMode: room.funding_mode || "vault",
         launchBackend: room.launch_backend || "pumpfun",
         externalPlatform: getRoomExternalPlatform(room) || "pumpfun",
+      };
+    }
+
+    function buildPumpfunLaunchRequest(room){
+      const payload = buildPumpfunLaunchPayload(room);
+      return {
+        roomId: String(payload.roomId || "").trim(),
+        name: String(payload.name || "").trim(),
+        symbol: String(payload.symbol || "").trim(),
+        description: String(payload.description || "").trim(),
+        image: String(payload.image || "").trim(),
+        banner: String(payload.banner || "").trim(),
+        twitter: String(payload.twitter || "").trim(),
+        telegram: String(payload.telegram || "").trim(),
+        website: String(payload.website || "").trim(),
+        creatorWallet: String(payload.creatorWallet || "").trim(),
+        creatorBuySol: Number(payload.creatorBuySol || 0),
+        launchMode: String(payload.launchMode || "spawn").trim(),
+        launchPreset: String(payload.launchPreset || "").trim(),
+        minApprovedWallets: Number(payload.minApprovedWallets || 0),
+        spawnTargetSol: Number(payload.spawnTargetSol || 0),
+        maxWalletShareBps: Number(payload.maxWalletShareBps || 0),
+        fundingMode: String(payload.fundingMode || "vault").trim(),
+        launchBackend: String(payload.launchBackend || "pumpfun").trim(),
+        externalPlatform: String(payload.externalPlatform || "pumpfun").trim(),
       };
     }
 
@@ -1574,9 +1646,15 @@ const $ = (id) => document.getElementById(id);
       });
     }
 
+    // Pump.fun launch response adapter for Pingy
+    // Normalizes backend launch responses into Pingy's internal shape.
+    function normalizePumpfunLaunchResponse(result, room){
+      return normalizeExternalLaunchSubmissionResult(result, room);
+    }
+
     function submitPumpfunLaunchMock(room){
       if(!room) return buildExternalLaunchErrorResult("Room not found.");
-      const payload = buildPumpfunLaunchPayload(room);
+      const payload = buildPumpfunLaunchRequest(room);
       return buildExternalLaunchSuccessResult({
         platform: "pumpfun",
         status: "submitted",
@@ -1595,57 +1673,19 @@ const $ = (id) => document.getElementById(id);
       return String(configuredEndpoint || "").trim();
     }
 
-    // External-launch adapter boundary:
-    // - app.js orchestrates room lifecycle + UI locks/toasts around this call
-    // - this is the only place real backend POST happens for Pump.fun handoff
-    // - backend can later mint + return URL/mint while UI/state wiring remains stable
-    async function submitPumpfunLaunchRequest(payload){
-      const endpoint = getPumpfunLaunchEndpoint();
-      if(!endpoint){
-        return { mock: true };
-      }
-
-      try {
-        const response = await fetch(endpoint, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(payload || {}),
-        });
-
-        let responseBody = null;
-
-        try {
-          responseBody = await response.json();
-        } catch (_jsonErr) {
-          return buildExternalLaunchErrorResult("Invalid launch response from backend.");
-        }
-
-        if(!response.ok){
-          const message = typeof responseBody?.error === "string"
-            ? responseBody.error
-            : `Launch submission failed (${response.status}).`;
-          return buildExternalLaunchErrorResult(message);
-        }
-
-        return responseBody;
-
-      } catch (err) {
-        console.error("[pingy] submitPumpfunLaunchRequest failed", err);
-        return buildExternalLaunchErrorResult("Network error while submitting launch.");
-      }
-    }
-
     async function submitPumpfunLaunch(room){
       if(!room) return buildExternalLaunchErrorResult("Room not found.");
-      const payload = buildPumpfunLaunchPayload(room);
+      const payload = buildPumpfunLaunchRequest(room);
 
       if(DEV_SIMULATION) return submitPumpfunLaunchMock(room);
 
-      const rawResult = await submitPumpfunLaunchRequest(payload);
+      const endpoint = getPumpfunLaunchEndpoint();
+      if(!endpoint) return submitPumpfunLaunchMock(room);
 
-      if(rawResult?.mock){
-        return submitPumpfunLaunchMock(room);
-      }
+      const response = await postJsonToEndpoint(endpoint, payload, { defaultErrorMessage: "Launch submission failed" });
+      const rawResult = response.ok
+        ? response.data
+        : buildExternalLaunchErrorResult(response.error || "Launch submission failed.");
 
       if(rawResult?.payload && typeof rawResult.payload === "object"){
         return rawResult;
@@ -1661,7 +1701,7 @@ const $ = (id) => document.getElementById(id);
 
       try {
         const rawResult = await submitPumpfunLaunch(room);
-        return normalizeExternalLaunchSubmissionResult(rawResult, room);
+        return normalizePumpfunLaunchResponse(rawResult, room);
       } catch (err) {
         console.error("[pingy] submitRoomLaunchExternally failed", err);
         return buildExternalLaunchErrorResult("Launch submission failed.");
@@ -1930,7 +1970,7 @@ const $ = (id) => document.getElementById(id);
       if(!room || !result || typeof result !== "object") return null;
       if(result.ok === false) return null;
       const normalizedResult = normalizePumpfunLaunchResult(result, room);
-      console.log("[pingy] normalized external launch result", normalizedResult);
+      if(DEBUG_EXTERNAL_STATUS) console.log("[pingy] normalized external launch result", normalizedResult);
       normalizeLaunchRoom(room);
       const externalLaunch = normalizeExternalLaunchRecord(room);
       if(!externalLaunch) return null;
@@ -1976,7 +2016,7 @@ const $ = (id) => document.getElementById(id);
       validateDistributionSnapshot(room);
 
       mirrorExternalLaunchLegacyFields(room, externalLaunch);
-      console.log("[pingy] applied external launch result", {
+      if(DEBUG_EXTERNAL_STATUS) console.log("[pingy] applied external launch result", {
         roomId,
         launch_status: room.launch_status,
         external_launch_url: room.external_launch_url,
@@ -1993,6 +2033,7 @@ const $ = (id) => document.getElementById(id);
     }
 
     const DEV_SIMULATION = !!(window?.location?.hostname === "localhost" || window?.location?.hostname === "127.0.0.1" || window?.location?.hostname === "0.0.0.0" || window?.location?.hostname?.endsWith?.(".local") || window?.location?.search?.includes("devsim=1"));
+    const DEBUG_EXTERNAL_STATUS = DEV_SIMULATION;
     const DEBUG_WALLET_SMOKE_BEFORE_SPAWN_TX = false;
     const DEV_SIM_DEFAULT_SEED = 1337;
     const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
@@ -7655,10 +7696,15 @@ if(connectBtn){
         const isSubmitting = isRoomSettlementSubmitting(r);
         const canSettle = canCurrentWalletSettleDistribution(r);
         const distributionStatus = resolveRoomExternalDistributionStatus(r);
+        const hasExternalMint = String(getRoomExternalMint(r) || "").trim().length > 0;
+        const hasTokensReceived = toSafeExternalTokenAmount(r?.external_tokens_received, 0) > 0;
+        const fullyDistributed = distributionStatus === "distributed";
         const showSettle = isPumpfunRoom(r)
           && isRoomLaunchLive(r)
           && hasFrozenDistributionSnapshot(r)
-          && distributionStatus !== "distributed"
+          && hasExternalMint
+          && hasTokensReceived
+          && !fullyDistributed
           && (isSubmitting || canSettle);
         settleDistributionBtn.style.display = showSettle ? "inline-block" : "none";
         settleDistributionBtn.disabled = isSubmitting || !canSettle;
