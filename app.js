@@ -84,6 +84,7 @@ const $ = (id) => document.getElementById(id);
     const BPS_DENOM = 10_000;
     const PINGY_LAUNCH_BACKEND = "pumpfun";
     const PINGY_PUMPFUN_LAUNCH_ENDPOINT = "";
+    const PINGY_PUMPFUN_SETTLEMENT_ENDPOINT = "";
     const EXTERNAL_LAUNCH_RECORDS_STORAGE_KEY = "pingy_external_launch_records";
 
     function isPumpfunLaunchBackend(){
@@ -993,6 +994,301 @@ const $ = (id) => document.getElementById(id);
       if(!DEV_SIMULATION || !connectedWallet || !room) return false;
       if(!isPumpfunRoom(room) || !isRoomLaunchLive(room)) return false;
       return isCreator(room, connectedWallet) || isApprover(room, connectedWallet) || isRoomAdminWallet(room, connectedWallet);
+    }
+
+    function canCurrentWalletSettleDistribution(room){
+      if(!connectedWallet || !room) return false;
+      if(!isPumpfunRoom(room)) return false;
+      if(isRoomSettlementSubmitting(room)) return false;
+      return isCreator(room, connectedWallet) || isApprover(room, connectedWallet) || isRoomAdminWallet(room, connectedWallet);
+    }
+
+    function isRoomSettlementSubmitting(room){
+      return !!room?.settlement_submitting;
+    }
+
+    function buildPumpfunSettlementPayload(room){
+      const receiptRows = getRoomDistributionReceiptsRows(room);
+      const rows = receiptRows.map((row) => {
+        const plannedTokens = toSafeExternalTokenAmount(row?.planned_tokens, 0);
+        const sentTokens = toSafeExternalTokenAmount(row?.sent_tokens, 0);
+        const remainingTokens = Math.max(plannedTokens - sentTokens, 0);
+        let status = "pending";
+        if(plannedTokens > 0 && sentTokens >= plannedTokens) status = "complete";
+        else if(sentTokens > 0 && sentTokens < plannedTokens) status = "partial";
+        return {
+          wallet: String(row?.wallet || "").trim(),
+          plannedTokens,
+          sentTokens,
+          remainingTokens,
+          status,
+        };
+      }).filter((row) => row.wallet);
+
+      return {
+        roomId: room?.id || "",
+        platform: "pumpfun",
+        mint: getRoomExternalMint(room),
+        launchUrl: getRoomExternalLaunchUrl(room),
+        distributionMode: String(room?.external_distribution_mode || "pro_rata"),
+        totalTokensReceived: toSafeExternalTokenAmount(room?.external_tokens_received, 0),
+        totalTokensPlanned: toSafeExternalTokenAmount(getRoomPlannedDistributionTotal(room), 0),
+        totalTokensSent: toSafeExternalTokenAmount(getRoomDistributionTotalSentTokens(room), 0),
+        recipientCount: Number(rows.length || 0),
+        snapshotLockedAt: Number(room?.distribution_snapshot_locked_at || 0) || null,
+        rows,
+      };
+    }
+
+    function buildExternalSettlementErrorResult(error){
+      const message = typeof error === "string"
+        ? error
+        : String(error?.message || error || "Settlement submission failed.");
+      return {
+        ok: false,
+        platform: "pumpfun",
+        settlement_status: "pending",
+        settled_at: null,
+        rows: [],
+        error: message,
+      };
+    }
+
+    function buildExternalSettlementSuccessResult({
+      platform = "pumpfun",
+      settlement_status = "pending",
+      settled_at = null,
+      rows = [],
+    } = {}){
+      const normalizeSettlementStatus = (status) => {
+        const normalized = String(status || "").toLowerCase();
+        if(normalized === "complete" || normalized === "distributed") return "complete";
+        if(normalized === "partial" || normalized === "ready") return "partial";
+        return "pending";
+      };
+      const normalizedRows = Array.isArray(rows)
+        ? rows.map((row) => ({
+          wallet: String(row?.wallet || "").trim(),
+          planned_tokens: toSafeExternalTokenAmount(row?.planned_tokens, 0),
+          sent_tokens: toSafeExternalTokenAmount(row?.sent_tokens, 0),
+          tx_id: typeof row?.tx_id === "string" ? row.tx_id.trim() : "",
+          sent_at: Number.isFinite(Number(row?.sent_at)) && Number(row.sent_at) > 0 ? Number(row.sent_at) : null,
+          status: normalizeDistributionReceiptStatus(row?.status),
+        })).filter((row) => row.wallet)
+        : [];
+      return {
+        ok: true,
+        platform: String(platform || "pumpfun").toLowerCase() || "pumpfun",
+        settlement_status: normalizeSettlementStatus(settlement_status),
+        settled_at: Number.isFinite(Number(settled_at)) && Number(settled_at) > 0 ? Number(settled_at) : null,
+        rows: normalizedRows,
+        error: null,
+      };
+    }
+
+    function normalizeExternalSettlementResult(result, room){
+      if(!result || typeof result !== "object") return buildExternalSettlementErrorResult("Settlement submission failed.");
+      if(result.ok === false) return buildExternalSettlementErrorResult(result.error || "Settlement submission failed.");
+
+      const sourceRows = Array.isArray(result.rows) ? result.rows : [];
+      if(sourceRows.length <= 0 && room){
+        const payloadRows = buildPumpfunSettlementPayload(room).rows;
+        return buildExternalSettlementSuccessResult({
+          platform: result.platform || "pumpfun",
+          settlement_status: result.settlement_status || "pending",
+          settled_at: result.settled_at,
+          rows: payloadRows.map((row) => ({
+            wallet: row.wallet,
+            planned_tokens: row.plannedTokens,
+            sent_tokens: row.sentTokens,
+            tx_id: "",
+            sent_at: null,
+            status: row.status,
+          })),
+        });
+      }
+
+      return buildExternalSettlementSuccessResult({
+        platform: result.platform || "pumpfun",
+        settlement_status: result.settlement_status || "pending",
+        settled_at: result.settled_at,
+        rows: sourceRows,
+      });
+    }
+
+    function getPumpfunSettlementEndpoint(){
+      const configuredEndpoint = typeof window?.PINGY_PUMPFUN_SETTLEMENT_ENDPOINT === "string"
+        ? window.PINGY_PUMPFUN_SETTLEMENT_ENDPOINT
+        : PINGY_PUMPFUN_SETTLEMENT_ENDPOINT;
+      return String(configuredEndpoint || "").trim();
+    }
+
+    function validatePumpfunSettlementReadiness(room){
+      if(!room) return { ok: false, error: "Room not found." };
+      if(!isPumpfunRoom(room)) return { ok: false, error: "This room is not set to Pump.fun launch mode." };
+      if(!isRoomLaunchLive(room)) return { ok: false, error: "Settlement requires a live Pump.fun launch." };
+      if(!hasFrozenDistributionSnapshot(room)) return { ok: false, error: "Settlement requires a frozen distribution snapshot." };
+      if(!String(getRoomExternalMint(room) || "").trim()) return { ok: false, error: "Settlement requires an external mint." };
+      if(toSafeExternalTokenAmount(room.external_tokens_received, 0) <= 0) return { ok: false, error: "Settlement requires received external tokens." };
+      if(getRoomPlannedDistributionRecipientCount(room) <= 0) return { ok: false, error: "Settlement requires planned recipients." };
+      return { ok: true, error: null };
+    }
+
+    function applyExternalSettlementResult(roomId, result){
+      const room = roomById(roomId);
+      if(!room || !result || typeof result !== "object" || result.ok === false) return null;
+      const normalized = normalizeExternalSettlementResult(result, room);
+      if(!normalized.ok) return null;
+
+      syncRoomDistributionReceiptsWithPlan(room);
+      const receipts = getRoomDistributionReceipts(room);
+      const settledAt = Number.isFinite(Number(normalized.settled_at)) && Number(normalized.settled_at) > 0 ? Number(normalized.settled_at) : Date.now();
+      for(const row of normalized.rows || []){
+        const wallet = String(row?.wallet || "").trim();
+        if(!wallet) continue;
+        const current = receipts[wallet] || {};
+        const plannedTokens = toSafeExternalTokenAmount(
+          row?.planned_tokens,
+          toSafeExternalTokenAmount(current.planned_tokens, 0),
+        );
+        const sentTokens = toSafeExternalTokenAmount(row?.sent_tokens, toSafeExternalTokenAmount(current.sent_tokens, 0));
+        const cappedSentTokens = Math.max(0, Math.min(sentTokens, plannedTokens));
+        let status = normalizeDistributionReceiptStatus(row?.status);
+        if(cappedSentTokens >= plannedTokens && plannedTokens > 0) status = "complete";
+        else if(cappedSentTokens > 0) status = "partial";
+        else status = "pending";
+        receipts[wallet] = {
+          planned_tokens: plannedTokens,
+          sent_tokens: cappedSentTokens,
+          tx_id: typeof row?.tx_id === "string" ? row.tx_id.trim() : (typeof current.tx_id === "string" ? current.tx_id.trim() : ""),
+          sent_at: Number.isFinite(Number(row?.sent_at)) && Number(row.sent_at) > 0 ? Number(row.sent_at) : (Number.isFinite(Number(current.sent_at)) && Number(current.sent_at) > 0 ? Number(current.sent_at) : settledAt),
+          status,
+        };
+      }
+      room.external_distribution_receipts = receipts;
+      room.external_distribution_updated_at = settledAt;
+      room.external_distribution_status = normalized.settlement_status === "complete"
+        ? "distributed"
+        : (normalized.settlement_status === "partial" ? "ready" : resolveRoomExternalDistributionStatus(room));
+      snapshotRoomExternalDistributionPlan(room);
+      validateDistributionSnapshot(room);
+      if(DEV_SIMULATION) saveLaunchRecordsToLocalStorage();
+      renderRoom(room.id);
+      renderHome();
+      return room;
+    }
+
+    function submitPumpfunSettlementMock(room){
+      if(!room) return buildExternalSettlementErrorResult("Room not found.");
+      const payload = buildPumpfunSettlementPayload(room);
+      const settledAt = Date.now();
+      const txId = `mock-settlement-${room.id || "room"}-${String(settledAt).slice(-8)}`;
+      return buildExternalSettlementSuccessResult({
+        platform: "pumpfun",
+        settlement_status: "complete",
+        settled_at: settledAt,
+        rows: payload.rows.map((row) => ({
+          wallet: row.wallet,
+          planned_tokens: row.plannedTokens,
+          sent_tokens: row.plannedTokens,
+          tx_id: txId,
+          sent_at: settledAt,
+          status: "complete",
+        })),
+      });
+    }
+
+    async function submitPumpfunSettlement(room){
+      if(!room) return buildExternalSettlementErrorResult("Room not found.");
+      const payload = buildPumpfunSettlementPayload(room);
+      if(DEV_SIMULATION) return submitPumpfunSettlementMock(room);
+      const endpoint = getPumpfunSettlementEndpoint();
+      if(!endpoint) return submitPumpfunSettlementMock(room);
+
+      try {
+        const response = await fetch(endpoint, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload || {}),
+        });
+        let responseBody = null;
+        try {
+          responseBody = await response.json();
+        } catch (_jsonErr) {
+          return buildExternalSettlementErrorResult("Invalid settlement response from backend.");
+        }
+        if(!response.ok){
+          const message = typeof responseBody?.error === "string"
+            ? responseBody.error
+            : `Settlement submission failed (${response.status}).`;
+          return buildExternalSettlementErrorResult(message);
+        }
+        return responseBody;
+      } catch (err) {
+        console.error("[pingy] submitPumpfunSettlement failed", err);
+        return buildExternalSettlementErrorResult("Network error while submitting settlement.");
+      }
+    }
+
+    async function submitRoomSettlementExternally(roomId){
+      const room = roomById(roomId);
+      const readiness = validatePumpfunSettlementReadiness(room);
+      if(!readiness.ok) return buildExternalSettlementErrorResult(readiness.error);
+      if(!canCurrentWalletSettleDistribution(room)) return buildExternalSettlementErrorResult("Creator, approver, or admin required to submit settlement.");
+
+      try {
+        const rawResult = await submitPumpfunSettlement(room);
+        return normalizeExternalSettlementResult(rawResult, room);
+      } catch (err) {
+        console.error("[pingy] submitRoomSettlementExternally failed", err);
+        return buildExternalSettlementErrorResult("Settlement submission failed.");
+      }
+    }
+
+    async function settleRoomDistributionOnPumpfun(roomId){
+      const room = roomById(roomId);
+      if(!room){
+        showToast("Room not found.");
+        return buildExternalSettlementErrorResult("Room not found.");
+      }
+      const readiness = validatePumpfunSettlementReadiness(room);
+      if(!readiness.ok){
+        showToast(readiness.error || "Settlement submission failed.");
+        return buildExternalSettlementErrorResult(readiness.error || "Settlement submission failed.");
+      }
+      if(!canCurrentWalletSettleDistribution(room)){
+        showToast("Creator, approver, or admin required to submit settlement.");
+        return buildExternalSettlementErrorResult("Creator, approver, or admin required to submit settlement.");
+      }
+      room.settlement_submitting = true;
+      renderRoom(room.id);
+      renderHome();
+      try {
+        const result = await submitRoomSettlementExternally(room.id);
+        const normalized = normalizeExternalSettlementResult(result, room);
+        if(normalized.ok === false){
+          showToast(normalized.error || "Settlement submission failed.");
+          return normalized;
+        }
+        const applied = applyExternalSettlementResult(room.id, normalized);
+        if(!applied){
+          const failed = buildExternalSettlementErrorResult("Settlement submission failed.");
+          showToast(failed.error);
+          return failed;
+        }
+        addSystemEvent(room.id, "Distribution settlement submitted.");
+        showToast("Distribution settled.");
+        return normalized;
+      } catch (err) {
+        console.error("[pingy] settleRoomDistributionOnPumpfun failed", err);
+        const failed = buildExternalSettlementErrorResult("Settlement submission failed.");
+        showToast(failed.error);
+        return failed;
+      } finally {
+        room.settlement_submitting = false;
+        renderRoom(room.id);
+        renderHome();
+      }
     }
 
     function buildPumpfunLaunchPayload(room){
@@ -7098,6 +7394,7 @@ if(connectBtn){
             `Status: ${getRoomExternalDistributionStatusLabel(r)}`,
             `Snapshot: ${hasFrozenDistributionSnapshot(r) ? "frozen" : "live preview"}`,
           ];
+          if(isRoomSettlementSubmitting(r)) lines.push("Settlement submitting: yes");
           if(hasFrozenDistributionSnapshot(r)){
             const lockedLabel = formatLaunchTimestamp(r.distribution_snapshot_locked_at);
             if(lockedLabel) lines.push(`Locked: ${lockedLabel}`);
@@ -7147,6 +7444,20 @@ if(connectBtn){
         pumpLaunchBtn.style.display = showLaunch ? "inline-block" : "none";
         pumpLaunchBtn.disabled = !canLaunch;
         pumpLaunchBtn.textContent = isSubmitting ? "submitting…" : "launch on pump.fun";
+      }
+      const settleDistributionBtn = $("settleDistributionBtn");
+      if(settleDistributionBtn){
+        const isSubmitting = isRoomSettlementSubmitting(r);
+        const canSettle = canCurrentWalletSettleDistribution(r);
+        const distributionStatus = resolveRoomExternalDistributionStatus(r);
+        const showSettle = isPumpfunRoom(r)
+          && isRoomLaunchLive(r)
+          && hasFrozenDistributionSnapshot(r)
+          && distributionStatus !== "distributed"
+          && (isSubmitting || canSettle);
+        settleDistributionBtn.style.display = showSettle ? "inline-block" : "none";
+        settleDistributionBtn.disabled = isSubmitting || !canSettle;
+        settleDistributionBtn.textContent = isSubmitting ? "settling…" : "settle distribution";
       }
 
       const pendingList = $("pendingList");
@@ -7634,6 +7945,11 @@ if(connectBtn){
     const pumpLaunchBtn = $("pumpLaunchBtn");
     if(pumpLaunchBtn) pumpLaunchBtn.addEventListener("click", () => {
       if(activeRoomId) launchRoomOnPumpfun(activeRoomId);
+    });
+
+    const settleDistributionBtn = $("settleDistributionBtn");
+    if(settleDistributionBtn) settleDistributionBtn.addEventListener("click", () => {
+      if(activeRoomId) settleRoomDistributionOnPumpfun(activeRoomId);
     });
 
     const devSimStart5Btn = $("devSimStart5");
