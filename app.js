@@ -83,9 +83,9 @@ const $ = (id) => document.getElementById(id);
     const POST_SPAWN_TRADING_FEE_BPS = 100;
     const BPS_DENOM = 10_000;
     const PINGY_LAUNCH_BACKEND = "pumpfun";
-    const PINGY_PUMPFUN_LAUNCH_ENDPOINT = "";
-    const PINGY_PUMPFUN_SETTLEMENT_ENDPOINT = "";
-    const PINGY_PUMPFUN_STATUS_ENDPOINT = "";
+    const PINGY_PUMPFUN_LAUNCH_ENDPOINT = "http://localhost:8787/api/pumpfun/launch";
+    const PINGY_PUMPFUN_SETTLEMENT_ENDPOINT = "http://localhost:8787/api/pumpfun/settlement";
+    const PINGY_PUMPFUN_STATUS_ENDPOINT = "http://localhost:8787/api/pumpfun/status";
     const EXTERNAL_LAUNCH_RECORDS_STORAGE_KEY = "pingy_external_launch_records";
 
     function isPumpfunLaunchBackend(){
