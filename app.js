@@ -161,6 +161,25 @@ const $ = (id) => document.getElementById(id);
       return normalizePumpfunLaunchStatus(room?.launch_status);
     }
 
+    function isRoomLaunchDraft(room){
+      return getRoomLaunchStatus(room) === "draft";
+    }
+
+    function isRoomLaunchSubmitted(room){
+      return getRoomLaunchStatus(room) === "submitted";
+    }
+
+    function isRoomLaunchLive(room){
+      return getRoomLaunchStatus(room) === "live";
+    }
+
+    function getPumpfunLifecycleLabel(room){
+      if(!isPumpfunRoom(room)) return "";
+      if(isRoomLaunchLive(room)) return "Live externally";
+      if(isRoomLaunchSubmitted(room)) return "Submitted to Pump.fun";
+      return "Draft";
+    }
+
     function getRoomExternalLaunchUrl(room){
       const launchRecord = getRoomExternalLaunchRecord(room);
       const recordUrl = typeof launchRecord?.url === "string" ? launchRecord.url : "";
@@ -4582,9 +4601,13 @@ if(connectBtn){
       const isHotBonding = r.state === "BONDING" && athRatio >= 0.9;
       const isBonded = r.state === "BONDED";
       const barClass = isHotBonding ? "bar barActive barBonding barHot" : "bar barActive barBonding";
-      const subline = isBonded
-        ? (isPumpfunRoom(r) ? "Trading handled outside Pingy" : "Graduated from bonding")
-        : escapeText(r.desc || "—");
+      const subline = isPumpfunRoom(r)
+        ? (isRoomLaunchLive(r)
+            ? "Trading handled outside Pingy"
+            : isRoomLaunchSubmitted(r)
+              ? "Submitted to Pump.fun"
+              : escapeText(r.desc || "—"))
+        : (isBonded ? "Graduated from bonding" : escapeText(r.desc || "—"));
 
       return `
         <div class="cardGrid">
@@ -4897,13 +4920,13 @@ if(connectBtn){
       if(prefer) return String(prefer.text).trim().slice(0, 90);
       const system = msgs.find((m) => m && String(m.text || "").trim());
       if(system) return String(system.text).trim().slice(0, 90);
-      if(room?.state === "SPAWNING") return "Spawn discussion active";
       if(isPumpfunRoom(room)){
         const status = getRoomLaunchStatus(room);
-        if(status === "submitted") return "Submitted to Pump.fun • Pending external market";
-        if(status === "live") return "Live externally • Trading handled outside Pingy";
+        if(status === "submitted") return "Submitted to Pump.fun • Pending market";
+        if(status === "live") return "Live externally • Trading outside Pingy";
         return "Spawn in progress • Draft";
       }
+      if(room?.state === "SPAWNING") return "Spawn discussion active";
       if(room?.state === "BONDING") return "Market is live";
       if(room?.state === "BONDED") return "Graduated from bonding";
       return "Thread active";
@@ -6111,7 +6134,7 @@ if(connectBtn){
           : null;
         const creatorCommit = Number(creatorCommitSol(r));
         const creatorCommitLine = creatorCommit > 0 ? `${creatorCommit.toFixed(3)} SOL` : "—";
-        const creatorLabel = isNativeLaunchBackend() ? "Creator commit" : "Creator buy";
+        const creatorLabel = isPumpfunRoom(r) ? "Creator buy" : (isNativeLaunchBackend() ? "Creator commit" : "Creator buy");
         const approverCount = Number((approvers || []).length || 0);
 
         const lines = [];
@@ -6134,12 +6157,7 @@ if(connectBtn){
         const submittedLabel = formatLaunchTimestamp(externalLaunch?.submitted_at);
         const liveLabel = formatLaunchTimestamp(externalLaunch?.live_at);
         if(isPumpfunRoom(r)){
-          const statusLine = launchStatus === "submitted"
-            ? "Submitted to Pump.fun"
-            : launchStatus === "live"
-              ? "Live externally"
-              : "Draft";
-          lines.push(`<div>Launch status: ${statusLine}</div>`);
+          lines.push(`<div>Launch status: ${getPumpfunLifecycleLabel(r)}</div>`);
           if(launchStatus === "submitted" || launchStatus === "live"){
             if(submittedLabel) lines.push(`<div>Submitted: ${escapeText(submittedLabel)}</div>`);
           }
@@ -6158,6 +6176,25 @@ if(connectBtn){
           if(externalMint) lines.push(`<div>External mint: ${escapeText(externalMint)}</div>`);
         }
         launchTrustLines.innerHTML = lines.join("");
+      }
+
+      const externalLaunchPanel = $("externalLaunchPanel");
+      const externalLaunchSummary = $("externalLaunchSummary");
+      if(externalLaunchPanel && externalLaunchSummary){
+        const status = getRoomLaunchStatus(r);
+        const externalUrl = getRoomExternalLaunchUrl(r).trim();
+        const externalMint = getRoomExternalMint(r).trim();
+        const showExternalLaunchPanel = isPumpfunRoom(r) && (status === "submitted" || status === "live");
+        externalLaunchPanel.style.display = showExternalLaunchPanel ? "block" : "none";
+        if(showExternalLaunchPanel){
+          if(status === "submitted"){
+            externalLaunchSummary.textContent = "Submitted to Pump.fun. Waiting for external URL and mint.";
+          } else if(externalUrl && externalMint){
+            externalLaunchSummary.textContent = "Live on Pump.fun. External URL and mint recorded.";
+          } else {
+            externalLaunchSummary.textContent = "Live externally. Launch record is missing some external details.";
+          }
+        }
       }
 
       const openPumpfunBtn = $("openPumpfunBtn");
@@ -6349,8 +6386,16 @@ if(connectBtn){
 
       if(r.state === "SPAWNING"){
         if(isPumpfunRoom(r)){
-          phaseLabel.textContent = "Spawn in progress";
-          statePill.textContent = "Draft";
+          if(isRoomLaunchLive(r)){
+            phaseLabel.textContent = "Live externally";
+            statePill.textContent = "Live";
+          } else if(isRoomLaunchSubmitted(r)){
+            phaseLabel.textContent = "Submitted to Pump.fun";
+            statePill.textContent = "Submitted";
+          } else {
+            phaseLabel.textContent = "Spawn in progress";
+            statePill.textContent = "Draft";
+          }
         } else {
           phaseLabel.textContent = "PING PHASE • spawn progress";
           statePill.textContent = visiblePhaseLabel;
@@ -6387,8 +6432,16 @@ if(connectBtn){
         }
       } else if(r.state === "BONDING"){
         if(isPumpfunRoom(r)){
-          phaseLabel.textContent = "Submitted to Pump.fun";
-          statePill.textContent = "Submitted";
+          if(isRoomLaunchLive(r)){
+            phaseLabel.textContent = "Live externally";
+            statePill.textContent = "Live";
+          } else if(isRoomLaunchSubmitted(r)){
+            phaseLabel.textContent = "Submitted to Pump.fun";
+            statePill.textContent = "Submitted";
+          } else {
+            phaseLabel.textContent = "Spawn in progress";
+            statePill.textContent = "Draft";
+          }
         } else {
           phaseLabel.textContent = "MARKET • external routing";
           statePill.textContent = visiblePhaseLabel;
@@ -6413,8 +6466,16 @@ if(connectBtn){
           : `External market routing will be used after spawn.`;
       } else {
         if(isPumpfunRoom(r)){
-          phaseLabel.textContent = "Live externally";
-          statePill.textContent = "Live";
+          if(isRoomLaunchLive(r)){
+            phaseLabel.textContent = "Live externally";
+            statePill.textContent = "Live";
+          } else if(isRoomLaunchSubmitted(r)){
+            phaseLabel.textContent = "Submitted to Pump.fun";
+            statePill.textContent = "Submitted";
+          } else {
+            phaseLabel.textContent = "Spawn in progress";
+            statePill.textContent = "Draft";
+          }
         } else {
           phaseLabel.textContent = "BONDED • spawn complete";
           statePill.textContent = "BONDED";
@@ -6446,14 +6507,24 @@ if(connectBtn){
       }
       if(spawnClosed){
         if(spawnSuccessTitle){
-          spawnSuccessTitle.textContent = isPumpfunPostSpawnRoom(r)
-            ? "Spawn completed. Trading for launched coins is handled outside Pingy."
-            : r.state === "BONDED"
-              ? "This launch has completed its Pingy spawn phase."
-              : "External market routing will be used after spawn.";
+          if(isPumpfunRoom(r)){
+            if(isRoomLaunchLive(r)) spawnSuccessTitle.textContent = "Launch is live externally.";
+            else if(isRoomLaunchSubmitted(r)) spawnSuccessTitle.textContent = "Launch submitted to Pump.fun.";
+            else spawnSuccessTitle.textContent = "Spawn in progress.";
+          } else {
+            spawnSuccessTitle.textContent = isPumpfunPostSpawnRoom(r)
+              ? "Spawn completed. Trading for launched coins is handled outside Pingy."
+              : r.state === "BONDED"
+                ? "This launch has completed its Pingy spawn phase."
+                : "External market routing will be used after spawn.";
+          }
         }
         if(spawnSuccessText){
-          if(isPumpfunPostSpawnRoom(r) || r.state === "BONDED"){
+          if(isPumpfunRoom(r)){
+            if(isRoomLaunchLive(r)) spawnSuccessText.textContent = "Trading for launched coins is handled outside Pingy.";
+            else if(isRoomLaunchSubmitted(r)) spawnSuccessText.textContent = "Waiting for external market listing details.";
+            else spawnSuccessText.textContent = "This launch is still forming on Pingy.";
+          } else if(isPumpfunPostSpawnRoom(r) || r.state === "BONDED"){
             spawnSuccessText.textContent = "Trading for launched coins is handled outside Pingy.";
           } else {
             spawnSuccessText.textContent = claimState.hasClaimable
