@@ -83,6 +83,7 @@ const $ = (id) => document.getElementById(id);
     const POST_SPAWN_TRADING_FEE_BPS = 100;
     const BPS_DENOM = 10_000;
     const PINGY_LAUNCH_BACKEND = "pumpfun";
+    const PINGY_PUMPFUN_LAUNCH_ENDPOINT = "";
     const EXTERNAL_LAUNCH_RECORDS_STORAGE_KEY = "pingy_external_launch_records";
 
     function isPumpfunLaunchBackend(){
@@ -503,10 +504,69 @@ const $ = (id) => document.getElementById(id);
       });
     }
 
-    function submitPumpfunLaunch(room){
-      // Future backend POST boundary for Pump.fun launch handoff.
+    function getPumpfunLaunchEndpoint(){
+      const configuredEndpoint = typeof window?.PINGY_PUMPFUN_LAUNCH_ENDPOINT === "string"
+        ? window.PINGY_PUMPFUN_LAUNCH_ENDPOINT
+        : PINGY_PUMPFUN_LAUNCH_ENDPOINT;
+      return String(configuredEndpoint || "").trim();
+    }
+
+    // External-launch adapter boundary:
+    // - app.js orchestrates room lifecycle + UI locks/toasts around this call
+    // - this is the only place real backend POST happens for Pump.fun handoff
+    // - backend can later mint + return URL/mint while UI/state wiring remains stable
+    async function submitPumpfunLaunchRequest(payload){
+      const endpoint = getPumpfunLaunchEndpoint();
+      if(!endpoint){
+        return { mock: true };
+      }
+
+      try {
+        const response = await fetch(endpoint, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload || {}),
+        });
+
+        let responseBody = null;
+
+        try {
+          responseBody = await response.json();
+        } catch (_jsonErr) {
+          return buildExternalLaunchErrorResult("Invalid launch response from backend.");
+        }
+
+        if(!response.ok){
+          const message = typeof responseBody?.error === "string"
+            ? responseBody.error
+            : `Launch submission failed (${response.status}).`;
+          return buildExternalLaunchErrorResult(message);
+        }
+
+        return responseBody;
+
+      } catch (err) {
+        console.error("[pingy] submitPumpfunLaunchRequest failed", err);
+        return buildExternalLaunchErrorResult("Network error while submitting launch.");
+      }
+    }
+
+    async function submitPumpfunLaunch(room){
+      if(!room) return buildExternalLaunchErrorResult("Room not found.");
+      const payload = buildPumpfunLaunchPayload(room);
+
       if(DEV_SIMULATION) return submitPumpfunLaunchMock(room);
-      return submitPumpfunLaunchMock(room);
+
+      const rawResult = await submitPumpfunLaunchRequest(payload);
+
+      if(rawResult?.mock){
+        return submitPumpfunLaunchMock(room);
+      }
+
+      if(rawResult?.payload && typeof rawResult.payload === "object"){
+        return rawResult;
+      }
+      return { ...rawResult, payload };
     }
 
     async function submitRoomLaunchExternally(roomId){
@@ -516,7 +576,7 @@ const $ = (id) => document.getElementById(id);
       if(!canCurrentWalletLaunchExternally(room)) return buildExternalLaunchErrorResult("Creator, approver, or admin required to submit launch handoff.");
 
       try {
-        const rawResult = await Promise.resolve(submitPumpfunLaunch(room));
+        const rawResult = await submitPumpfunLaunch(room);
         return normalizeExternalLaunchSubmissionResult(rawResult, room);
       } catch (err) {
         console.error("[pingy] submitRoomLaunchExternally failed", err);
