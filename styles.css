@@ -76,9 +76,10 @@
       scroll-snap-align:start;
       background:#fff;
       transform: translateY(0);
+      box-shadow:none;
       transition: transform 140ms ease, box-shadow 140ms ease;
     }
-    .card:hover{transform: translateY(-4px); box-shadow:0 12px 24px rgba(0,0,0,0.18)}
+    .card:hover{transform: translateY(-2px); box-shadow:0 8px 16px rgba(0,0,0,0.14)}
     .card.pulse{outline:2px solid var(--fg); outline-offset:2px}
 
     .card.isMover{
@@ -100,14 +101,16 @@
     .tiny{font-size:12px;color:var(--muted)}
     .name{font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:210px}
     .subline{white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:210px}
+    .chipLine{display:block; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
     .metric{font-weight:700; text-align:right}
     .chg{font-weight:700; text-align:right}
+    .metricCol{min-width:0}
     .chg.up{color:var(--up)}
     .chg.down{color:var(--down)}
 
     .cardGrid{
       display:grid;
-      grid-template-columns: 44px 1fr 92px;
+      grid-template-columns: 44px minmax(0,1fr) 108px;
       gap:10px;
       align-items:start;
     }
