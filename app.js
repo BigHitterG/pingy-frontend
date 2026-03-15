@@ -109,6 +109,26 @@ const $ = (id) => document.getElementById(id);
       return "draft";
     }
 
+    // Keep this helper near the top-level status helpers so it is always available
+    // to every runtime path that touches room/deposit snapshots.
+    function statusToString(status){
+      if(typeof status === "string") return status;
+      if(typeof status === "number") return String(status);
+      if(status && typeof status === "object"){
+        if(typeof status.value === "string") return status.value;
+        if(typeof status.kind === "string") return status.kind;
+        const keys = Object.keys(status);
+        if(keys.length === 1) return keys[0];
+      }
+      return String(status || "");
+    }
+
+    function normalizeDepositStatus(status){
+      const raw = statusToString(status).toLowerCase();
+      if(raw === "denied") return "rejected";
+      return raw;
+    }
+
     function getExternalLaunchResultMint(result){
       if(!result || typeof result !== "object") return "";
       const candidates = [
@@ -5586,24 +5606,6 @@ if(connectBtn){
       const pos = r.positions || {};
       for(const w of Object.keys(pos)) total += Math.max(0, Number((pos[w]||{}).escrow_sol || 0));
       return total;
-    }
-
-    function statusToString(status){
-      if(typeof status === "string") return status;
-      if(typeof status === "number") return String(status);
-      if(status && typeof status === "object"){
-        if(typeof status.value === "string") return status.value;
-        if(typeof status.kind === "string") return status.kind;
-        const keys = Object.keys(status);
-        if(keys.length === 1) return keys[0];
-      }
-      return String(status || "");
-    }
-
-    function normalizeDepositStatus(status){
-      const raw = statusToString(status).toLowerCase();
-      if(raw === "denied") return "rejected";
-      return raw;
     }
 
     function isCountedDepositStatus(status){
