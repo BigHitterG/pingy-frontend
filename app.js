@@ -8840,8 +8840,59 @@ if(connectBtn){
       fees: {
         title: "Fees",
         body: `
-          <p>Current fees: 0% platform fee; network fees apply. Future fees may be introduced with notice.</p>
-          <p>This includes spawn flow, transactions, and creator-related actions unless explicitly stated otherwise in future updates.</p>
+          <p><strong>Last Updated:</strong> 15 March 2026</p>
+          <p>Pingy keeps fees simple and predictable.</p>
+
+          <p><strong>Pingy currently charges a 1% platform fee at two points in the launch flow:</strong></p>
+          <p>1. when a user contributes SOL to a room (“Ping”)</p>
+          <p>2. when a coin successfully launches</p>
+
+          <p>These fees support platform operations, launch coordination, settlement infrastructure, and distribution handling.</p>
+
+          <p><strong>Pingy Platform Fees</strong></p>
+          <p><strong>Action</strong> | <strong>Fee</strong></p>
+          <p>Create a room | 0 SOL</p>
+          <p>Contribute to a room (“Ping”) | 1% of the SOL deposited</p>
+          <p>Successful coin launch | 1% of the total SOL raised</p>
+
+          <p><strong>Ping Fee</strong></p>
+          <p>When a user contributes SOL to a room, a 1% fee is automatically applied to the deposited amount.</p>
+          <p><strong>Example:</strong></p>
+          <p>User contribution: 1.00 SOL</p>
+          <p>Pingy fee (1%): 0.01 SOL</p>
+          <p>Amount added to the room pool: 0.99 SOL</p>
+          <p>This fee is collected at the time of deposit.</p>
+
+          <p><strong>Launch Fee</strong></p>
+          <p>When a room successfully launches a coin, Pingy collects a 1% launch execution fee from the total SOL raised.</p>
+          <p><strong>Example:</strong></p>
+          <p>Total raised: 10 SOL</p>
+          <p>Pingy launch fee (1%): 0.10 SOL</p>
+          <p>SOL used to launch the token: 9.90 SOL</p>
+          <p>This fee is only charged when a launch succeeds.</p>
+
+          <p><strong>Token Distribution</strong></p>
+          <p>After launch, tokens acquired through the launch transaction are distributed to room participants according to their proportional contributions.</p>
+          <p>Distribution may require token account setup and onchain transfer activity. Related network or execution costs may be deducted from launch proceeds or otherwise handled by Pingy’s launch and settlement flow.</p>
+
+          <p><strong>Third-Party Fees</strong></p>
+          <p>Pingy does not control fees charged by third-party services or protocols.</p>
+          <p>Additional costs may apply from:</p>
+          <p>- blockchain network transaction fees</p>
+          <p>- wallet software fees</p>
+          <p>- external launch venues such as pump.fun</p>
+          <p>- external trading venues after launch</p>
+          <p>These are separate from Pingy platform fees.</p>
+
+          <p><strong>Creator Rewards</strong></p>
+          <p>If an external launch venue provides creator rewards, creator trading fees, or similar creator-linked incentives, those rewards are intended to belong to the designated coin creator.</p>
+          <p>Pingy may structure launches so the creator remains the recognized creator for external platform purposes, while Pingy manages pooled launch capital and participant settlement.</p>
+
+          <p><strong>Fee Transparency</strong></p>
+          <p>Pingy aims to keep fees easy to understand and lightweight. Some fees may be reflected in the transaction flow or launch math rather than presented as separate standalone charges.</p>
+
+          <p><strong>Changes to Fees</strong></p>
+          <p>Pingy may update platform fees in the future. Any changes will be reflected in this Fees section.</p>
         `,
       },
       revenue: {
