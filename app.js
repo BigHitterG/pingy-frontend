@@ -1096,8 +1096,6 @@ const $ = (id) => document.getElementById(id);
     function debugLaunchAuthority(room, source = "unknown"){
       const creatorWallet = getNormalizedWallet(room?.creator_wallet);
       const currentWallet = getNormalizedWallet(connectedWallet);
-      const approver = isApprover(room, connectedWallet);
-      const admin = isRoomAdminWallet(room, connectedWallet);
       const creator = isCreator(room, connectedWallet);
 
       console.log("[pingy] launch authority debug", {
@@ -1106,8 +1104,6 @@ const $ = (id) => document.getElementById(id);
         connectedWallet: currentWallet,
         creatorWallet,
         creator,
-        approver,
-        admin,
         roomState: room?.state,
         launchStatus: getRoomLaunchStatus(room),
         canLaunch:
@@ -1115,9 +1111,9 @@ const $ = (id) => document.getElementById(id);
           !!room &&
           isPumpfunRoom(room) &&
           !isRoomLaunchSubmitting(room) &&
-          room.state === "SPAWNING" &&
+          (room.state === "SPAWNING" || roomLaunchMode(room) === "instant") &&
           getRoomLaunchStatus(room) === "draft" &&
-          (creator || approver || admin),
+          creator,
       });
     }
 
@@ -1126,9 +1122,9 @@ const $ = (id) => document.getElementById(id);
       if(!currentWallet || !room) return false;
       if(!isPumpfunRoom(room)) return false;
       if(isRoomLaunchSubmitting(room)) return false;
-      if(room.state !== "SPAWNING") return false;
+      if(room.state !== "SPAWNING" && roomLaunchMode(room) !== "instant") return false;
       if(getRoomLaunchStatus(room) !== "draft") return false;
-      return isCreator(room, currentWallet) || isApprover(room, currentWallet) || isRoomAdminWallet(room, currentWallet);
+      return isCreator(room, connectedWallet);
     }
 
     function canCurrentWalletMarkLiveExternally(room){
@@ -1136,20 +1132,20 @@ const $ = (id) => document.getElementById(id);
       if(!isPumpfunRoom(room)) return false;
       const status = getRoomLaunchStatus(room);
       if(status !== "draft" && status !== "submitted") return false;
-      return isCreator(room, connectedWallet) || isApprover(room, connectedWallet) || isRoomAdminWallet(room, connectedWallet);
+      return isCreator(room, connectedWallet);
     }
 
     function canCurrentWalletSimulateDistribution(room){
       if(!DEV_SIMULATION || !connectedWallet || !room) return false;
       if(!isPumpfunRoom(room) || !isRoomLaunchLive(room)) return false;
-      return isCreator(room, connectedWallet) || isApprover(room, connectedWallet) || isRoomAdminWallet(room, connectedWallet);
+      return isCreator(room, connectedWallet);
     }
 
     function canCurrentWalletSettleDistribution(room){
       if(!connectedWallet || !room) return false;
       if(!isPumpfunRoom(room)) return false;
       if(isRoomSettlementSubmitting(room)) return false;
-      return canCurrentWalletSubmitExternalHandoff(room);
+      return isCreator(room, connectedWallet);
     }
 
     function isRoomSettlementSubmitting(room){
@@ -1511,6 +1507,11 @@ const $ = (id) => document.getElementById(id);
         if(!silent) showToast(error);
         return buildExternalLaunchErrorResult(error);
       }
+      if(!isCreator(room, connectedWallet)){
+        const error = "Creator required to refresh status.";
+        if(!silent) showToast(error);
+        return buildExternalLaunchErrorResult(error);
+      }
 
       room.status_refreshing = true;
       safeRenderActiveRoom(room.id);
@@ -1560,6 +1561,7 @@ const $ = (id) => document.getElementById(id);
     function maybeAutoRefreshRoomExternalStatus(room){
       if(!room || !activeRoomId || room.id !== activeRoomId) return;
       if(!canRefreshRoomExternalStatus(room)) return;
+      if(!isCreator(room, connectedWallet)) return;
       const now = Date.now();
       const last = Number(room.last_status_refresh_at || 0);
       const minIntervalMs = 20_000;
@@ -1687,7 +1689,7 @@ const $ = (id) => document.getElementById(id);
       const room = roomById(roomId);
       const readiness = validatePumpfunSettlementReadiness(room);
       if(!readiness.ok) return buildExternalSettlementErrorResult(readiness.error);
-      if(!canCurrentWalletSettleDistribution(room)) return buildExternalSettlementErrorResult("Creator, approver, or admin required to submit settlement.");
+      if(!canCurrentWalletSettleDistribution(room)) return buildExternalSettlementErrorResult("Creator required to submit settlement.");
 
       try {
         const rawResult = await submitPumpfunSettlement(room);
@@ -1715,8 +1717,8 @@ const $ = (id) => document.getElementById(id);
         return buildExternalSettlementErrorResult(readiness.error || "Settlement submission failed.");
       }
       if(!canCurrentWalletSettleDistribution(room)){
-        showToast("Creator, approver, or admin required to submit settlement.");
-        return buildExternalSettlementErrorResult("Creator, approver, or admin required to submit settlement.");
+        showToast("Creator required to submit settlement.");
+        return buildExternalSettlementErrorResult("Creator required to submit settlement.");
       }
       room.settlement_submitting = true;
       safeRenderActiveRoom(room.id);
@@ -1961,7 +1963,7 @@ const $ = (id) => document.getElementById(id);
       const room = roomById(roomId);
       const readiness = validatePumpfunLaunchReadiness(room);
       if(!readiness.ok) return buildExternalLaunchErrorResult(readiness.error);
-      if(!canCurrentWalletLaunchExternally(room)) return buildExternalLaunchErrorResult("Creator, approver, or admin required to submit launch handoff.");
+      if(!canCurrentWalletLaunchExternally(room)) return buildExternalLaunchErrorResult("Creator required to submit launch handoff.");
 
       try {
         const rawResult = await submitPumpfunLaunch(room);
@@ -1990,8 +1992,8 @@ const $ = (id) => document.getElementById(id);
         return buildExternalLaunchErrorResult(readiness.error || "Launch submission failed.");
       }
       if(!canCurrentWalletLaunchExternally(room)){
-        showToast("Creator, approver, or admin required to submit launch handoff.");
-        return buildExternalLaunchErrorResult("Creator, approver, or admin required to submit launch handoff.");
+        showToast("Creator required to submit launch handoff.");
+        return buildExternalLaunchErrorResult("Creator required to submit launch handoff.");
       }
       room.launch_submitting = true;
       safeRenderActiveRoom(room.id);
@@ -2121,7 +2123,7 @@ const $ = (id) => document.getElementById(id);
     function simulateRoomDistributionSettlement(roomId){
       const room = roomById(roomId);
       if(!room || !canCurrentWalletSimulateDistribution(room)){
-        showToast("Distribution simulation is limited to dev creator/approver/admin controls.");
+        showToast("Distribution simulation is limited to dev creator controls.");
         return false;
       }
       if(!isPumpfunRoom(room) || !isRoomLaunchLive(room)){
@@ -7971,7 +7973,7 @@ if(connectBtn){
       const refreshExternalStatusBtn = $("refreshExternalStatusBtn");
       if(refreshExternalStatusBtn){
         const launchStatus = getRoomLaunchStatus(r);
-        const canRefresh = canRefreshRoomExternalStatus(r);
+        const canRefresh = canRefreshRoomExternalStatus(r) && isCreator(r, connectedWallet);
         const endpointReady = DEV_SIMULATION || hasPumpfunStatusEndpoint();
         const refreshing = isRoomStatusRefreshing(r);
         const showRefresh = isPumpfunRoom(r) && endpointReady && (launchStatus === "submitted" || launchStatus === "live") && (refreshing || canRefresh);
