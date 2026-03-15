@@ -526,9 +526,52 @@ const $ = (id) => document.getElementById(id);
       return String(room?.external_platform || "").toLowerCase();
     }
 
+    function readRoomEscrowSnapshot(room){
+      const r = room || {};
+      const onchain = state.onchain?.[r.id];
+      if(onchain && onchain.byWallet){
+        const byWallet = {};
+        const approvedWallets = [];
+        const pendingWallets = [];
+
+        for(const wallet of Object.keys(onchain.byWallet)){
+          const row = onchain.byWallet[wallet] || {};
+          const blocked = !!(r.blockedWallets && r.blockedWallets[wallet]);
+          const status = blocked ? "denied" : normalizeDepositStatus(row.status);
+          const rawEscrowSol = Math.max(0, Number(row.escrow_sol || 0));
+          const escrowSol = isCountedDepositStatus(status) ? rawEscrowSol : 0;
+
+          byWallet[wallet] = {
+            ...row,
+            status,
+            escrow_sol: escrowSol
+          };
+
+          if(isCountedDepositStatus(status)) approvedWallets.push(wallet);
+          if(status === "pending") pendingWallets.push(wallet);
+        }
+
+        return {
+          ...onchain,
+          byWallet,
+          approvedWallets,
+          pendingWallets
+        };
+      }
+
+      return {
+        roomId: r.id,
+        admin: r.creator_wallet,
+        approverWallets: r.creator_wallet ? [r.creator_wallet] : [],
+        byWallet: {},
+        approvedWallets: [],
+        pendingWallets: []
+      };
+    }
+
     function getRoomTotalCommittedSol(room){
       if(!room) return 0;
-      const snapshot = getRoomEscrowSnapshot(room);
+      const snapshot = readRoomEscrowSnapshot(room);
       return Number((snapshot.approvedWallets || []).reduce((sum, wallet) => {
         return sum + Number(snapshot.byWallet?.[wallet]?.escrow_sol || 0);
       }, 0));
@@ -573,7 +616,7 @@ const $ = (id) => document.getElementById(id);
 
     function getRoomEligibleDistributionWallets(room){
       if(!isPumpfunRoom(room)) return [];
-      const snapshot = getRoomEscrowSnapshot(room);
+      const snapshot = readRoomEscrowSnapshot(room);
       return (snapshot.approvedWallets || []).filter((wallet) => {
         return Number(snapshot.byWallet?.[wallet]?.escrow_sol || 0) > 0;
       });
@@ -581,7 +624,7 @@ const $ = (id) => document.getElementById(id);
 
     function getRoomTotalDistributionWeight(room){
       if(!isPumpfunRoom(room)) return 0;
-      const snapshot = getRoomEscrowSnapshot(room);
+      const snapshot = readRoomEscrowSnapshot(room);
       const wallets = getRoomEligibleDistributionWallets(room);
       return Number(wallets.reduce((sum, wallet) => {
         return sum + Number(snapshot.byWallet?.[wallet]?.escrow_sol || 0);
@@ -605,7 +648,7 @@ const $ = (id) => document.getElementById(id);
           rows: [],
         };
       }
-      const snapshot = getRoomEscrowSnapshot(room);
+      const snapshot = readRoomEscrowSnapshot(room);
       const wallets = (snapshot.approvedWallets || []).filter((wallet) => {
         return Number(snapshot.byWallet?.[wallet]?.escrow_sol || 0) > 0;
       });
@@ -655,7 +698,7 @@ const $ = (id) => document.getElementById(id);
     function getRoomPlannedDistributionRows(room){
       if(!isPumpfunRoom(room)) return [];
       if(hasFrozenDistributionSnapshot(room)) return room.distribution_snapshot_rows;
-      const snapshot = getRoomEscrowSnapshot(room);
+      const snapshot = readRoomEscrowSnapshot(room);
       const wallets = getRoomEligibleDistributionWallets(room);
       const tokenPool = toSafeExternalTokenAmount(room?.external_tokens_received, 0);
       const weightedRows = wallets.map((wallet) => {
@@ -5567,7 +5610,7 @@ if(connectBtn){
 
     function walletStatus(r, wallet){
       if(!wallet) return "";
-      const snapshot = getRoomEscrowSnapshot(r);
+      const snapshot = readRoomEscrowSnapshot(r);
       if(r.blockedWallets && r.blockedWallets[wallet]) return "denied";
       const status = snapshot.byWallet?.[wallet]?.status;
       if(status) return status;
@@ -5608,51 +5651,12 @@ if(connectBtn){
     function isPending(r, wallet){ return walletStatus(r, wallet) === "pending"; }
 
     function getRoomEscrowSnapshot(room){
-      const r = room || {};
-      const onchain = state.onchain?.[r.id];
-      if(onchain && onchain.byWallet){
-        const byWallet = {};
-        const approvedWallets = [];
-        const pendingWallets = [];
-
-        for(const wallet of Object.keys(onchain.byWallet)){
-          const row = onchain.byWallet[wallet] || {};
-          const blocked = !!(r.blockedWallets && r.blockedWallets[wallet]);
-          const status = blocked ? "denied" : normalizeDepositStatus(row.status);
-          const rawEscrowSol = Math.max(0, Number(row.escrow_sol || 0));
-          const escrowSol = isCountedDepositStatus(status) ? rawEscrowSol : 0;
-
-          byWallet[wallet] = {
-            ...row,
-            status,
-            escrow_sol: escrowSol
-          };
-
-          if(isCountedDepositStatus(status)) approvedWallets.push(wallet);
-          if(status === "pending") pendingWallets.push(wallet);
-        }
-
-        return {
-          ...onchain,
-          byWallet,
-          approvedWallets,
-          pendingWallets
-        };
-      }
-
-      return {
-        roomId: r.id,
-        admin: r.creator_wallet,
-        approverWallets: r.creator_wallet ? [r.creator_wallet] : [],
-        byWallet: {},
-        approvedWallets: [],
-        pendingWallets: []
-      };
+      return readRoomEscrowSnapshot(room);
     }
 
     function approvedEscrowSol(r){
       let total = 0;
-      const snapshot = getRoomEscrowSnapshot(r);
+      const snapshot = readRoomEscrowSnapshot(r);
       for(const w of snapshot.approvedWallets){
         total += Number(snapshot.byWallet[w]?.escrow_sol || 0);
       }
@@ -5665,7 +5669,7 @@ if(connectBtn){
       }
       let total = 0;
       const capSol = Number(walletCapSol(r) || 0);
-      const snapshot = getRoomEscrowSnapshot(r);
+      const snapshot = readRoomEscrowSnapshot(r);
       for(const w of snapshot.approvedWallets){
         const escrow = Number(snapshot.byWallet[w]?.escrow_sol || 0);
         total += Math.min(escrow, capSol);
@@ -5708,7 +5712,7 @@ if(connectBtn){
       if(r.state === "SPAWNING"){
         const total = countedEscrowSol(r);
         const target = spawnTargetSol(r);
-        if(target > 0 && total >= target && getRoomEscrowSnapshot(r).approvedWallets.length >= minApprovedWalletsRequired(r)){
+        if(target > 0 && total >= target && readRoomEscrowSnapshot(r).approvedWallets.length >= minApprovedWalletsRequired(r)){
           if(shouldUseOnchain()){
             void maybeExecuteSpawnOnchain(r);
             return;
@@ -5931,7 +5935,7 @@ if(connectBtn){
       const target = spawnTargetSol(room);
       const cap = Math.max(0.01, walletCapSol(room));
       const shouldPing = rand() < 0.78;
-      let snapshot = getRoomEscrowSnapshot(room);
+      let snapshot = readRoomEscrowSnapshot(room);
       if(shouldPing){
         const wallet = sim.walletPool[Math.floor(rand() * sim.walletPool.length)];
         const pos = ensurePos(room, wallet);
@@ -5941,7 +5945,7 @@ if(connectBtn){
           const approveChance = snapshot.approvedWallets.length < minWallets ? 0.58 : 0.32;
           const approveNow = rand() < approveChance;
           upsertDevSimPing(room, wallet, contribution, approveNow);
-          snapshot = getRoomEscrowSnapshot(room);
+          snapshot = readRoomEscrowSnapshot(room);
         }
       }
 
@@ -5950,7 +5954,7 @@ if(connectBtn){
         const wasApproved = normalizeDepositStatus(room.approval?.[wallet]) === "approved";
         room.approval[wallet] = "approved";
         if(!wasApproved) addApprovalSystemEvent(room.id, wallet);
-        snapshot = getRoomEscrowSnapshot(room);
+        snapshot = readRoomEscrowSnapshot(room);
       }
 
       const approvedTotal = approvedEscrowSol(room);
@@ -7401,7 +7405,7 @@ if(connectBtn){
       if(!toggle) return;
       const tri = pingersOpen ? "▾" : "▸";
       const r = roomById(roomId || activeRoomId);
-      const snapshot = r ? getRoomEscrowSnapshot(r) : null;
+      const snapshot = r ? readRoomEscrowSnapshot(r) : null;
       const pendingCount = Number(snapshot?.pendingWallets?.length || 0);
       const pendingSuffix = pendingCount > 0 ? ` (${pendingCount} pending)` : "";
       toggle.textContent = `pingers ${tri}${pendingSuffix}`;
@@ -7661,7 +7665,7 @@ if(connectBtn){
 
       $("shareBtn").onclick = () => openShareModal(roomId);
 
-      const snapshot = getRoomEscrowSnapshot(r);
+      const snapshot = readRoomEscrowSnapshot(r);
       const pending = (snapshot.pendingWallets || []).slice();
       const pingers = (snapshot.approvedWallets || []).slice();
       const approvers = getRoomApproverWallets(r);
