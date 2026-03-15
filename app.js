@@ -1075,13 +1075,26 @@ const $ = (id) => document.getElementById(id);
       return !!a && !!b && a === b;
     }
 
+    function isOnchainApproverWallet(room, wallet){
+      if(!room || !wallet) return false;
+      const walletKey = toBase58String(wallet);
+      if(!walletKey) return false;
+      const onchainApprovers = state.onchain?.[room.id]?.approverWallets || room.onchain?.approverWallets || [];
+      return onchainApprovers.some((approver) => toBase58String(approver) === walletKey);
+    }
+
+    function canCurrentWalletSubmitExternalHandoff(room){
+      if(!connectedWallet || !room) return false;
+      return isCreator(room, connectedWallet) || isOnchainApproverWallet(room, connectedWallet) || isRoomAdminWallet(room, connectedWallet);
+    }
+
     function canCurrentWalletLaunchExternally(room){
       if(!connectedWallet || !room) return false;
       if(!isPumpfunRoom(room)) return false;
       if(isRoomLaunchSubmitting(room)) return false;
       if(room.state !== "SPAWNING") return false;
       if(getRoomLaunchStatus(room) !== "draft") return false;
-      return isCreator(room, connectedWallet) || isApprover(room, connectedWallet) || isRoomAdminWallet(room, connectedWallet);
+      return canCurrentWalletSubmitExternalHandoff(room);
     }
 
     function canCurrentWalletMarkLiveExternally(room){
@@ -1102,7 +1115,7 @@ const $ = (id) => document.getElementById(id);
       if(!connectedWallet || !room) return false;
       if(!isPumpfunRoom(room)) return false;
       if(isRoomSettlementSubmitting(room)) return false;
-      return isCreator(room, connectedWallet) || isApprover(room, connectedWallet) || isRoomAdminWallet(room, connectedWallet);
+      return canCurrentWalletSubmitExternalHandoff(room);
     }
 
     function isRoomSettlementSubmitting(room){
