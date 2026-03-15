@@ -3751,7 +3751,7 @@ const $ = (id) => document.getElementById(id);
         walletPool: [],
         backup: null
       },
-      activeHomeTab: "pings",
+      activeHomeTab: "explore",
       activePingThreadId: null,
       pingReadByWallet: {}
     };
@@ -6820,7 +6820,7 @@ if(connectBtn){
       }
     });
     mountCreateCoinInSpawnTab();
-    setHomeTab("pings");
+    setHomeTab("explore");
     updatePingsTabUnreadBadge();
     bindRoomChartControls();
 
