@@ -95,6 +95,25 @@ const $ = (id) => document.getElementById(id);
       return PINGY_LAUNCH_BACKEND === "native";
     }
 
+    let uiRenderHome = null;
+    let uiRenderRoom = null;
+
+    function setUiRenderers({ renderHomeFn = null, renderRoomFn = null } = {}){
+      uiRenderHome = typeof renderHomeFn === "function" ? renderHomeFn : null;
+      uiRenderRoom = typeof renderRoomFn === "function" ? renderRoomFn : null;
+    }
+
+    function safeRenderActiveRoom(roomId){
+      if(typeof uiRenderRoom !== "function") return;
+      if(!roomId) return;
+      uiRenderRoom(roomId);
+    }
+
+    function safeRenderHome(){
+      if(typeof uiRenderHome !== "function") return;
+      uiRenderHome();
+    }
+
     function launchStatusLabel(room){
       const status = getRoomLaunchStatus(room);
       if(status === "submitted") return "Submitted to Pump.fun";
@@ -1445,8 +1464,8 @@ const $ = (id) => document.getElementById(id);
       }
 
       room.status_refreshing = true;
-      renderRoom(room.id);
-      renderHome();
+      safeRenderActiveRoom(room.id);
+      safeRenderHome();
       try {
         setRoomExternalDebug(room, {
           last_action: "status_request",
@@ -1484,8 +1503,8 @@ const $ = (id) => document.getElementById(id);
       } finally {
         room.status_refreshing = false;
         room.last_status_refresh_at = Date.now();
-        renderRoom(room.id);
-        renderHome();
+        safeRenderActiveRoom(room.id);
+        safeRenderHome();
       }
     }
 
@@ -1569,8 +1588,8 @@ const $ = (id) => document.getElementById(id);
       snapshotRoomExternalDistributionPlan(room);
       validateDistributionSnapshot(room);
       if(DEV_SIMULATION) saveLaunchRecordsToLocalStorage();
-      renderRoom(room.id);
-      renderHome();
+      safeRenderActiveRoom(room.id);
+      safeRenderHome();
       return room;
     }
 
@@ -1651,8 +1670,8 @@ const $ = (id) => document.getElementById(id);
         return buildExternalSettlementErrorResult("Creator, approver, or admin required to submit settlement.");
       }
       room.settlement_submitting = true;
-      renderRoom(room.id);
-      renderHome();
+      safeRenderActiveRoom(room.id);
+      safeRenderHome();
       try {
         setRoomExternalDebug(room, {
           last_action: "settlement_request",
@@ -1693,8 +1712,8 @@ const $ = (id) => document.getElementById(id);
         return failed;
       } finally {
         room.settlement_submitting = false;
-        renderRoom(room.id);
-        renderHome();
+        safeRenderActiveRoom(room.id);
+        safeRenderHome();
       }
     }
 
@@ -1925,8 +1944,8 @@ const $ = (id) => document.getElementById(id);
         return buildExternalLaunchErrorResult("Creator, approver, or admin required to submit launch handoff.");
       }
       room.launch_submitting = true;
-      renderRoom(room.id);
-      renderHome();
+      safeRenderActiveRoom(room.id);
+      safeRenderHome();
       try {
         setRoomExternalDebug(room, {
           last_action: "launch_request",
@@ -1968,8 +1987,8 @@ const $ = (id) => document.getElementById(id);
         return failedResult;
       } finally {
         room.launch_submitting = false;
-        renderRoom(room.id);
-        renderHome();
+        safeRenderActiveRoom(room.id);
+        safeRenderHome();
       }
     }
 
@@ -2044,8 +2063,8 @@ const $ = (id) => document.getElementById(id);
       }
 
       addSystemEvent(room.id, "Launch is now live externally.");
-      renderRoom(room.id);
-      renderHome();
+      safeRenderActiveRoom(room.id);
+      safeRenderHome();
       return true;
     }
 
@@ -2245,8 +2264,8 @@ const $ = (id) => document.getElementById(id);
       });
       saveLaunchRecordsToLocalStorage();
 
-      renderRoom(room.id);
-      renderHome();
+      safeRenderActiveRoom(room.id);
+      safeRenderHome();
       return room;
     }
 
@@ -8325,6 +8344,9 @@ if(connectBtn){
 
       if(pingConfirm) pingConfirm.textContent = (isBonded || isPumpPostSpawn) ? "external routing" : (isSpawning ? "ping" : "buy");
     }
+
+    setUiRenderers({ renderHomeFn: renderHome, renderRoomFn: renderRoom });
+
 
     function updatePingAllocationHint(roomId){
       const hint = $("pingAllocationHint");
