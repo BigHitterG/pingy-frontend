@@ -129,6 +129,11 @@ const $ = (id) => document.getElementById(id);
       return raw;
     }
 
+    function isCountedDepositStatus(status){
+      const normalized = normalizeDepositStatus(status);
+      return normalized === "approved" || normalized === "swept";
+    }
+
     function getExternalLaunchResultMint(result){
       if(!result || typeof result !== "object") return "";
       const candidates = [
@@ -5608,11 +5613,6 @@ if(connectBtn){
       return total;
     }
 
-    function isCountedDepositStatus(status){
-      const normalized = normalizeDepositStatus(status);
-      return normalized === "approved" || normalized === "swept";
-    }
-
     function walletStatus(r, wallet){
       if(!wallet) return "";
       const snapshot = readRoomEscrowSnapshot(r);
@@ -6723,6 +6723,7 @@ if(connectBtn){
 
     async function createCoinFromForm(){
       if(!connectedWallet) return showToast("connect wallet first.");
+      console.log("[ping-debug] spawn button handler start", { connectedWallet, launchBackend: PINGY_LAUNCH_BACKEND });
       const name = ($("newName").value||"").trim();
       const ticker = ($("newTicker").value||"").trim().toUpperCase();
       const desc = ($("newDesc").value||"").trim();
@@ -6740,6 +6741,7 @@ if(connectBtn){
 
       const commitStr = ($("newCommit").value||"").trim();
       const commit = commitStr ? Number(commitStr) : 0;
+      console.log("[ping-debug] creator SOL parsed", { commitStr, commit, isFinite: Number.isFinite(commit) });
 
       if(!name) return alert("name required.");
       if(!ticker) return alert("ticker required.");
@@ -6769,7 +6771,7 @@ if(connectBtn){
       }
       const id = "r" + Math.random().toString(16).slice(2,6);
 
-      if(shouldUseOnchain() && isNativeLaunchBackend()){
+      if(shouldUseOnchain() && (launchMode === "spawn" || isNativeLaunchBackend())){
         if(DEBUG_WALLET_SMOKE_BEFORE_SPAWN_TX && launchMode === "spawn"){
           const smokeRes = await runWalletSmokeTest();
           if(!smokeRes?.ok && isInvalidWalletArgumentsError(smokeRes?.error)){
@@ -6781,17 +6783,26 @@ if(connectBtn){
         if(launchMode === "spawn"){
           try {
             const createPath = commitLamports > 0 ? "combined-init+deposit" : "init-only";
+            console.log("[ping-debug] spawn funding branch entered", {
+              roomId: id,
+              commitLamports,
+              shouldFund: commitLamports > 0,
+              launchBackend: PINGY_LAUNCH_BACKEND,
+            });
             console.log("[ping-debug] create flow", {
               launchMode: launchConfig.launchMode,
               commitLamports,
               path: createPath,
             });
             if(commitLamports > 0){
+              console.log("[ping-debug] before Phantom funding tx", { roomId: id, commitLamports });
               await pingWithOptionalThreadInitTx(id, commitLamports, true, launchConfig);
+              console.log("[ping-debug] funding tx success", { roomId: id, commitLamports });
             } else {
               await initializeThreadTx(id, launchConfig);
             }
           } catch(e){
+            console.error("[ping-debug] funding tx failed", { roomId: id, commitLamports, error: String(e?.message || e) });
             if(isWalletTxRejected(e)) showToast("Create cancelled — no coin or commit was submitted.");
             else if(commitLamports > 0) reportTxError(e, "initialize_thread_core + initialize_thread_assets + ping_deposit failed during create");
             else reportTxError(e, "initialize_thread_core + initialize_thread_assets failed during create");
@@ -6886,10 +6897,17 @@ if(connectBtn){
       renderHome();
       openRoom(id);
 
-      if(shouldUseOnchain() && isNativeLaunchBackend()){
+      if(shouldUseOnchain() && launchMode === "spawn"){
         await fetchRoomOnchainSnapshot(id);
         await refreshConnectedWalletEscrowLine(id);
         await fetchConnectedWalletDepositSnapshot();
+        const createdRoom = roomById(id);
+        if(createdRoom){
+          console.log("[ping-debug] room escrow snapshot after spawn funding", {
+            roomId: id,
+            snapshot: readRoomEscrowSnapshot(createdRoom),
+          });
+        }
         if(activeRoomId === id) renderRoom(id);
       }
     }
