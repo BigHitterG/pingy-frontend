@@ -6254,7 +6254,7 @@ if(connectBtn){
             <div style="min-width:0;">
               <div class="row" style="justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:6px;">
                 <div class="name">${escapeText(r.name)} <span class="k">$${escapeText(r.ticker)}</span></div>
-                <span class="k" style="margin-left:auto;max-width:100%;">${phaseLabel} • ${roomLaunchLabel(r)}</span>
+                <span class="k chipLine" style="margin-left:auto;">${phaseLabel} • ${roomLaunchLabel(r)}</span>
               </div>
               <div class="tiny subline">${escapeText(isPumpfunRoom(r) ? getDisplayedRoomSubline(r) : (r.desc || "prespawn chat open"))}</div>
               <div class="bar barActive barSpawn"><i style="width:${pct}%"></i></div>
@@ -6287,12 +6287,12 @@ if(connectBtn){
           <div style="min-width:0;">
             <div class="row" style="justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:6px;">
               <div class="name">${escapeText(r.name)} <span class="k">$${escapeText(r.ticker)}</span></div>
-              <span class="k" style="margin-left:auto;max-width:100%;">${chip}${isBonded ? (getDisplayedRoomPhase(r) === "live_external" ? " • live external" : " • graduated") : ""}</span>
+              <span class="k chipLine" style="margin-left:auto;">${chip}${isBonded ? (getDisplayedRoomPhase(r) === "live_external" ? " • live external" : " • graduated") : ""}</span>
             </div>
             <div class="tiny subline">${subline}</div>
             <div class="${barClass}"><i style="width:${pct}%"></i>${isHotBonding ? `<span class="barSpark"></span>` : ""}</div>
           </div>
-          <div>
+          <div class="metricCol">
             <div class="metric">${fmtK(mc)}</div>
             <div class="tiny muted">market cap</div>
             <div class="chg ${chgCls}">${signArrow(chg)}</div>
