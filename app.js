@@ -1093,6 +1093,11 @@ const $ = (id) => document.getElementById(id);
       return isCreator(room, currentWallet) || isOnchainApproverWallet(room, currentWallet) || isRoomAdminWallet(room, currentWallet);
     }
 
+    function canCurrentWalletLaunchPumpfunRoom(room){
+      if(!room || !connectedWallet) return false;
+      return isCreator(room, connectedWallet);
+    }
+
     function debugLaunchAuthority(room, source = "unknown"){
       const creatorWallet = getNormalizedWallet(room?.creator_wallet);
       const currentWallet = getNormalizedWallet(connectedWallet);
@@ -1118,13 +1123,12 @@ const $ = (id) => document.getElementById(id);
     }
 
     function canCurrentWalletLaunchExternally(room){
-      const currentWallet = getNormalizedWallet(connectedWallet);
-      if(!currentWallet || !room) return false;
+      if(!connectedWallet || !room) return false;
       if(!isPumpfunRoom(room)) return false;
       if(isRoomLaunchSubmitting(room)) return false;
       if(room.state !== "SPAWNING" && roomLaunchMode(room) !== "instant") return false;
       if(getRoomLaunchStatus(room) !== "draft") return false;
-      return isCreator(room, connectedWallet);
+      return canCurrentWalletLaunchPumpfunRoom(room);
     }
 
     function canCurrentWalletMarkLiveExternally(room){
@@ -1963,7 +1967,16 @@ const $ = (id) => document.getElementById(id);
       const room = roomById(roomId);
       const readiness = validatePumpfunLaunchReadiness(room);
       if(!readiness.ok) return buildExternalLaunchErrorResult(readiness.error);
-      if(!canCurrentWalletLaunchExternally(room)) return buildExternalLaunchErrorResult("Creator required to submit launch handoff.");
+      if(DEBUG_EXTERNAL_STATUS){
+        console.log("[pingy] submitRoomLaunchExternally permission check", {
+          roomId: room?.id,
+          connectedWallet,
+          creator_wallet: room?.creator_wallet,
+          creatorMatch: isCreator(room, connectedWallet),
+          canLaunchPumpfunRoom: canCurrentWalletLaunchPumpfunRoom(room),
+        });
+      }
+      if(!canCurrentWalletLaunchPumpfunRoom(room)) return buildExternalLaunchErrorResult("Creator required to submit launch handoff.");
 
       try {
         const rawResult = await submitPumpfunLaunch(room);
@@ -1992,8 +2005,8 @@ const $ = (id) => document.getElementById(id);
         return buildExternalLaunchErrorResult(readiness.error || "Launch submission failed.");
       }
       if(!canCurrentWalletLaunchExternally(room)){
-        showToast("Creator required to submit launch handoff.");
-        return buildExternalLaunchErrorResult("Creator required to submit launch handoff.");
+        showToast("You are not allowed to submit launch handoff.");
+        return buildExternalLaunchErrorResult("You are not allowed to submit launch handoff.");
       }
       room.launch_submitting = true;
       safeRenderActiveRoom(room.id);
@@ -2006,6 +2019,18 @@ const $ = (id) => document.getElementById(id);
           last_http_status: null,
           last_error: "",
         });
+        if(DEBUG_EXTERNAL_STATUS){
+          console.log("[pingy] launch permission check", {
+            roomId: room?.id,
+            connectedWallet,
+            creator_wallet: room?.creator_wallet,
+            creatorMatch: isCreator(room, connectedWallet),
+            canLaunchExternally: canCurrentWalletLaunchExternally(room),
+            state: room?.state,
+            launchMode: roomLaunchMode(room),
+            launchStatus: getRoomLaunchStatus(room),
+          });
+        }
         const result = await submitRoomLaunchExternally(room.id);
         setRoomExternalDebug(room, {
           last_response_kind: result?.ok === false ? "error" : "success",
