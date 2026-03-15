@@ -1025,6 +1025,10 @@ const $ = (id) => document.getElementById(id);
       return !!threadAdminPubkey && toBase58String(threadAdminPubkey) === toBase58String(wallet);
     }
 
+    function isCreator(room, wallet){
+      return !!wallet && wallet === room?.creator_wallet;
+    }
+
     function canCurrentWalletLaunchExternally(room){
       if(!connectedWallet || !room) return false;
       if(!isPumpfunRoom(room)) return false;
@@ -5584,7 +5588,6 @@ if(connectBtn){
       return total;
     }
 
-    function isCreator(r, wallet){ return !!wallet && wallet === r.creator_wallet; }
     function statusToString(status){
       if(typeof status === "string") return status;
       if(typeof status === "number") return String(status);
