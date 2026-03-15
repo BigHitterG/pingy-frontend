@@ -1069,9 +1069,13 @@ const $ = (id) => document.getElementById(id);
       return !!threadAdminPubkey && toBase58String(threadAdminPubkey) === toBase58String(wallet);
     }
 
+    function getNormalizedWallet(value){
+      return String(value || "").trim();
+    }
+
     function isCreator(room, wallet){
-      const a = String(wallet || "").trim();
-      const b = String(room?.creator_wallet || "").trim();
+      const a = getNormalizedWallet(wallet);
+      const b = getNormalizedWallet(room?.creator_wallet);
       return !!a && !!b && a === b;
     }
 
@@ -1084,17 +1088,47 @@ const $ = (id) => document.getElementById(id);
     }
 
     function canCurrentWalletSubmitExternalHandoff(room){
-      if(!connectedWallet || !room) return false;
-      return isCreator(room, connectedWallet) || isOnchainApproverWallet(room, connectedWallet) || isRoomAdminWallet(room, connectedWallet);
+      const currentWallet = getNormalizedWallet(connectedWallet);
+      if(!currentWallet || !room) return false;
+      return isCreator(room, currentWallet) || isOnchainApproverWallet(room, currentWallet) || isRoomAdminWallet(room, currentWallet);
+    }
+
+    function debugLaunchAuthority(room, source = "unknown"){
+      const creatorWallet = getNormalizedWallet(room?.creator_wallet);
+      const currentWallet = getNormalizedWallet(connectedWallet);
+      const approver = isApprover(room, connectedWallet);
+      const admin = isRoomAdminWallet(room, connectedWallet);
+      const creator = isCreator(room, connectedWallet);
+
+      console.log("[pingy] launch authority debug", {
+        source,
+        roomId: room?.id || "",
+        connectedWallet: currentWallet,
+        creatorWallet,
+        creator,
+        approver,
+        admin,
+        roomState: room?.state,
+        launchStatus: getRoomLaunchStatus(room),
+        canLaunch:
+          !!currentWallet &&
+          !!room &&
+          isPumpfunRoom(room) &&
+          !isRoomLaunchSubmitting(room) &&
+          room.state === "SPAWNING" &&
+          getRoomLaunchStatus(room) === "draft" &&
+          (creator || approver || admin),
+      });
     }
 
     function canCurrentWalletLaunchExternally(room){
-      if(!connectedWallet || !room) return false;
+      const currentWallet = getNormalizedWallet(connectedWallet);
+      if(!currentWallet || !room) return false;
       if(!isPumpfunRoom(room)) return false;
       if(isRoomLaunchSubmitting(room)) return false;
       if(room.state !== "SPAWNING") return false;
       if(getRoomLaunchStatus(room) !== "draft") return false;
-      return canCurrentWalletSubmitExternalHandoff(room);
+      return isCreator(room, currentWallet) || isApprover(room, currentWallet) || isRoomAdminWallet(room, currentWallet);
     }
 
     function canCurrentWalletMarkLiveExternally(room){
@@ -1949,6 +1983,7 @@ const $ = (id) => document.getElementById(id);
         showToast("Room not found.");
         return buildExternalLaunchErrorResult("Room not found.");
       }
+      debugLaunchAuthority(room, "launchRoomOnPumpfun:before-check");
       const readiness = validatePumpfunLaunchReadiness(room);
       if(!readiness.ok){
         showToast(readiness.error || "Launch submission failed.");
@@ -5349,6 +5384,7 @@ function encodeU64Arg(v){
     function setConnectedWallet(nextWallet){
       connectedWallet = nextWallet || null;
       state.walletPubkey = connectedWallet;
+      if(connectedWallet) console.log("[pingy] wallet connected", { connectedWallet });
     }
 
     function clearWalletScopedCaches(){
@@ -5365,6 +5401,7 @@ function encodeU64Arg(v){
     }
 
     function clearConnectedWallet(){
+      if(connectedWallet) console.log("[pingy] wallet disconnected");
       setConnectedWallet(null);
       clearWalletScopedCaches();
       refreshWalletViews();
@@ -7800,6 +7837,10 @@ if(connectBtn){
         const externalMint = getRoomExternalMint(r).trim();
         if(externalMint) lines.push(`<div>External mint: ${escapeText(externalMint)}</div>`);
         if(isPumpfunRoom(r)){
+          const currentWallet = getNormalizedWallet(connectedWallet);
+          lines.push(`<div>Current wallet: ${currentWallet ? escapeText(shortWallet(currentWallet)) : "—"}</div>`);
+          lines.push(`<div>Creator match: ${isCreator(r, currentWallet) ? "yes" : "no"}</div>`);
+          lines.push(`<div>Can launch now: ${canCurrentWalletLaunchExternally(r) ? "yes" : "no"}</div>`);
           lines.push(`<div>Backend mode: ${escapeText(getPumpfunBackendModeLabel())}</div>`);
           lines.push(`<div>Distribution: ${escapeText(getRoomExternalDistributionStatusLabel(r))}</div>`);
           if(isRoomStatusRefreshing(r)) lines.push("<div>Refreshing: yes</div>");
