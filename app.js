@@ -1070,7 +1070,9 @@ const $ = (id) => document.getElementById(id);
     }
 
     function isCreator(room, wallet){
-      return !!wallet && wallet === room?.creator_wallet;
+      const a = String(wallet || "").trim();
+      const b = String(room?.creator_wallet || "").trim();
+      return !!a && !!b && a === b;
     }
 
     function canCurrentWalletLaunchExternally(room){
@@ -3640,14 +3642,16 @@ const $ = (id) => document.getElementById(id);
       return n ? n : shortWallet(pubkey);
     }
 
+    const DEFAULT_MOCK_CREATOR_WALLET = "11111111111111111111111111111111";
+
     const state = {
       rooms: [
-        mkRoom("r1","cats","CATS","just a mock coin"),
-        mkRoom("r2","pump_alpha","ALPHA","tokenized attention"),
-        mkRoom("r3","meme_lab","MEME","chaos, but organized"),
-        mkRoom("r4","orbit_mint","ORBT","countdown to ignition"),
-        mkRoom("r5","liquid_hype","HYPE","everyone is watching"),
-        mkRoom("r6","night_shift","NITE","late hours, loud charts")
+        mkRoom("r1","cats","CATS","just a mock coin", null, DEFAULT_MOCK_CREATOR_WALLET),
+        mkRoom("r2","pump_alpha","ALPHA","tokenized attention", null, DEFAULT_MOCK_CREATOR_WALLET),
+        mkRoom("r3","meme_lab","MEME","chaos, but organized", null, DEFAULT_MOCK_CREATOR_WALLET),
+        mkRoom("r4","orbit_mint","ORBT","countdown to ignition", null, DEFAULT_MOCK_CREATOR_WALLET),
+        mkRoom("r5","liquid_hype","HYPE","everyone is watching", null, DEFAULT_MOCK_CREATOR_WALLET),
+        mkRoom("r6","night_shift","NITE","late hours, loud charts", null, DEFAULT_MOCK_CREATOR_WALLET)
       ],
       chat: {
         r1: [{ ts:"—", wallet:"SYSTEM", text:"waiting for spawn." }],
@@ -5030,8 +5034,11 @@ function encodeU64Arg(v){
     }
     seedMockPingThreads();
 
-    function mkRoom(id, name, ticker, desc, launchConfig = null){
-      const creator_wallet = (Math.random().toString(16).slice(2,10) + '111111111111111111111111111111').slice(0,44);
+    function mkRoom(id, name, ticker, desc, launchConfig = null, creatorWallet = null){
+      const creator_wallet = String(creatorWallet || connectedWallet || "").trim();
+      if(!creator_wallet){
+        throw new Error("creator wallet required for room creation");
+      }
       const config = launchConfig || getCreateLaunchConfig();
       const mode = config.launchMode || "spawn";
       const isInstant = mode === "instant";
@@ -6849,13 +6856,17 @@ if(connectBtn){
         }
       }
 
-      const r = mkRoom(id, name, ticker, desc, launchConfig);
+      const r = mkRoom(id, name, ticker, desc, launchConfig, connectedWallet);
+      const creatorWallet = String(connectedWallet || "").trim();
+      if(!creatorWallet){
+        showToast("connect wallet first.");
+        return;
+      }
       normalizeLaunchRoom(r, { launchMode, creatorCommitSol: commit });
-      r.creator_wallet = connectedWallet;
-      r.approval = { [connectedWallet]: "approved" };
+      r.approval = { [creatorWallet]: "approved" };
       r.approverWallets = r.approverWallets || {};
       r.blockedWallets = r.blockedWallets || {};
-      r.approverWallets[connectedWallet] = true;
+      r.approverWallets[creatorWallet] = true;
       r.socials = { x: xUrl, tg: tgUrl, web: webUrl };
       if(newImgData) r.image = newImgData;
       if(newBannerData) r.banner = newBannerData;
@@ -6882,6 +6893,14 @@ if(connectBtn){
             market_cap_after: Number(r.market_cap_usd || 0),
           });
         }
+      }
+      if(DEBUG_EXTERNAL_STATUS){
+        console.log("[pingy] create room creator binding", {
+          roomId: r.id,
+          connectedWallet,
+          roomCreatorWallet: r.creator_wallet,
+          isCreator: isCreator(r, connectedWallet),
+        });
       }
       state.rooms.unshift(r);
       state.chat[id] = [{ ts:"—", wallet:"SYSTEM", text: launchMode === "instant" ? "coin created. ready for external launch." : "coin created. waiting for spawn." }];
