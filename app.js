@@ -4321,23 +4321,30 @@ function encodeU64Arg(v){
       }));
     }
 
-    async function pingWithOptionalThreadInitTx(roomId, amountLamports, includeThreadInit, createConfig = null){
+    async function pingWithOptionalThreadInitTx(roomId, amountLamports, includeThreadInit, createConfig = null, options = null){
       const rid = String(roomId || "");
       const lamports = Number(amountLamports);
       if(!Number.isInteger(lamports) || lamports <= 0){
         throw new Error("amountLamports must be a positive integer");
       }
+      const opts = options || {};
+      const includeLegacyNativeAssets = opts.includeLegacyNativeAssets !== false;
       const walletPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
       const [threadPda] = await deriveThreadPda(rid);
       const [spawnPoolPda] = await deriveSpawnPoolPda(rid);
       // Native Pingy curve path retained for future reactivation. Inactive in Pump.fun mode.
       const [curvePda] = await deriveCurvePda(rid);
       const [curveAuthorityPda] = await deriveCurveAuthorityPda(rid);
-      const [mintPda] = await deriveMintPda(rid);
-      const [curveTokenVaultPda] = await deriveCurveTokenVaultPda(rid);
       const [depositPda] = await deriveDepositPda(rid, walletPk);
       const [threadEscrowPda] = await deriveThreadEscrowPda(rid);
-      const [feeVaultPda] = await deriveFeeVaultPda();
+      let mintPda = null;
+      let curveTokenVaultPda = null;
+      let feeVaultPda = null;
+      if(includeLegacyNativeAssets){
+        mintPda = (await deriveMintPda(rid))[0];
+        curveTokenVaultPda = (await deriveCurveTokenVaultPda(rid))[0];
+        feeVaultPda = (await deriveFeeVaultPda())[0];
+      }
 
       const instructions = [];
       const config = createConfig || getCreateLaunchConfig();
@@ -4355,21 +4362,23 @@ function encodeU64Arg(v){
           ],
           data: concatBytes(await anchorDiscriminator("initialize_thread_core"), encodeStringArg(rid), encodeU32Arg(Number(config.minApprovedWallets || 0)), encodeU64Arg(Number(config.spawnTargetLamports || 0)), encodeU16Arg(Number(config.maxWalletShareBps || 0)), encodeU8Arg(launchModeByte(config.launchMode))),
         }));
-        instructions.push(new TransactionInstruction({
-          programId: PROGRAM_ID,
-          keys: [
-            { pubkey: walletPk, isSigner: true, isWritable: true },
-            { pubkey: threadPda, isSigner: false, isWritable: true },
-            { pubkey: curvePda, isSigner: false, isWritable: true },
-            { pubkey: curveAuthorityPda, isSigner: false, isWritable: false },
-            { pubkey: mintPda, isSigner: false, isWritable: true },
-            { pubkey: curveTokenVaultPda, isSigner: false, isWritable: true },
-            { pubkey: feeVaultPda, isSigner: false, isWritable: true },
-            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-            { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-          ],
-          data: concatBytes(await anchorDiscriminator("initialize_thread_assets"), encodeStringArg(rid)),
-        }));
+        if(includeLegacyNativeAssets){
+          instructions.push(new TransactionInstruction({
+            programId: PROGRAM_ID,
+            keys: [
+              { pubkey: walletPk, isSigner: true, isWritable: true },
+              { pubkey: threadPda, isSigner: false, isWritable: true },
+              { pubkey: curvePda, isSigner: false, isWritable: true },
+              { pubkey: curveAuthorityPda, isSigner: false, isWritable: false },
+              { pubkey: mintPda, isSigner: false, isWritable: true },
+              { pubkey: curveTokenVaultPda, isSigner: false, isWritable: true },
+              { pubkey: feeVaultPda, isSigner: false, isWritable: true },
+              { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+              { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+            ],
+            data: concatBytes(await anchorDiscriminator("initialize_thread_assets"), encodeStringArg(rid)),
+          }));
+        }
       }
 
       const pingKeys = [
@@ -4391,10 +4400,11 @@ function encodeU64Arg(v){
       }));
 
       const instructionNames = includeThreadInit
-        ? ["initialize_thread_core", "initialize_thread_assets", "ping_deposit"]
+        ? ["initialize_thread_core", ...(includeLegacyNativeAssets ? ["initialize_thread_assets"] : []), "ping_deposit"]
         : ["ping_deposit"];
       console.log("[ping-debug] pingWithOptionalThreadInitTx instruction bundle", {
         includeThreadInit,
+        includeLegacyNativeAssets,
         instructionCount: instructions.length,
         instructionNames,
       });
@@ -4402,9 +4412,11 @@ function encodeU64Arg(v){
       return sendProgramInstructions(instructions);
     }
 
-    async function initializeThreadTx(threadId, createConfig = null){
+    async function initializeThreadTx(threadId, createConfig = null, options = null){
       try {
         const rid = String(threadId || "");
+        const opts = options || {};
+        const includeLegacyNativeAssets = opts.includeLegacyNativeAssets !== false;
         const adminPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
         console.log("[ping-debug] initializeThreadTx admin wallet pubkey", adminPk.toBase58());
         console.log("[ping-debug] initializeThreadTx program id", PROGRAM_ID.toBase58());
@@ -4416,14 +4428,21 @@ function encodeU64Arg(v){
         console.log("[ping-debug] initializeThreadTx curvePda", curvePda.toBase58());
         const [curveAuthorityPda] = await deriveCurveAuthorityPda(rid);
         console.log("[ping-debug] initializeThreadTx curveAuthorityPda", curveAuthorityPda.toBase58());
-        const [mintPda] = await deriveMintPda(rid);
-        console.log("[ping-debug] initializeThreadTx mintPda", mintPda.toBase58());
-        const [curveTokenVaultPda] = await deriveCurveTokenVaultPda(rid);
-        console.log("[ping-debug] initializeThreadTx curveTokenVaultPda", curveTokenVaultPda.toBase58());
+        let mintPda = null;
+        let curveTokenVaultPda = null;
         const [threadEscrowPda] = await deriveThreadEscrowPda(rid);
         console.log("[ping-debug] initializeThreadTx threadEscrowPda", threadEscrowPda.toBase58());
-        const [feeVaultPda] = await deriveFeeVaultPda();
-        console.log("[ping-debug] initializeThreadTx feeVaultPda", feeVaultPda.toBase58());
+        let feeVaultPda = null;
+        if(includeLegacyNativeAssets){
+          mintPda = (await deriveMintPda(rid))[0];
+          console.log("[ping-debug] initializeThreadTx mintPda", mintPda.toBase58());
+          curveTokenVaultPda = (await deriveCurveTokenVaultPda(rid))[0];
+          console.log("[ping-debug] initializeThreadTx curveTokenVaultPda", curveTokenVaultPda.toBase58());
+          feeVaultPda = (await deriveFeeVaultPda())[0];
+          console.log("[ping-debug] initializeThreadTx feeVaultPda", feeVaultPda.toBase58());
+        } else {
+          console.log("[ping-debug] initializeThreadTx legacy native assets skipped (pumpfun minimal prespawn path)");
+        }
         const config = createConfig || getCreateLaunchConfig();
         const instructions = [
           new TransactionInstruction({
@@ -4439,7 +4458,9 @@ function encodeU64Arg(v){
             ],
             data: concatBytes(await anchorDiscriminator("initialize_thread_core"), encodeStringArg(rid), encodeU32Arg(Number(config.minApprovedWallets || 0)), encodeU64Arg(Number(config.spawnTargetLamports || 0)), encodeU16Arg(Number(config.maxWalletShareBps || 0)), encodeU8Arg(launchModeByte(config.launchMode))),
           }),
-          new TransactionInstruction({
+        ];
+        if(includeLegacyNativeAssets){
+          instructions.push(new TransactionInstruction({
             programId: PROGRAM_ID,
             keys: [
               { pubkey: adminPk, isSigner: true, isWritable: true },
@@ -4453,8 +4474,14 @@ function encodeU64Arg(v){
               { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
             ],
             data: concatBytes(await anchorDiscriminator("initialize_thread_assets"), encodeStringArg(rid)),
-          }),
-        ];
+          }));
+        }
+        console.log("[ping-debug] initializeThreadTx instruction bundle", {
+          includeLegacyNativeAssets,
+          instructionNames: includeLegacyNativeAssets
+            ? ["initialize_thread_core", "initialize_thread_assets"]
+            : ["initialize_thread_core"],
+        });
         return sendProgramInstructions(instructions);
       } catch (err){
         console.error("[ping-debug] initializeThreadTx build failed", err);
@@ -7126,6 +7153,17 @@ if(connectBtn){
         }
 
         if(launchMode === "spawn"){
+          const launchBackend = PINGY_LAUNCH_BACKEND;
+          const usePumpfunMinimalPrespawnPath = isPumpfunLaunchBackend();
+          const includeLegacyNativeAssets = !usePumpfunMinimalPrespawnPath;
+          console.log("[ping-debug] spawn init mode", {
+            roomId: id,
+            launchBackend,
+            launchMode: launchConfig.launchMode,
+            path: usePumpfunMinimalPrespawnPath ? "pumpfun-minimal-prespawn" : "native-legacy-init",
+            included: ["initialize_thread_core", ...(includeLegacyNativeAssets ? ["initialize_thread_assets"] : []), ...(commitLamports > 0 ? ["ping_deposit"] : [])],
+            excluded: includeLegacyNativeAssets ? [] : ["initialize_thread_assets (legacy native curve path retained for future reactivation; inactive for Pump.fun spawn flow)"],
+          });
           try {
             const createPath = commitLamports > 0 ? "combined-init+deposit" : "init-only";
             console.log("[ping-debug] spawn funding branch entered", {
@@ -7141,16 +7179,16 @@ if(connectBtn){
             });
             if(commitLamports > 0){
               console.log("[ping-debug] before Phantom funding tx", { roomId: id, commitLamports });
-              createTxSignature = await pingWithOptionalThreadInitTx(id, commitLamports, true, launchConfig);
+              createTxSignature = await pingWithOptionalThreadInitTx(id, commitLamports, true, launchConfig, { includeLegacyNativeAssets });
               console.log("[ping-debug] funding tx success", { roomId: id, commitLamports });
             } else {
-              createTxSignature = await initializeThreadTx(id, launchConfig);
+              createTxSignature = await initializeThreadTx(id, launchConfig, { includeLegacyNativeAssets });
             }
           } catch(e){
             console.error("[ping-debug] funding tx failed", { roomId: id, commitLamports, error: String(e?.message || e) });
             if(isWalletTxRejected(e)) showToast("Create cancelled — no coin or commit was submitted.");
-            else if(commitLamports > 0) reportTxError(e, "initialize_thread_core + initialize_thread_assets + ping_deposit failed during create");
-            else reportTxError(e, "initialize_thread_core + initialize_thread_assets failed during create");
+            else if(commitLamports > 0) reportTxError(e, includeLegacyNativeAssets ? "initialize_thread_core + initialize_thread_assets + ping_deposit failed during create" : "initialize_thread_core + ping_deposit failed during create");
+            else reportTxError(e, includeLegacyNativeAssets ? "initialize_thread_core + initialize_thread_assets failed during create" : "initialize_thread_core failed during create");
             return;
           }
         } else {
