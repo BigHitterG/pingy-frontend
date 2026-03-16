@@ -133,7 +133,9 @@
               <div class="row" style="margin-top:8px;">
                 <div class="muted" style="min-width:120px;">SOL</div>
                 <input id="newCommit" placeholder="e.g. 0.50" inputmode="decimal" style="max-width:220px;" />
+                <button class="btn subtle" id="newCommitMaxBtn" type="button">MAX</button>
               </div>
+              <div class="muted tiny" id="newCommitFeePreview" style="margin-top:8px;">Input: 0.000 SOL • Pingy fee (1%): 0.000 SOL • Committed: 0.000 SOL</div>
               <div class="muted" style="margin-top:8px;">Launch fees and creator buy routing will be finalized during launch.</div>
             </div>
 
@@ -508,6 +510,7 @@
             <input id="pingAmount" placeholder="e.g. 0.10" inputmode="decimal" style="max-width:220px;" />
             <button class="btn subtle" id="pingMaxBtn" type="button">MAX</button>
           </div>
+          <div class="muted tiny" id="pingFeePreview" style="margin-top:8px;">Input: 0.000 SOL • Pingy fee (1%): 0.000 SOL • Committed: 0.000 SOL</div>
           <div class="muted" id="pingModalHelp" style="margin-top:8px;">Your ping contributes SOL to this launch room.</div>
           <div class="muted" id="pingAllocationHint" style="margin-top:8px;">This contributes up to 0.000 SOL to the launch vault.</div>
         </div>
