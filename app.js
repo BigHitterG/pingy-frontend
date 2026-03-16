@@ -7487,13 +7487,19 @@ if(connectBtn){
       }
     }
     $("createCoinBtn").addEventListener("click", createCoinFromForm);
+
+    let lastPresetBeforeCustom = "fast";
+
     $("newCommit")?.addEventListener("input", updateCreateCommitFeePreview);
     $("newCommitMaxBtn")?.addEventListener("click", setCreatorCommitMax);
-    updateCreateCommitFeePreview();
-    let lastPresetBeforeCustom = "fast";
+
     if($("newLaunchMode")){
-      $("newLaunchMode").addEventListener("change", () => { updateCreateLaunchModeUI(); updateCreateCommitFeePreview(); });
+      $("newLaunchMode").addEventListener("change", () => {
+        updateCreateLaunchModeUI();
+        updateCreateCommitFeePreview();
+      });
     }
+
     if($("newPreset")){
       $("newPreset").addEventListener("change", () => {
         const next = selectedPresetKey();
@@ -7503,16 +7509,23 @@ if(connectBtn){
           lastPresetBeforeCustom = next;
         }
         updatePresetCapHint();
+        updateCreateCommitFeePreview();
       });
+
       ["customMinWallets", "customSpawnTargetSol", "customMaxWalletSharePct"].forEach((id) => {
         const el = $(id);
         if(!el) return;
-        el.addEventListener("input", updatePresetCapHint);
+        el.addEventListener("input", () => {
+          updatePresetCapHint();
+          updateCreateCommitFeePreview();
+        });
       });
     }
+
     if($("newPreset")) $("newPreset").value = "fast";
     if($("newLaunchMode")) $("newLaunchMode").value = "spawn";
     updateCreateLaunchModeUI();
+    updateCreateCommitFeePreview();
 
     // NOTE: v22 UI removed "newRoomBtn" on explore; keep handler optional
     const newRoomBtn = $("newRoomBtn");
@@ -8861,16 +8874,29 @@ if(connectBtn){
     function updateCreateCommitFeePreview(){
       const preview = $("newCommitFeePreview");
       if(!preview) return;
-      const inputSol = Number(($("newCommit")?.value || "").trim()) || 0;
-      const launchMode = selectedCreateLaunchMode();
+
+      const inputEl = $("newCommit");
+      const inputSol = Number((inputEl?.value || "").trim()) || 0;
+      const launchMode = getCreateLaunchMode();
       const inputLamports = Math.floor(Math.max(0, inputSol) * LAMPORTS_PER_SOL);
-      const estimatedRentLamports = launchMode === "spawn" && shouldUseOnchain() ? Number(state.depositRentLamportsEstimate || 0) : 0;
+
+      const estimatedRentLamports =
+        launchMode === "spawn" && shouldUseOnchain()
+          ? Number(state.depositRentLamportsEstimate || 0)
+          : 0;
+
       const depositBackingLamports = Math.max(0, Math.min(inputLamports, estimatedRentLamports));
       const feeInputLamports = Math.max(0, inputLamports - depositBackingLamports);
+
       const fee = launchMode === "spawn"
         ? applyPingFeeToLamports(feeInputLamports)
         : { inputLamports, feeLamports: 0, committedLamports: inputLamports };
-      preview.textContent = `Input: ${formatLamportsAsSol(inputLamports)} SOL • Deposit backing: ${formatLamportsAsSol(depositBackingLamports)} SOL • Pingy fee (1%): ${formatLamportsAsSol(fee.feeLamports)} SOL • Committed: ${formatLamportsAsSol(fee.committedLamports)} SOL`;
+
+      preview.textContent =
+        `Input: ${formatLamportsAsSol(inputLamports)} SOL • ` +
+        `Deposit backing: ${formatLamportsAsSol(depositBackingLamports)} SOL • ` +
+        `Pingy fee (1%): ${formatLamportsAsSol(fee.feeLamports)} SOL • ` +
+        `Committed: ${formatLamportsAsSol(fee.committedLamports)} SOL`;
     }
 
     function hasExistingDeposit(userDeposit = {}){
