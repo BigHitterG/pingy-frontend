@@ -4138,12 +4138,27 @@ function encodeU64Arg(v){
       }
     }
 
-    async function sendProgramInstructions(ixs){
+    function parseSystemTransferDetails(ix){
+      if(!ix || ix.programId?.toBase58?.() !== SystemProgram.programId.toBase58()) return null;
+      const data = ix.data;
+      if(!(data instanceof Uint8Array) || data.length < 12) return null;
+      const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+      const instructionType = view.getUint32(0, true);
+      if(instructionType !== 2) return null;
+      const lamports = Number(view.getBigUint64(4, true));
+      return {
+        fromPubkey: ix.keys?.[0]?.pubkey?.toBase58?.() || "",
+        toPubkey: ix.keys?.[1]?.pubkey?.toBase58?.() || "",
+        lamports,
+      };
+    }
+
+    async function sendProgramInstructions(ixs, debugMeta = null){
       const provider = getProvider();
       if(!provider) throw new Error("Phantom not found");
       if(!connectedWallet) throw new Error("Wallet not connected");
 
-      const instructions = Array.isArray(ixs) ? ixs : [ixs];
+      const instructions = Array.isArray(ixs) ? ixs.flat().filter(Boolean) : [ixs].filter(Boolean);
       if(!instructions.length) throw new Error("No instructions provided");
 
       console.log("[ping-debug] sendProgramInstructions pre-assert", instructions.map((ix, idx) => ({
@@ -4177,6 +4192,28 @@ function encodeU64Arg(v){
         recentBlockhash: blockhash,
       });
       instructions.forEach((ix) => tx.add(ix));
+
+      const expectedFeeLamports = Math.max(0, Math.floor(Number(debugMeta?.feeLamports || 0)));
+      const feeRecipient = String(debugMeta?.feeRecipient || "");
+      const feeInstruction = tx.instructions
+        .map((ix) => parseSystemTransferDetails(ix))
+        .find((details) => !!details && details.toPubkey === feeRecipient && details.lamports === expectedFeeLamports);
+      const expectedWalletOutflowLamports = Math.max(0, Math.floor(Number(debugMeta?.expectedWalletOutflowLamports || 0)));
+      const committedLamports = Math.max(0, Math.floor(Number(debugMeta?.committedLamports || 0)));
+      const depositBackingLamports = Math.max(0, Math.floor(Number(debugMeta?.depositBackingLamports || 0)));
+      console.log("[ping-debug] final instruction bundle before send", {
+        instructionCount: tx.instructions.length,
+        instructionProgramIds: tx.instructions.map((ix) => ix.programId?.toBase58?.()),
+        hasFeeInstruction: !!feeInstruction,
+        feeInstruction,
+        expectedWalletOutflowLamports,
+        committedLamports,
+        depositBackingLamports,
+        feeLamports: expectedFeeLamports,
+      });
+      if(expectedFeeLamports > 0 && !feeInstruction){
+        throw new Error("Missing Pingy fee transfer instruction in transaction bundle");
+      }
 
       console.log("[ping-debug] sendProgramInstruction program checks", {
         PROGRAM_ID: PROGRAM_ID.toBase58(),
@@ -4447,7 +4484,7 @@ function encodeU64Arg(v){
         instructionNames,
       });
 
-      return sendProgramInstructions(instructions);
+      return sendProgramInstructions(instructions, opts.debugMeta || null);
     }
 
     async function initializeThreadTx(threadId, createConfig = null, options = null){
@@ -7298,6 +7335,13 @@ if(connectBtn){
               createTxSignature = await pingWithOptionalThreadInitTx(id, createDepositTotalLamports, true, launchConfig, {
                 includeLegacyNativeAssets,
                 preInstructions: creatorFeeIx ? [creatorFeeIx] : [],
+                debugMeta: {
+                  feeRecipient: PINGY_FEE_RECIPIENT,
+                  expectedWalletOutflowLamports: creatorInputLamports,
+                  committedLamports: commitLamports,
+                  depositBackingLamports: estimatedCreateDepositRentLamports,
+                  feeLamports: creatorFeeMath.feeLamports,
+                },
               });
               creatorFeeTransferSignature = creatorFeeIx ? createTxSignature : "";
               if(creatorFeeIx){
@@ -9211,7 +9255,16 @@ if(connectBtn){
               netContributionLamports + estimatedDepositRentLamports,
               !threadInfo,
               null,
-              { preInstructions: feeIx ? [feeIx] : [] }
+              {
+                preInstructions: feeIx ? [feeIx] : [],
+                debugMeta: {
+                  feeRecipient: PINGY_FEE_RECIPIENT,
+                  expectedWalletOutflowLamports: amountLamports,
+                  committedLamports: netContributionLamports,
+                  depositBackingLamports: estimatedDepositRentLamports,
+                  feeLamports: pingFeeMath.feeLamports,
+                },
+              }
             );
             const feeTransferSignature = feeIx ? sig : "";
             if(feeIx){
