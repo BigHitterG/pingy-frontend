@@ -3757,11 +3757,11 @@ const $ = (id) => document.getElementById(id);
             return ts != null && (Math.floor(ts / 1000) >= (nowSec - lookbackSec));
           })
           .reduce((sum, event) => sum + (Math.abs(Number(event?.gross_sol || 0)) * SOL_TO_USD), 0);
-        const inflow24hSol = computeSpawnEscrowInflow24hSol(history);
         const spawningLabel = room?.state === "SPAWNING" ? " (implied)" : "";
-        const volumeLabel = room?.state === "SPAWNING" ? "24h Escrow Inflow" : "24h Volume";
+        const committed = getRoomTotalCommittedSol(room);
+        const volumeLabel = room?.state === "SPAWNING" ? "Committed SOL" : "24h Volume";
         const volumeValue = room?.state === "SPAWNING"
-          ? (inflow24hSol > 0 ? `${inflow24hSol.toFixed(3)} SOL` : "—")
+          ? (committed > 0 ? `${committed.toFixed(3)} SOL` : "—")
           : (volume24hUsd > 0 ? fmtUsd(volume24hUsd) : "—");
 
         topStats.innerHTML = `
@@ -5909,7 +5909,7 @@ if(connectBtn){
     function spawnProgress01(r){
       const target = spawnTargetSol(r);
       if(target <= 0) return 0;
-      return clamp01(countedEscrowSol(r) / target);
+      return clamp01(getRoomTotalCommittedSol(r) / target);
     }
     function legacyBondingProgress01(r){
       syncRoomMarketCap(r);
@@ -6366,7 +6366,7 @@ if(connectBtn){
         const p = spawnProgress01(r);
         const pct = Math.round(p * 100);
         const target = spawnTargetSol(r);
-        const committed = getRoomGrossCommittedSol(r);
+        const committed = getRoomTotalCommittedSol(r);
         const approvedCount = Number(r?.onchain?.approved_count || 0);
         const minApproved = minApprovedWalletsRequired(r);
         return `
@@ -6383,7 +6383,7 @@ if(connectBtn){
                 <div class="tiny">phase: ${phaseLabel}</div>
                 <div class="pct">${pct}%</div>
               </div>
-              <div class="tiny muted" style="margin-top:4px;">${getRoomGrossCommittedSol(r).toFixed(3)} / ${target.toFixed(3)} SOL committed</div>
+              <div class="tiny muted" style="margin-top:4px;">${committed.toFixed(3)} / ${target.toFixed(3)} SOL committed</div>
               <div class="tiny muted">${approvedCount} / ${minApproved} required wallets</div>
             </div>
           </div>
@@ -8413,7 +8413,7 @@ if(connectBtn){
         phaseLabel.textContent = displayedPhaseLabel;
         statePill.textContent = displayedStatePill;
         const target = spawnTargetSol(r);
-        const committed = getRoomGrossCommittedSol(r);
+        const committed = getRoomTotalCommittedSol(r);
         const progress = target > 0
           ? Math.min(committed / target, 1)
           : 0;
@@ -8523,9 +8523,12 @@ if(connectBtn){
         }
       }
 
+      const walletCommitted = (connectedWallet && r.state === "SPAWNING")
+        ? getWalletGrossCommittedSol(r, connectedWallet)
+        : 0;
       const me =
         (r.state === "SPAWNING")
-          ? `you: your committed amount ${myEscrow(roomId).toFixed(3)} SOL`
+          ? `you: your committed amount ${walletCommitted.toFixed(3)} SOL`
            : (isNativeLaunchBackend() ? `you: ${myBond(roomId).toFixed(3)} tokens on curve` : "you: launch tracked on Pingy");
       $("meLine").textContent = connectedWallet ? me : "connect wallet";
       if(connectedWallet && r.state === "SPAWNING") refreshConnectedWalletEscrowLine(roomId);
