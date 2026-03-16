@@ -6947,6 +6947,9 @@ if(connectBtn){
       }
       const launchConfig = launchConfigResult.config;
       const launchMode = launchConfig.launchMode || "spawn";
+      const shouldEstimateCreateDepositRent = shouldUseOnchain() && launchMode === "spawn" && commitLamports > 0;
+      const estimatedCreateDepositRentLamports = shouldEstimateCreateDepositRent ? await estimateDepositRentLamports() : 0;
+      const expectedCreateNetContributionLamports = Math.max(0, commitLamports - estimatedCreateDepositRentLamports);
 
       if(launchMode === "spawn"){
         const presetCapLamports = configWalletCapLamports(launchConfig);
@@ -7059,6 +7062,19 @@ if(connectBtn){
           connectedWallet,
           roomCreatorWallet: r.creator_wallet,
           isCreator: isCreator(r, connectedWallet),
+        });
+      }
+      let storedDisplayBackingSol = 0;
+      if(shouldEstimateCreateDepositRent){
+        const displayBackingWallet = r.creator_wallet || connectedWallet;
+        storedDisplayBackingSol = rememberWalletDisplayReceiptBackingLamports(r, displayBackingWallet, estimatedCreateDepositRentLamports);
+        console.log("[ping-debug] creator spawn display backing", {
+          roomId: r.id,
+          displayBackingWallet,
+          commitLamports,
+          estimatedDepositRentLamports: estimatedCreateDepositRentLamports,
+          expectedNetContributionLamports: expectedCreateNetContributionLamports,
+          storedDisplayBackingSol,
         });
       }
       state.rooms.unshift(r);
