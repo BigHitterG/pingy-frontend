@@ -3761,7 +3761,7 @@ const $ = (id) => document.getElementById(id);
         const committed = getRoomTotalCommittedSol(room);
         const volumeLabel = room?.state === "SPAWNING" ? "Committed SOL" : "24h Volume";
         const volumeValue = room?.state === "SPAWNING"
-          ? (committed > 0 ? `${committed.toFixed(3)} SOL` : "—")
+          ? `${committed.toFixed(3)} SOL`
           : (volume24hUsd > 0 ? fmtUsd(volume24hUsd) : "—");
 
         topStats.innerHTML = `
@@ -8434,9 +8434,8 @@ if(connectBtn){
           const creatorLine = creatorCommit > 0
             ? `<div>${isPumpfunRoom(r) ? "Creator buy" : "Creator commit"}: ${creatorCommit.toFixed(3)} SOL</div>`
             : "";
-          const committedLabel = isPumpfunRoom(r) ? "Committed SOL" : "Launch commitment";
           progressLine.innerHTML = `
-            <div>${committedLabel}: ${committed.toFixed(3)} / ${target.toFixed(3)} SOL</div>
+            <div>Committed SOL: ${committed.toFixed(3)} / ${target.toFixed(3)} SOL</div>
             <div>Approved wallets: ${approvedCount} / ${minApproved}</div>
             <div>Max per wallet: ${walletCapSol(r).toFixed(3)} SOL or ${capPct}%</div>
             ${creatorLine}
@@ -8523,7 +8522,7 @@ if(connectBtn){
         }
       }
 
-      const walletCommitted = (connectedWallet && r.state === "SPAWNING")
+      const walletCommitted = (r.state === "SPAWNING" && connectedWallet)
         ? getWalletGrossCommittedSol(r, connectedWallet)
         : 0;
       const me =
