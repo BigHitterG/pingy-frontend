@@ -651,6 +651,60 @@ const $ = (id) => document.getElementById(id);
       if(Object.prototype.hasOwnProperty.call(byWallet, wallet)) delete byWallet[wallet];
     }
 
+    function buildRoomBootstrapCostMeta(totalLamports = 0, { known = false, note = "" } = {}){
+      const safeLamports = Math.max(0, Math.round(Number(totalLamports || 0)));
+      return {
+        bootstrap_cost_lamports: safeLamports,
+        bootstrap_cost_sol: safeLamports / LAMPORTS_PER_SOL,
+        bootstrap_cost_breakdown: {
+          known: !!known,
+          total_lamports: safeLamports,
+          note: String(note || "").trim() || "bootstrap cost tracking placeholder",
+        },
+      };
+    }
+
+    function applyRoomBootstrapCostMeta(room, totalLamports = 0, options = {}){
+      if(!room || typeof room !== "object") return room;
+      const meta = buildRoomBootstrapCostMeta(totalLamports, options);
+      room.bootstrap_cost_lamports = meta.bootstrap_cost_lamports;
+      room.bootstrap_cost_sol = meta.bootstrap_cost_sol;
+      room.bootstrap_cost_breakdown = meta.bootstrap_cost_breakdown;
+      return room;
+    }
+
+    async function estimateCreateBootstrapCostFromTx(signature, payerWallet, { commitLamports = 0 } = {}){
+      const sig = String(signature || "").trim();
+      const payer = String(payerWallet || "").trim();
+      if(!sig || !payer) return { lamports: 0, estimated: true, source: "missing-signature-or-payer" };
+      try {
+        const txInfo = await connection.getTransaction(sig, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
+        const accountKeys = txInfo?.transaction?.message?.getAccountKeys?.().staticAccountKeys
+          || txInfo?.transaction?.message?.accountKeys
+          || [];
+        const payerIdx = accountKeys.findIndex((key) => {
+          const keyBase58 = typeof key?.toBase58 === "function" ? key.toBase58() : String(key || "");
+          return keyBase58 === payer;
+        });
+        if(payerIdx < 0) return { lamports: 0, estimated: true, source: "payer-not-found" };
+        const preBalance = Number(txInfo?.meta?.preBalances?.[payerIdx] || 0);
+        const postBalance = Number(txInfo?.meta?.postBalances?.[payerIdx] || 0);
+        const txFeeLamports = Math.max(0, Number(txInfo?.meta?.fee || 0));
+        const payerDebitLamports = Math.max(0, preBalance - postBalance);
+        const bootstrapLamports = Math.max(0, payerDebitLamports - Math.max(0, Number(commitLamports || 0)) - txFeeLamports);
+        return {
+          lamports: bootstrapLamports,
+          estimated: true,
+          source: "tx-balance-delta-minus-commit-and-fee",
+          payerDebitLamports,
+          txFeeLamports,
+        };
+      } catch(err){
+        console.warn("[ping-debug] failed to estimate bootstrap cost from create tx", { signature: sig, err });
+        return { lamports: 0, estimated: true, source: "estimate-failed" };
+      }
+    }
+
     function getRoomTotalCommittedSol(room){
       return getRoomGrossCommittedSol(room);
     }
@@ -2279,6 +2333,18 @@ const $ = (id) => document.getElementById(id);
         room.external_distribution_total_tokens_sent,
         toSafeExternalTokenAmount(room.external_tokens_distributed, 0),
       );
+      const existingBootstrapLamports = Number(room.bootstrap_cost_lamports);
+      const fallbackBootstrapLamports = Math.max(0, Math.round(Number(room.bootstrap_cost_sol || 0) * LAMPORTS_PER_SOL));
+      const normalizedBootstrapLamports = Number.isFinite(existingBootstrapLamports) && existingBootstrapLamports >= 0
+        ? Math.round(existingBootstrapLamports)
+        : fallbackBootstrapLamports;
+      const existingBootstrapBreakdown = room.bootstrap_cost_breakdown && typeof room.bootstrap_cost_breakdown === "object"
+        ? room.bootstrap_cost_breakdown
+        : null;
+      applyRoomBootstrapCostMeta(room, normalizedBootstrapLamports, {
+        known: !!existingBootstrapBreakdown?.known,
+        note: existingBootstrapBreakdown?.note || "bootstrap cost tracking placeholder",
+      });
       room.distribution_snapshot_locked_at = Number.isFinite(Number(room.distribution_snapshot_locked_at)) && Number(room.distribution_snapshot_locked_at) > 0
         ? Number(room.distribution_snapshot_locked_at)
         : null;
@@ -6950,6 +7016,7 @@ if(connectBtn){
       const shouldEstimateCreateDepositRent = shouldUseOnchain() && launchMode === "spawn" && commitLamports > 0;
       const estimatedCreateDepositRentLamports = shouldEstimateCreateDepositRent ? await estimateDepositRentLamports() : 0;
       const expectedCreateNetContributionLamports = Math.max(0, commitLamports - estimatedCreateDepositRentLamports);
+      let createTxSignature = "";
 
       if(launchMode === "spawn"){
         const presetCapLamports = configWalletCapLamports(launchConfig);
@@ -6984,10 +7051,10 @@ if(connectBtn){
             });
             if(commitLamports > 0){
               console.log("[ping-debug] before Phantom funding tx", { roomId: id, commitLamports });
-              await pingWithOptionalThreadInitTx(id, commitLamports, true, launchConfig);
+              createTxSignature = await pingWithOptionalThreadInitTx(id, commitLamports, true, launchConfig);
               console.log("[ping-debug] funding tx success", { roomId: id, commitLamports });
             } else {
-              await initializeThreadTx(id, launchConfig);
+              createTxSignature = await initializeThreadTx(id, launchConfig);
             }
           } catch(e){
             console.error("[ping-debug] funding tx failed", { roomId: id, commitLamports, error: String(e?.message || e) });
@@ -7077,6 +7144,33 @@ if(connectBtn){
           storedDisplayBackingSol,
         });
       }
+      let bootstrapMeta = buildRoomBootstrapCostMeta(0, {
+        known: launchMode !== "spawn",
+        note: launchMode === "spawn"
+          ? "bootstrap cost tracking placeholder"
+          : "non-spawn create path has no bootstrap setup cost tracking",
+      });
+      if(launchMode === "spawn"){
+        const bootstrapEstimate = await estimateCreateBootstrapCostFromTx(createTxSignature, connectedWallet, { commitLamports });
+        bootstrapMeta = buildRoomBootstrapCostMeta(bootstrapEstimate.lamports, {
+          known: false,
+          note: `estimated (${bootstrapEstimate.source || "unknown"})`,
+        });
+      }
+      applyRoomBootstrapCostMeta(r, bootstrapMeta.bootstrap_cost_lamports, {
+        known: !!bootstrapMeta.bootstrap_cost_breakdown?.known,
+        note: bootstrapMeta.bootstrap_cost_breakdown?.note,
+      });
+      console.log("[ping-debug] create bootstrap tracking", {
+        roomId: r.id,
+        launchMode,
+        commitLamports,
+        estimatedDepositRentLamports: estimatedCreateDepositRentLamports,
+        bootstrapCostLamports: r.bootstrap_cost_lamports,
+        bootstrapCostSol: r.bootstrap_cost_sol,
+        bootstrapIsEstimated: !r.bootstrap_cost_breakdown?.known,
+        bootstrapTrackingNote: r.bootstrap_cost_breakdown?.note || "",
+      });
       state.rooms.unshift(r);
       state.chat[id] = [{ ts:"—", wallet:"SYSTEM", text: launchMode === "instant" ? "coin created. ready for external launch." : "coin created. waiting for spawn." }];
 
