@@ -615,11 +615,64 @@ const $ = (id) => document.getElementById(id);
       };
     }
 
+    function getRoomDisplayReceiptBackingMap(room){
+      if(!room || typeof room !== "object") return {};
+      if(!room.display_receipt_rent_sol_by_wallet || typeof room.display_receipt_rent_sol_by_wallet !== "object" || Array.isArray(room.display_receipt_rent_sol_by_wallet)){
+        room.display_receipt_rent_sol_by_wallet = {};
+      }
+      return room.display_receipt_rent_sol_by_wallet;
+    }
+
+    function getWalletDisplayReceiptBackingSol(room, wallet, walletRow = null){
+      if(!room || !wallet) return 0;
+      const byWallet = getRoomDisplayReceiptBackingMap(room);
+      const stored = Number(byWallet[wallet]);
+      if(Number.isFinite(stored) && stored > 0) return stored;
+      const row = walletRow || readRoomEscrowSnapshot(room).byWallet?.[wallet] || {};
+      const rowStored = Number(row.display_receipt_rent_sol ?? row.gross_display_backing_sol ?? 0);
+      if(Number.isFinite(rowStored) && rowStored > 0) return rowStored;
+      return 0;
+    }
+
+    function rememberWalletDisplayReceiptBackingLamports(room, wallet, backingLamports){
+      if(!room || !wallet) return 0;
+      const byWallet = getRoomDisplayReceiptBackingMap(room);
+      const existing = Number(byWallet[wallet]);
+      if(Number.isFinite(existing) && existing > 0) return existing;
+      const backingSol = Math.max(0, Number(backingLamports || 0) / LAMPORTS_PER_SOL);
+      if(backingSol <= 0) return 0;
+      byWallet[wallet] = backingSol;
+      return backingSol;
+    }
+
+    function clearWalletDisplayReceiptBacking(room, wallet){
+      if(!room || !wallet) return;
+      const byWallet = getRoomDisplayReceiptBackingMap(room);
+      if(Object.prototype.hasOwnProperty.call(byWallet, wallet)) delete byWallet[wallet];
+    }
+
     function getRoomTotalCommittedSol(room){
+      return getRoomGrossCommittedSol(room);
+    }
+
+    function getWalletGrossCommittedSol(room, wallet, walletRow){
+      if(!room || !wallet) return 0;
+      const snapshot = readRoomEscrowSnapshot(room);
+      const row = walletRow || snapshot.byWallet?.[wallet] || {};
+      const netCommittedSol = Math.max(0, Number(row.withdrawable_sol ?? row.escrow_sol ?? row.allocated_sol ?? 0));
+      if(netCommittedSol <= 0){
+        clearWalletDisplayReceiptBacking(room, wallet);
+        return 0;
+      }
+      const displayReceiptBackingSol = getWalletDisplayReceiptBackingSol(room, wallet, row);
+      return netCommittedSol + displayReceiptBackingSol;
+    }
+
+    function getRoomGrossCommittedSol(room){
       if(!room) return 0;
       const snapshot = readRoomEscrowSnapshot(room);
       return Number((snapshot.approvedWallets || []).reduce((sum, wallet) => {
-        return sum + Number(snapshot.byWallet?.[wallet]?.escrow_sol || 0);
+        return sum + getWalletGrossCommittedSol(room, wallet, snapshot.byWallet?.[wallet]);
       }, 0));
     }
 
@@ -664,7 +717,7 @@ const $ = (id) => document.getElementById(id);
       if(!isPumpfunRoom(room)) return [];
       const snapshot = readRoomEscrowSnapshot(room);
       return (snapshot.approvedWallets || []).filter((wallet) => {
-        return Number(snapshot.byWallet?.[wallet]?.escrow_sol || 0) > 0;
+        return getWalletGrossCommittedSol(room, wallet, snapshot.byWallet?.[wallet]) > 0;
       });
     }
 
@@ -673,7 +726,7 @@ const $ = (id) => document.getElementById(id);
       const snapshot = readRoomEscrowSnapshot(room);
       const wallets = getRoomEligibleDistributionWallets(room);
       return Number(wallets.reduce((sum, wallet) => {
-        return sum + Number(snapshot.byWallet?.[wallet]?.escrow_sol || 0);
+        return sum + getWalletGrossCommittedSol(room, wallet, snapshot.byWallet?.[wallet]);
       }, 0));
     }
 
@@ -696,14 +749,14 @@ const $ = (id) => document.getElementById(id);
       }
       const snapshot = readRoomEscrowSnapshot(room);
       const wallets = (snapshot.approvedWallets || []).filter((wallet) => {
-        return Number(snapshot.byWallet?.[wallet]?.escrow_sol || 0) > 0;
+        return getWalletGrossCommittedSol(room, wallet, snapshot.byWallet?.[wallet]) > 0;
       });
       const totalWeight = Number(wallets.reduce((sum, wallet) => {
-        return sum + Number(snapshot.byWallet?.[wallet]?.escrow_sol || 0);
+        return sum + getWalletGrossCommittedSol(room, wallet, snapshot.byWallet?.[wallet]);
       }, 0));
       const tokenPool = toSafeExternalTokenAmount(room?.external_tokens_received, 0);
       const weightedRows = wallets.map((wallet) => {
-        const committedSol = Number(snapshot.byWallet?.[wallet]?.escrow_sol || 0);
+        const committedSol = getWalletGrossCommittedSol(room, wallet, snapshot.byWallet?.[wallet]);
         return {
           wallet,
           committed_sol: committedSol,
@@ -748,7 +801,7 @@ const $ = (id) => document.getElementById(id);
       const wallets = getRoomEligibleDistributionWallets(room);
       const tokenPool = toSafeExternalTokenAmount(room?.external_tokens_received, 0);
       const weightedRows = wallets.map((wallet) => {
-        const committedSol = Number(snapshot.byWallet?.[wallet]?.escrow_sol || 0);
+        const committedSol = getWalletGrossCommittedSol(room, wallet, snapshot.byWallet?.[wallet]);
         return {
           wallet,
           committed_sol: committedSol,
@@ -3758,7 +3811,8 @@ const $ = (id) => document.getElementById(id);
       },
       activeHomeTab: "explore",
       activePingThreadId: null,
-      pingReadByWallet: {}
+      pingReadByWallet: {},
+      grossCommitDebugMeta: {}
     };
 
     const ONCHAIN_REFRESH_MS = 7000;
@@ -5197,16 +5251,14 @@ function encodeU64Arg(v){
 
     function myEscrow(roomId){
       if(!connectedWallet) return 0;
-      const snapshot = state.onchain?.[roomId];
-      if(snapshot?.byWallet?.[connectedWallet]){
-        const row = snapshot.byWallet[connectedWallet] || {};
-        const withdrawable = Number(row.withdrawable_sol);
-        if(Number.isFinite(withdrawable)) return Math.max(0, withdrawable);
-        return Math.max(0, Number(row.escrow_sol || 0));
-      }
-      const r = roomById(roomId);
-      const p = r.positions[connectedWallet] || {escrow_sol:0, net_sol_in:0, spawn_tokens:0, token_balance:0};
-      return Number(p.escrow_sol||0);
+      const room = roomById(roomId);
+      if(!room) return 0;
+      const onchainRow = state.onchain?.[roomId]?.byWallet?.[connectedWallet] || room?.onchain?.byWallet?.[connectedWallet] || null;
+      if(onchainRow) return getWalletGrossCommittedSol(room, connectedWallet, onchainRow);
+      const local = room.positions?.[connectedWallet] || {};
+      const netCommittedSol = Math.max(0, Number(local.escrow_sol || 0));
+      const displayReceiptBackingSol = getWalletDisplayReceiptBackingSol(room, connectedWallet);
+      return netCommittedSol > 0 ? (netCommittedSol + displayReceiptBackingSol) : 0;
     }
     function myBond(roomId){
       if(!connectedWallet) return 0;
@@ -5225,16 +5277,17 @@ function encodeU64Arg(v){
       try {
         const lamports = await fetchConnectedWalletDepositLamports(roomId);
         if(activeRoomId !== roomId) return;
-        const escrowSol = Number(lamports || 0) / LAMPORTS_PER_SOL;
+        const netCommittedSol = Number(lamports || 0) / LAMPORTS_PER_SOL;
         const snapshot = state.onchain?.[roomId] || {};
         snapshot.byWallet = snapshot.byWallet || {};
         snapshot.byWallet[connectedWallet] = {
           ...(snapshot.byWallet[connectedWallet] || {}),
-          escrow_sol: escrowSol,
-          withdrawable_sol: escrowSol,
+          escrow_sol: netCommittedSol,
+          withdrawable_sol: netCommittedSol,
         };
         state.onchain[roomId] = snapshot;
-        meLine.textContent = `you: your committed amount ${escrowSol.toFixed(3)} SOL`;
+        const grossCommittedSol = getWalletGrossCommittedSol(r, connectedWallet, snapshot.byWallet[connectedWallet]);
+        meLine.textContent = `you: your committed amount ${grossCommittedSol.toFixed(3)} SOL`;
       } catch(err){
         console.warn("[pingy] failed to refresh connected wallet deposit", err);
       }
@@ -5784,14 +5837,7 @@ if(connectBtn){
         if(grossLamports > 0) return grossLamports / LAMPORTS_PER_SOL;
         return Number(r.onchain.total_allocated_lamports || 0) / LAMPORTS_PER_SOL;
       }
-      let total = 0;
-      const capSol = Number(walletCapSol(r) || 0);
-      const snapshot = readRoomEscrowSnapshot(r);
-      for(const w of snapshot.approvedWallets){
-        const escrow = Number(snapshot.byWallet[w]?.escrow_sol || 0);
-        total += Math.min(escrow, capSol);
-      }
-      return total;
+      return getRoomGrossCommittedSol(r);
     }
 
     function spawnProgress01(r){
@@ -6254,7 +6300,7 @@ if(connectBtn){
         const p = spawnProgress01(r);
         const pct = Math.round(p * 100);
         const target = spawnTargetSol(r);
-        const committed = getRoomTotalCommittedSol(r);
+        const committed = getRoomGrossCommittedSol(r);
         const approvedCount = Number(r?.onchain?.approved_count || 0);
         const minApproved = minApprovedWalletsRequired(r);
         return `
@@ -6271,7 +6317,7 @@ if(connectBtn){
                 <div class="tiny">phase: ${phaseLabel}</div>
                 <div class="pct">${pct}%</div>
               </div>
-              <div class="tiny muted" style="margin-top:4px;">${getRoomTotalCommittedSol(r).toFixed(3)} / ${target.toFixed(3)} SOL committed</div>
+              <div class="tiny muted" style="margin-top:4px;">${getRoomGrossCommittedSol(r).toFixed(3)} / ${target.toFixed(3)} SOL committed</div>
               <div class="tiny muted">${approvedCount} / ${minApproved} required wallets</div>
             </div>
           </div>
@@ -6489,9 +6535,11 @@ if(connectBtn){
     function getWalletEscrowInRoom(room, wallet){
       if(!room || !wallet) return 0;
       const onchainRow = room?.onchain?.byWallet?.[wallet] || state.onchain?.[room.id]?.byWallet?.[wallet] || null;
-      if(onchainRow) return Math.max(0, Number(onchainRow.withdrawable_sol ?? onchainRow.escrow_sol ?? 0));
+      if(onchainRow) return getWalletGrossCommittedSol(room, wallet, onchainRow);
       const local = room.positions?.[wallet] || {};
-      return Math.max(0, Number(local.escrow_sol || 0));
+      const netCommittedSol = Math.max(0, Number(local.escrow_sol || 0));
+      if(netCommittedSol <= 0) return 0;
+      return netCommittedSol + getWalletDisplayReceiptBackingSol(room, wallet);
     }
 
     function walletIsRelatedToRoom(room, wallet){
@@ -6499,13 +6547,13 @@ if(connectBtn){
       if(isCreator(room, wallet)) return true;
       if(isApprover(room, wallet)) return true;
       if(normalizeDepositStatus(room.approval?.[wallet] || "")) return true;
-      const escrowSol = getWalletEscrowInRoom(room, wallet);
-      if(escrowSol > 0) return true;
+      const grossCommittedSol = getWalletGrossCommittedSol(room, wallet);
+      if(grossCommittedSol > 0) return true;
       const pos = room.positions?.[wallet] || {};
       if(Number(pos.token_balance || 0) > 0) return true;
       const onchainRow = room?.onchain?.byWallet?.[wallet] || state.onchain?.[room.id]?.byWallet?.[wallet] || null;
       if(onchainRow){
-        if(Number(onchainRow.withdrawable_sol ?? onchainRow.escrow_sol ?? 0) > 0) return true;
+        if(getWalletGrossCommittedSol(room, wallet, onchainRow) > 0) return true;
         if(Number(onchainRow.spawn_token_allocation || 0) > 0) return true;
       }
       const msgs = state.chat?.[room.id] || [];
@@ -6612,11 +6660,36 @@ if(connectBtn){
       if(!room || !wallet) return "";
       if(isCreator(room, wallet)) return "creator";
       if(isApprover(room, wallet)) return "approver";
-      const escrowSol = getWalletEscrowInRoom(room, wallet);
-      if(escrowSol > 0) return isNativeLaunchBackend() ? `your escrow: ${escrowSol.toFixed(3)} SOL` : `your committed amount: ${escrowSol.toFixed(3)} SOL`;
+      const grossCommittedSol = getWalletGrossCommittedSol(room, wallet);
+      if(grossCommittedSol > 0) return `your committed amount: ${grossCommittedSol.toFixed(3)} SOL`;
       const tokenBal = Number((room.positions?.[wallet]?.token_balance) || 0);
       if(tokenBal > 0) return "you hold this coin";
       return "participant";
+    }
+
+    function logRoomGrossCommitmentDebug(room){
+      if(!room || room.state !== "SPAWNING") return;
+      const now = Date.now();
+      const key = String(room.id || "");
+      const last = Number(state.grossCommitDebugMeta?.[key] || 0);
+      if(last > 0 && (now - last) < 2000) return;
+      state.grossCommitDebugMeta = state.grossCommitDebugMeta || {};
+      state.grossCommitDebugMeta[key] = now;
+      const snapshot = readRoomEscrowSnapshot(room);
+      const wallets = Array.from(new Set(Object.keys(snapshot.byWallet || {})));
+      const rows = wallets.map((wallet) => {
+        const row = snapshot.byWallet?.[wallet] || {};
+        const netCommittedSol = Math.max(0, Number(row.withdrawable_sol ?? row.escrow_sol ?? row.allocated_sol ?? 0));
+        const displayReceiptBackingSol = getWalletDisplayReceiptBackingSol(room, wallet, row);
+        const grossCommittedSol = netCommittedSol > 0 ? (netCommittedSol + displayReceiptBackingSol) : 0;
+        return {
+          wallet,
+          net_committed_sol: Number(netCommittedSol.toFixed(9)),
+          display_receipt_backing_sol: Number(displayReceiptBackingSol.toFixed(9)),
+          gross_committed_sol: Number(grossCommittedSol.toFixed(9)),
+        };
+      });
+      console.log("[ping-debug] gross commitment by wallet", { roomId: room.id, rows });
     }
 
     function renderPingsView(){
@@ -8079,7 +8152,7 @@ if(connectBtn){
 
         const left = document.createElement("div");
         left.className = "tiny";
-        const committed = Number(walletRow.withdrawable_sol ?? walletRow.escrow_sol ?? walletRow.allocated_sol ?? 0);
+        const committed = getWalletGrossCommittedSol(r, wallet, walletRow);
         left.innerHTML = "";
         const walletBtn = document.createElement("button");
         walletBtn.type = "button";
@@ -8230,7 +8303,7 @@ if(connectBtn){
         phaseLabel.textContent = displayedPhaseLabel;
         statePill.textContent = displayedStatePill;
         const target = spawnTargetSol(r);
-        const committed = getRoomTotalCommittedSol(r);
+        const committed = getRoomGrossCommittedSol(r);
         const progress = target > 0
           ? Math.min(committed / target, 1)
           : 0;
@@ -8259,6 +8332,7 @@ if(connectBtn){
             ${creatorLine}
           `;
         }
+        logRoomGrossCommitmentDebug(r);
       } else if(r.state === "BONDING"){
         phaseLabel.textContent = displayedPhaseLabel;
         statePill.textContent = displayedStatePill;
@@ -8610,7 +8684,7 @@ if(connectBtn){
       if(!s || Number.isNaN(solAmount) || solAmount <= 0) return alert("enter a valid SOL amount.");
 
       if(r.state === "SPAWNING"){
-        if(r.blockedWallets && r.blockedWallets[connectedWallet]) return alert(isNativeLaunchBackend() ? "Denied from this spawn. Your SOL remains in escrow until you unping." : "Denied from this spawn. Your committed SOL stays in the launch vault until you unping.");
+        if(r.blockedWallets && r.blockedWallets[connectedWallet]) return alert("Denied from this spawn. Your committed SOL stays in the launch vault until you unping.");
         if(!isCreator(r, connectedWallet)){
           r.approval = r.approval || {};
           if(!r.approval[connectedWallet]) r.approval[connectedWallet] = "pending";
@@ -8672,6 +8746,7 @@ if(connectBtn){
               escrowExplorer: explorerAddressUrl(threadEscrowPda.toBase58()),
             });
             showToast(`Thread escrow deposit +${deltaSol.toFixed(9)} SOL (all-in ping ${solAmount} SOL)`);
+            if(!hasExistingDeposit(userDeposit)) rememberWalletDisplayReceiptBackingLamports(r, connectedWallet, estimatedDepositRentLamports);
             console.log("[ping-debug] explorer links", {
               tx: explorerTxUrl(sig),
               threadEscrow: explorerAddressUrl(threadEscrowPda.toBase58()),
@@ -8703,6 +8778,7 @@ if(connectBtn){
             mockNetContributionSol,
           });
           applySpawnCommit(r, connectedWallet, mockNetContributionSol);
+          if(!hasExistingDeposit(userDeposit)) rememberWalletDisplayReceiptBackingLamports(r, connectedWallet, estimatedDepositRentLamports);
         }
 
         state.chat[r.id] = state.chat[r.id] || [];
@@ -8773,6 +8849,8 @@ if(connectBtn){
         const curLamports = await fetchConnectedWalletDepositLamports(rid);
         const cur = Number(curLamports || 0) / LAMPORTS_PER_SOL;
         if(cur <= 0) return alert(isNativeLaunchBackend() ? "you have no escrow to withdraw." : "you have no launch contribution to withdraw.");
+        const displayReceiptBackingSol = getWalletDisplayReceiptBackingSol(r, connectedWallet);
+        const grossCommittedBeforeWithdraw = cur + displayReceiptBackingSol;
         if(shouldUseOnchain()){
           try{
             await unpingWithdrawTx(rid);
@@ -8784,9 +8862,10 @@ if(connectBtn){
         } else {
           applySpawnUncommit(r, connectedWallet, cur);
         }
+        clearWalletDisplayReceiptBacking(r, connectedWallet);
 
         state.chat[r.id] = state.chat[r.id] || [];
-        state.chat[r.id].push({ ts: nowStamp(), wallet: connectedWallet, text:`withdrew ${cur.toFixed(3)} SOL (${isNativeLaunchBackend() ? "full escrow withdrawal" : "full launch contribution withdrawal"}, returned to wallet).`, kind: "activity" });
+        state.chat[r.id].push({ ts: nowStamp(), wallet: connectedWallet, text:`withdrew ${grossCommittedBeforeWithdraw.toFixed(3)} SOL (full committed amount withdrawal, returned to wallet).`, kind: "activity" });
 
       } else if(r.state === "BONDING") {
         const s = ($("unpingAmount").value||"").trim();
