@@ -583,13 +583,14 @@ const $ = (id) => document.getElementById(id);
           const row = onchain.byWallet[wallet] || {};
           const blocked = !!(r.blockedWallets && r.blockedWallets[wallet]);
           const status = blocked ? "denied" : normalizeDepositStatus(row.status);
-          const rawEscrowSol = Math.max(0, Number(row.escrow_sol || 0));
+          const rawEscrowSol = Math.max(0, Number(row.withdrawable_sol ?? row.escrow_sol || 0));
           const escrowSol = isCountedDepositStatus(status) ? rawEscrowSol : 0;
 
           byWallet[wallet] = {
             ...row,
             status,
-            escrow_sol: escrowSol
+            escrow_sol: escrowSol,
+            withdrawable_sol: escrowSol
           };
 
           if(isCountedDepositStatus(status)) approvedWallets.push(wallet);
@@ -4755,7 +4756,7 @@ function encodeU64Arg(v){
           refundable_sol: refundableSol,
           allocated_sol: allocatedSol,
           withdrawable_sol: withdrawableSol,
-          escrow_sol: allocatedSol,
+          escrow_sol: withdrawableSol,
           spawn_token_allocation: Number(deposit.spawn_token_allocation || 0),
           spawn_tokens_claimed: Number(deposit.spawn_tokens_claimed || 0),
           deposit_pda: acct.pubkey.toBase58()
@@ -5230,9 +5231,10 @@ function encodeU64Arg(v){
         snapshot.byWallet[connectedWallet] = {
           ...(snapshot.byWallet[connectedWallet] || {}),
           escrow_sol: escrowSol,
+          withdrawable_sol: escrowSol,
         };
         state.onchain[roomId] = snapshot;
-        meLine.textContent = `you: ${escrowSol.toFixed(3)} SOL ${isNativeLaunchBackend() ? "escrow" : "committed"}`;
+        meLine.textContent = `you: your committed amount ${escrowSol.toFixed(3)} SOL`;
       } catch(err){
         console.warn("[pingy] failed to refresh connected wallet deposit", err);
       }
@@ -5778,6 +5780,8 @@ if(connectBtn){
 
     function countedEscrowSol(r){
       if(Number(r?.onchain?.spawn_target_lamports || 0) > 0){
+        const grossLamports = Number(r.onchain.total_escrow_lamports || 0);
+        if(grossLamports > 0) return grossLamports / LAMPORTS_PER_SOL;
         return Number(r.onchain.total_allocated_lamports || 0) / LAMPORTS_PER_SOL;
       }
       let total = 0;
@@ -6250,7 +6254,7 @@ if(connectBtn){
         const p = spawnProgress01(r);
         const pct = Math.round(p * 100);
         const target = spawnTargetSol(r);
-        const allocated = Number(r?.onchain?.total_allocated_lamports || 0) / 1e9;
+        const committed = getRoomTotalCommittedSol(r);
         const approvedCount = Number(r?.onchain?.approved_count || 0);
         const minApproved = minApprovedWalletsRequired(r);
         return `
@@ -6267,7 +6271,7 @@ if(connectBtn){
                 <div class="tiny">phase: ${phaseLabel}</div>
                 <div class="pct">${pct}%</div>
               </div>
-              <div class="tiny muted" style="margin-top:4px;">${allocated.toFixed(3)} / ${target.toFixed(3)} SOL</div>
+              <div class="tiny muted" style="margin-top:4px;">${getRoomTotalCommittedSol(r).toFixed(3)} / ${target.toFixed(3)} SOL committed</div>
               <div class="tiny muted">${approvedCount} / ${minApproved} required wallets</div>
             </div>
           </div>
@@ -6485,7 +6489,7 @@ if(connectBtn){
     function getWalletEscrowInRoom(room, wallet){
       if(!room || !wallet) return 0;
       const onchainRow = room?.onchain?.byWallet?.[wallet] || state.onchain?.[room.id]?.byWallet?.[wallet] || null;
-      if(onchainRow) return Math.max(0, Number(onchainRow.escrow_sol || 0));
+      if(onchainRow) return Math.max(0, Number(onchainRow.withdrawable_sol ?? onchainRow.escrow_sol || 0));
       const local = room.positions?.[wallet] || {};
       return Math.max(0, Number(local.escrow_sol || 0));
     }
@@ -6501,7 +6505,7 @@ if(connectBtn){
       if(Number(pos.token_balance || 0) > 0) return true;
       const onchainRow = room?.onchain?.byWallet?.[wallet] || state.onchain?.[room.id]?.byWallet?.[wallet] || null;
       if(onchainRow){
-        if(Number(onchainRow.escrow_sol || 0) > 0) return true;
+        if(Number(onchainRow.withdrawable_sol ?? onchainRow.escrow_sol || 0) > 0) return true;
         if(Number(onchainRow.spawn_token_allocation || 0) > 0) return true;
       }
       const msgs = state.chat?.[room.id] || [];
@@ -6609,7 +6613,7 @@ if(connectBtn){
       if(isCreator(room, wallet)) return "creator";
       if(isApprover(room, wallet)) return "approver";
       const escrowSol = getWalletEscrowInRoom(room, wallet);
-      if(escrowSol > 0) return isNativeLaunchBackend() ? `your escrow: ${escrowSol.toFixed(3)} SOL` : `your committed SOL: ${escrowSol.toFixed(3)} SOL`;
+      if(escrowSol > 0) return isNativeLaunchBackend() ? `your escrow: ${escrowSol.toFixed(3)} SOL` : `your committed amount: ${escrowSol.toFixed(3)} SOL`;
       const tokenBal = Number((room.positions?.[wallet]?.token_balance) || 0);
       if(tokenBal > 0) return "you hold this coin";
       return "participant";
@@ -8075,7 +8079,7 @@ if(connectBtn){
 
         const left = document.createElement("div");
         left.className = "tiny";
-        const allocated = Number(walletRow.allocated_sol || 0);
+        const committed = Number(walletRow.withdrawable_sol ?? walletRow.escrow_sol ?? walletRow.allocated_sol || 0);
         left.innerHTML = "";
         const walletBtn = document.createElement("button");
         walletBtn.type = "button";
@@ -8083,7 +8087,7 @@ if(connectBtn){
         walletBtn.textContent = displayName(wallet);
         walletBtn.addEventListener("click", () => openProfile(wallet));
         left.appendChild(walletBtn);
-        left.appendChild(document.createTextNode(` • Allocated ${allocated.toFixed(3)} SOL`));
+        left.appendChild(document.createTextNode(` • Committed ${committed.toFixed(3)} SOL`));
 
         const right = document.createElement("div");
         right.className = "row";
@@ -8226,9 +8230,9 @@ if(connectBtn){
         phaseLabel.textContent = displayedPhaseLabel;
         statePill.textContent = displayedStatePill;
         const target = spawnTargetSol(r);
-        const allocated = Number(r?.onchain?.total_allocated_lamports || 0) / 1e9;
+        const committed = getRoomTotalCommittedSol(r);
         const progress = target > 0
-          ? Math.min(allocated / target, 1)
+          ? Math.min(committed / target, 1)
           : 0;
         phaseBar.style.width = Math.round(progress * 100) + "%";
         phaseBar.style.background = "#ff6eb1";
@@ -8247,9 +8251,9 @@ if(connectBtn){
           const creatorLine = creatorCommit > 0
             ? `<div>${isPumpfunRoom(r) ? "Creator buy" : "Creator commit"}: ${creatorCommit.toFixed(3)} SOL</div>`
             : "";
-          const committedLabel = isPumpfunRoom(r) ? "Committed SOL" : "Allocated SOL";
+          const committedLabel = isPumpfunRoom(r) ? "Committed SOL" : "Launch commitment";
           progressLine.innerHTML = `
-            <div>${committedLabel}: ${allocated.toFixed(3)} / ${target.toFixed(3)} SOL</div>
+            <div>${committedLabel}: ${committed.toFixed(3)} / ${target.toFixed(3)} SOL</div>
             <div>Approved wallets: ${approvedCount} / ${minApproved}</div>
             <div>Max per wallet: ${walletCapSol(r).toFixed(3)} SOL or ${capPct}%</div>
             ${creatorLine}
@@ -8337,7 +8341,7 @@ if(connectBtn){
 
       const me =
         (r.state === "SPAWNING")
-          ? `you: ${myEscrow(roomId).toFixed(3)} SOL ${isNativeLaunchBackend() ? "escrow" : "committed"}`
+          ? `you: your committed amount ${myEscrow(roomId).toFixed(3)} SOL`
            : (isNativeLaunchBackend() ? `you: ${myBond(roomId).toFixed(3)} tokens on curve` : "you: launch tracked on Pingy");
       $("meLine").textContent = connectedWallet ? me : "connect wallet";
       if(connectedWallet && r.state === "SPAWNING") refreshConnectedWalletEscrowLine(roomId);
@@ -8424,7 +8428,7 @@ if(connectBtn){
         pingModalHelp.textContent = isSpawning
           ? (isNativeLaunchBackend()
             ? "During spawn, your Ping amount is all-in for this action. A tiny network fee still applies, and you can unping to withdraw before spawn completes."
-            : "Your Ping amount is all-in for this launch contribution. A tiny network fee may still apply.")
+            : "Your Ping amount is all-in for your committed amount. A tiny network fee may still apply.")
           : isPumpPostSpawn
             ? "Launched coins trade outside Pingy. Pingy remains the coordination and watch layer."
             : isBonded
@@ -8436,7 +8440,7 @@ if(connectBtn){
         unpingModalHelp.textContent = isSpawning
           ? (isNativeLaunchBackend()
             ? "During spawn, unping performs a full escrow withdraw and returns funds to your wallet (minus network fees)."
-            : "Before spawn completes, you can unping to withdraw your launch contribution (minus network fees).")
+            : "Before spawn completes, you can unping to withdraw your committed amount (minus network fees).")
           : isPumpPostSpawn
             ? "Launched coins trade outside Pingy. Pingy remains the coordination and watch layer."
             : isBonded
