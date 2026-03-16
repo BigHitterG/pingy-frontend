@@ -730,6 +730,40 @@ const $ = (id) => document.getElementById(id);
       }, 0));
     }
 
+    async function syncCreatorDisplayBackingFromDeposit(roomId){
+      const room = roomById(roomId);
+      if(!room || !connectedWallet || room.state !== "SPAWNING") return 0;
+      if(!isCreator(room, connectedWallet)) return 0;
+
+      const snapshot = state.onchain?.[roomId] || room.onchain || {};
+      const row = snapshot.byWallet?.[connectedWallet] || null;
+      const existingBackingSol = getWalletDisplayReceiptBackingSol(room, connectedWallet, row);
+      if(existingBackingSol > 0) return existingBackingSol;
+
+      const totalDepositLamports = Math.max(0, Number(await fetchConnectedWalletDepositLamports(roomId) || 0));
+      const creatorWallet = room.creator_wallet || connectedWallet;
+      const creatorCommitSol = Number(room.creator_commit_sol);
+      const creatorGrossInputLamports = Math.max(0, Math.round((Number.isFinite(creatorCommitSol) ? creatorCommitSol : 0) * LAMPORTS_PER_SOL));
+      const currentNetCommittedLamports = Math.max(0, Math.round(Number(
+        row?.withdrawable_sol ?? row?.escrow_sol ?? row?.allocated_sol ?? (totalDepositLamports / LAMPORTS_PER_SOL)
+      ) * LAMPORTS_PER_SOL));
+      const inferredBackingLamports = Math.max(0, creatorGrossInputLamports - currentNetCommittedLamports);
+      const storedBackingSol = rememberWalletDisplayReceiptBackingLamports(room, connectedWallet, inferredBackingLamports);
+
+      console.log("[ping-debug] syncCreatorDisplayBackingFromDeposit", {
+        roomId,
+        creatorWallet,
+        creatorCommitSol,
+        creatorGrossInputLamports,
+        currentNetCommittedLamports,
+        totalDepositLamports,
+        inferredBackingLamports,
+        storedBackingSol,
+      });
+
+      return storedBackingSol;
+    }
+
     function getRoomCreatorBuySol(room){
       if(!room) return 0;
       const direct = Number(room.creator_commit_sol);
@@ -5352,6 +5386,13 @@ function encodeU64Arg(v){
           withdrawable_sol: netCommittedSol,
         };
         state.onchain[roomId] = snapshot;
+        if(
+          r.state === "SPAWNING" &&
+          isCreator(r, connectedWallet) &&
+          getWalletDisplayReceiptBackingSol(r, connectedWallet, snapshot.byWallet[connectedWallet]) <= 0
+        ){
+          await syncCreatorDisplayBackingFromDeposit(roomId);
+        }
         const grossCommittedSol = getWalletGrossCommittedSol(r, connectedWallet, snapshot.byWallet[connectedWallet]);
         meLine.textContent = `you: your committed amount ${grossCommittedSol.toFixed(3)} SOL`;
       } catch(err){
@@ -7206,6 +7247,7 @@ if(connectBtn){
 
       if(shouldUseOnchain() && launchMode === "spawn"){
         await fetchRoomOnchainSnapshot(id);
+        await syncCreatorDisplayBackingFromDeposit(id);
         await refreshConnectedWalletEscrowLine(id);
         await fetchConnectedWalletDepositSnapshot();
         const createdRoom = roomById(id);
