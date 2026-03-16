@@ -88,6 +88,7 @@ const $ = (id) => document.getElementById(id);
     const PINGY_PUMPFUN_SETTLEMENT_ENDPOINT = "http://localhost:8787/api/pumpfun/settlement";
     const PINGY_PUMPFUN_STATUS_ENDPOINT = "http://localhost:8787/api/pumpfun/status";
     const EXTERNAL_LAUNCH_RECORDS_STORAGE_KEY = "pingy_external_launch_records";
+    const DEBUG_ACCOUNTING = false;
 
     function isPumpfunLaunchBackend(){
       return PINGY_LAUNCH_BACKEND === "pumpfun";
@@ -664,12 +665,35 @@ const $ = (id) => document.getElementById(id);
       };
     }
 
+    function getRoomBootstrapCostLamports(room){
+      if(!room || typeof room !== "object") return 0;
+      const directLamports = Number(room.bootstrap_cost_lamports);
+      if(Number.isFinite(directLamports) && directLamports >= 0) return Math.round(directLamports);
+      const fallbackLamports = Math.round(Math.max(0, Number(room.bootstrap_cost_sol || 0)) * LAMPORTS_PER_SOL);
+      return Number.isFinite(fallbackLamports) && fallbackLamports > 0 ? fallbackLamports : 0;
+    }
+
+    function getRoomBootstrapCostSol(room){
+      return getRoomBootstrapCostLamports(room) / LAMPORTS_PER_SOL;
+    }
+
     function applyRoomBootstrapCostMeta(room, totalLamports = 0, options = {}){
       if(!room || typeof room !== "object") return room;
-      const meta = buildRoomBootstrapCostMeta(totalLamports, options);
+      const isLocked = room.bootstrap_locked === true;
+      const shouldPreserve = isLocked && !options.force;
+      const effectiveLamports = shouldPreserve ? getRoomBootstrapCostLamports(room) : totalLamports;
+      const existingBreakdown = room.bootstrap_cost_breakdown && typeof room.bootstrap_cost_breakdown === "object"
+        ? room.bootstrap_cost_breakdown
+        : {};
+      const known = shouldPreserve ? !!existingBreakdown.known : !!options.known;
+      const note = shouldPreserve
+        ? (existingBreakdown.note || "bootstrap cost tracking placeholder")
+        : options.note;
+      const meta = buildRoomBootstrapCostMeta(effectiveLamports, { known, note });
       room.bootstrap_cost_lamports = meta.bootstrap_cost_lamports;
       room.bootstrap_cost_sol = meta.bootstrap_cost_sol;
       room.bootstrap_cost_breakdown = meta.bootstrap_cost_breakdown;
+      room.bootstrap_locked = options.lock === true ? true : isLocked;
       return room;
     }
 
@@ -771,10 +795,33 @@ const $ = (id) => document.getElementById(id);
       return Math.max(0, Number(creatorCommitSol(room) || 0));
     }
 
+    function getRoomCreatorGrossCommittedSol(room){
+      if(!room) return 0;
+      const creatorWallet = String(room.creator_wallet || "").trim();
+      if(!creatorWallet) return 0;
+      const snapshot = readRoomEscrowSnapshot(room);
+      return getWalletGrossCommittedSol(room, creatorWallet, snapshot.byWallet?.[creatorWallet]);
+    }
+
     function getRoomParticipantCommittedSol(room){
       const total = Number(getRoomTotalCommittedSol(room) || 0);
-      const creatorBuy = Number(getRoomCreatorBuySol(room) || 0);
-      return Math.max(0, total - creatorBuy);
+      const creatorCommitted = Number(getRoomCreatorGrossCommittedSol(room) || 0);
+      return Math.max(0, total - creatorCommitted);
+    }
+
+    function logRoomAccounting(room){
+      if(!DEBUG_ACCOUNTING) return;
+      if(!room || room.state !== "SPAWNING") return;
+      console.log("[ping-debug] room accounting", {
+        roomId: room.id,
+        grossCommittedSol: Number(getRoomTotalCommittedSol(room).toFixed(9)),
+        creatorCommittedSol: Number(getRoomCreatorGrossCommittedSol(room).toFixed(9)),
+        participantCommittedSol: Number(getRoomParticipantCommittedSol(room).toFixed(9)),
+        bootstrapCostSol: Number(getRoomBootstrapCostSol(room).toFixed(9)),
+        bootstrapLocked: room.bootstrap_locked === true,
+        launchMode: room.launch_mode,
+        state: room.state,
+      });
     }
 
     function getRoomLaunchFeeEstimateSol(room){
@@ -2372,12 +2419,14 @@ const $ = (id) => document.getElementById(id);
       const normalizedBootstrapLamports = Number.isFinite(existingBootstrapLamports) && existingBootstrapLamports >= 0
         ? Math.round(existingBootstrapLamports)
         : fallbackBootstrapLamports;
+      const normalizedBootstrapLocked = room.bootstrap_locked === true;
       const existingBootstrapBreakdown = room.bootstrap_cost_breakdown && typeof room.bootstrap_cost_breakdown === "object"
         ? room.bootstrap_cost_breakdown
         : null;
       applyRoomBootstrapCostMeta(room, normalizedBootstrapLamports, {
         known: !!existingBootstrapBreakdown?.known,
         note: existingBootstrapBreakdown?.note || "bootstrap cost tracking placeholder",
+        lock: normalizedBootstrapLocked,
       });
       room.distribution_snapshot_locked_at = Number.isFinite(Number(room.distribution_snapshot_locked_at)) && Number(room.distribution_snapshot_locked_at) > 0
         ? Number(room.distribution_snapshot_locked_at)
@@ -7201,6 +7250,7 @@ if(connectBtn){
       applyRoomBootstrapCostMeta(r, bootstrapMeta.bootstrap_cost_lamports, {
         known: !!bootstrapMeta.bootstrap_cost_breakdown?.known,
         note: bootstrapMeta.bootstrap_cost_breakdown?.note,
+        lock: true,
       });
       console.log("[ping-debug] create bootstrap tracking", {
         roomId: r.id,
@@ -7209,9 +7259,11 @@ if(connectBtn){
         estimatedDepositRentLamports: estimatedCreateDepositRentLamports,
         bootstrapCostLamports: r.bootstrap_cost_lamports,
         bootstrapCostSol: r.bootstrap_cost_sol,
+        bootstrapLocked: r.bootstrap_locked === true,
         bootstrapIsEstimated: !r.bootstrap_cost_breakdown?.known,
         bootstrapTrackingNote: r.bootstrap_cost_breakdown?.note || "",
       });
+      logRoomAccounting(r);
       state.rooms.unshift(r);
       state.chat[id] = [{ ts:"—", wallet:"SYSTEM", text: launchMode === "instant" ? "coin created. ready for external launch." : "coin created. waiting for spawn." }];
 
@@ -8484,6 +8536,7 @@ if(connectBtn){
           `;
         }
         logRoomGrossCommitmentDebug(r);
+        logRoomAccounting(r);
       } else if(r.state === "BONDING"){
         phaseLabel.textContent = displayedPhaseLabel;
         statePill.textContent = displayedStatePill;
