@@ -72,6 +72,7 @@ const $ = (id) => document.getElementById(id);
     // Tuned assumptions
     const SOL_TO_USD = 100; // internal conversion (mock) — for display only
     const LAMPORTS_PER_SOL = 1_000_000_000;
+    const DEPOSIT_ACCOUNT_DATA_SIZE = 8 + 4 + 64 + 32 + 1 + 1 + 8 + 8 + 8 + 8;
 
     // Single-curve launch model (opening buy initializes live curve)
     const TOTAL_SUPPLY = 1_000_000_000;
@@ -2750,6 +2751,7 @@ const $ = (id) => document.getElementById(id);
       if(r.positions[wallet].escrow_sol == null) r.positions[wallet].escrow_sol = 0;
       if(r.positions[wallet].net_sol_in == null) r.positions[wallet].net_sol_in = 0;
       if(r.positions[wallet].token_balance == null) r.positions[wallet].token_balance = 0;
+      if(r.positions[wallet].deposit_exists == null) r.positions[wallet].deposit_exists = false;
       return r.positions[wallet];
     }
 
@@ -2989,6 +2991,7 @@ const $ = (id) => document.getElementById(id);
 
       // escrow bucket (refundable pre-spawn)
       pos.escrow_sol = Number(pos.escrow_sol||0) + sol;
+      pos.deposit_exists = true;
       return sol;
     }
 
@@ -3740,6 +3743,7 @@ const $ = (id) => document.getElementById(id);
       userEscrow: null,
       walletPubkey: null,
       maxPingLamports: 0,
+      depositRentLamportsEstimate: null,
       movers: { enabled: true, tickMs: 3000, active: new Set(), scores: {}, leadId: null, topId: null, shimmyId: null, shimmyUntil: 0 },
       devSim: {
         enabled: DEV_SIMULATION,
@@ -4840,11 +4844,12 @@ function encodeU64Arg(v){
       const [depositPda] = await deriveDepositPda(activeRoomId, walletPk);
       const info = await connection.getAccountInfo(depositPda, "confirmed");
       if(!info || !info.data || info.data.length < 8){
-        state.userEscrow = { refundable_lamports: 0, allocated_lamports: 0, deposit_pda: depositPda.toBase58() };
+        state.userEscrow = { exists: false, refundable_lamports: 0, allocated_lamports: 0, deposit_pda: depositPda.toBase58() };
         return state.userEscrow;
       }
       const deposit = decodeDepositAccount(info.data);
       state.userEscrow = {
+        exists: true,
         refundable_lamports: Number(deposit?.refundable_lamports || 0),
         allocated_lamports: Number(deposit?.allocated_lamports || 0),
         withdrawable_lamports: Number((deposit?.refundable_lamports || 0) + (deposit?.allocated_lamports || 0)),
@@ -8375,6 +8380,24 @@ if(connectBtn){
       return Math.max(0, Math.min(need, walletRemaining));
     }
 
+    function hasExistingDeposit(userDeposit = {}){
+      return !!userDeposit?.exists;
+    }
+
+    async function estimateDepositRentLamports(){
+      if(Number.isInteger(state.depositRentLamportsEstimate) && state.depositRentLamportsEstimate > 0){
+        return state.depositRentLamportsEstimate;
+      }
+      try {
+        const rentLamports = await connection.getMinimumBalanceForRentExemption(DEPOSIT_ACCOUNT_DATA_SIZE, "confirmed");
+        state.depositRentLamportsEstimate = Number(rentLamports || 0);
+      } catch(err){
+        console.warn("[ping-debug] failed to estimate deposit rent", err);
+        state.depositRentLamportsEstimate = 0;
+      }
+      return Number(state.depositRentLamportsEstimate || 0);
+    }
+
     function updateActionModalCopy(room){
       const r = room || {};
       const isSpawning = r.state === "SPAWNING";
@@ -8400,8 +8423,8 @@ if(connectBtn){
       if(pingModalHelp){
         pingModalHelp.textContent = isSpawning
           ? (isNativeLaunchBackend()
-            ? "During spawn, your ping funds escrow allocation. First ping may include small Solana network/storage costs and you can unping to withdraw before spawn completes."
-            : "Your ping contributes SOL to this launch room vault. First ping may include small Solana network/storage costs.")
+            ? "During spawn, your Ping amount is all-in for this action. A tiny network fee still applies, and you can unping to withdraw before spawn completes."
+            : "Your Ping amount is all-in for this launch contribution. A tiny network fee may still apply.")
           : isPumpPostSpawn
             ? "Launched coins trade outside Pingy. Pingy remains the coordination and watch layer."
             : isBonded
@@ -8467,16 +8490,19 @@ if(connectBtn){
         return;
       }
       const userDeposit = state.userEscrow || {};
-      const maxLamports = computeMaxPingLamports(r, userDeposit);
-      state.maxPingLamports = maxLamports;
-      const maxSol = maxLamports / LAMPORTS_PER_SOL;
-      hint.textContent = maxLamports > 0
-        ? `${isNativeLaunchBackend() ? "Max escrow allocation" : "Max launch contribution"}: ${maxSol.toFixed(3)} SOL`
+      const maxNetLamports = computeMaxPingLamports(r, userDeposit);
+      const includeDepositRent = !hasExistingDeposit(userDeposit);
+      const estimatedRentLamports = includeDepositRent ? Number(state.depositRentLamportsEstimate || 0) : 0;
+      const maxGrossLamports = Math.max(0, maxNetLamports + estimatedRentLamports);
+      state.maxPingLamports = maxGrossLamports;
+      const maxSol = maxGrossLamports / LAMPORTS_PER_SOL;
+      hint.textContent = maxGrossLamports > 0
+        ? "Max all-in ping: " + maxSol.toFixed(3) + " SOL"
         : "Spawn is full or you're at cap.";
-      if(pingConfirm) pingConfirm.disabled = maxLamports <= 0;
+      if(pingConfirm) pingConfirm.disabled = maxGrossLamports <= 0;
     }
 
-    function openPingModal(roomId){
+    async function openPingModal(roomId){
       if(!connectedWallet) return showToast("connect wallet first.");
       const rid = roomId || activeRoomId;
       const r = roomById(rid);
@@ -8489,6 +8515,7 @@ if(connectBtn){
       updateActionModalCopy(r);
       $("pingAmount").value = "";
       state.maxPingLamports = 0;
+      await estimateDepositRentLamports();
       $("pingRoomLine").textContent = `coin: ${r.name}  $${r.ticker}`;
       updatePingAllocationHint(rid);
       openModal($("pingBack"));
@@ -8584,15 +8611,26 @@ if(connectBtn){
           r.approval = r.approval || {};
           if(!r.approval[connectedWallet]) r.approval[connectedWallet] = "pending";
         }
-        if(shouldUseOnchain()){
-          const amountLamports = Math.round(solAmount * 1_000_000_000);
-          if(!Number.isInteger(amountLamports) || amountLamports <= 0) return alert("enter at least 1 lamport.");
-          const maxAllowedLamports = Number(state.maxPingLamports || computeMaxPingLamports(r, state.userEscrow || {}));
-          if(amountLamports > (maxAllowedLamports + 1)){
-            showToast(`Too much. Max is ${(maxAllowedLamports / LAMPORTS_PER_SOL).toFixed(3)} SOL.`);
+        const amountLamports = Math.round(solAmount * 1_000_000_000);
+        if(!Number.isInteger(amountLamports) || amountLamports <= 0) return alert("enter at least 1 lamport.");
+        const onchainMode = shouldUseOnchain();
+        const mockPos = onchainMode ? null : ensurePos(r, connectedWallet);
+        const userDeposit = onchainMode ? (state.userEscrow || {}) : { exists: !!mockPos?.deposit_exists };
+        const estimatedDepositRentLamports = hasExistingDeposit(userDeposit) ? 0 : await estimateDepositRentLamports();
+        const netContributionLamports = amountLamports - estimatedDepositRentLamports;
+        if(netContributionLamports <= 0){
+          const minSol = ((estimatedDepositRentLamports + 1) / LAMPORTS_PER_SOL).toFixed(9);
+          showToast(`Enter more than ${minSol} SOL so your all-in ping can fund a contribution.`);
+          return;
+        }
+
+        if(onchainMode){
+          const netCapacityLamports = computeMaxPingLamports(r, userDeposit);
+          if(netContributionLamports > (netCapacityLamports + 1)){
+            showToast(`Too much. Max is ${(Number(state.maxPingLamports || 0) / LAMPORTS_PER_SOL).toFixed(3)} SOL.`);
             return;
           }
-          console.log("[ping-debug] amount conversion", { solAmount, amountLamports });
+          console.log("[ping-debug] all-in ping amount conversion", { solAmount, grossEnteredLamports: amountLamports, estimatedDepositRentLamports, netContributionLamports });
           const walletPk = new PublicKey(connectedWallet);
           const [threadPda] = await deriveThreadPda(rid);
           const [depositPda] = await deriveDepositPda(rid, walletPk);
@@ -8623,11 +8661,13 @@ if(connectBtn){
               balAfter,
               deltaLamports,
               deltaSol,
-              expectedLamports: amountLamports,
+              grossEnteredLamports: amountLamports,
+              estimatedDepositRentLamports,
+              expectedNetContributionLamports: netContributionLamports,
               txExplorer: explorerTxUrl(sig),
               escrowExplorer: explorerAddressUrl(threadEscrowPda.toBase58()),
             });
-            showToast(`Thread escrow deposit +${deltaSol.toFixed(9)} SOL (expected ~${solAmount} SOL)`);
+            showToast(`Thread escrow deposit +${deltaSol.toFixed(9)} SOL (all-in ping ${solAmount} SOL)`);
             console.log("[ping-debug] explorer links", {
               tx: explorerTxUrl(sig),
               threadEscrow: explorerAddressUrl(threadEscrowPda.toBase58()),
@@ -8650,7 +8690,15 @@ if(connectBtn){
             return;
           }
         } else {
-          applySpawnCommit(r, connectedWallet, solAmount);
+          const mockNetContributionSol = netContributionLamports / LAMPORTS_PER_SOL;
+          console.log("[ping-debug] mock all-in ping amount conversion", {
+            solAmount,
+            grossEnteredLamports: amountLamports,
+            estimatedDepositRentLamports,
+            netContributionLamports,
+            mockNetContributionSol,
+          });
+          applySpawnCommit(r, connectedWallet, mockNetContributionSol);
         }
 
         state.chat[r.id] = state.chat[r.id] || [];
