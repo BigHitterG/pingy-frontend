@@ -583,7 +583,7 @@ const $ = (id) => document.getElementById(id);
           const row = onchain.byWallet[wallet] || {};
           const blocked = !!(r.blockedWallets && r.blockedWallets[wallet]);
           const status = blocked ? "denied" : normalizeDepositStatus(row.status);
-          const rawEscrowSol = Math.max(0, Number(row.withdrawable_sol ?? row.escrow_sol || 0));
+          const rawEscrowSol = Math.max(0, Number(row.withdrawable_sol ?? row.escrow_sol ?? 0));
           const escrowSol = isCountedDepositStatus(status) ? rawEscrowSol : 0;
 
           byWallet[wallet] = {
@@ -6489,7 +6489,7 @@ if(connectBtn){
     function getWalletEscrowInRoom(room, wallet){
       if(!room || !wallet) return 0;
       const onchainRow = room?.onchain?.byWallet?.[wallet] || state.onchain?.[room.id]?.byWallet?.[wallet] || null;
-      if(onchainRow) return Math.max(0, Number(onchainRow.withdrawable_sol ?? onchainRow.escrow_sol || 0));
+      if(onchainRow) return Math.max(0, Number(onchainRow.withdrawable_sol ?? onchainRow.escrow_sol ?? 0));
       const local = room.positions?.[wallet] || {};
       return Math.max(0, Number(local.escrow_sol || 0));
     }
@@ -6505,7 +6505,7 @@ if(connectBtn){
       if(Number(pos.token_balance || 0) > 0) return true;
       const onchainRow = room?.onchain?.byWallet?.[wallet] || state.onchain?.[room.id]?.byWallet?.[wallet] || null;
       if(onchainRow){
-        if(Number(onchainRow.withdrawable_sol ?? onchainRow.escrow_sol || 0) > 0) return true;
+        if(Number(onchainRow.withdrawable_sol ?? onchainRow.escrow_sol ?? 0) > 0) return true;
         if(Number(onchainRow.spawn_token_allocation || 0) > 0) return true;
       }
       const msgs = state.chat?.[room.id] || [];
@@ -8079,7 +8079,7 @@ if(connectBtn){
 
         const left = document.createElement("div");
         left.className = "tiny";
-        const committed = Number(walletRow.withdrawable_sol ?? walletRow.escrow_sol ?? walletRow.allocated_sol || 0);
+        const committed = Number(walletRow.withdrawable_sol ?? walletRow.escrow_sol ?? walletRow.allocated_sol ?? 0);
         left.innerHTML = "";
         const walletBtn = document.createElement("button");
         walletBtn.type = "button";
