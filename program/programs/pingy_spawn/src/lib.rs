@@ -176,16 +176,35 @@ pub mod pingy_spawn {
             },
         );
         system_program::transfer(transfer_ctx, amount_lamports)?;
+
+        let deposit_rent_lamports = if is_new_deposit {
+            ctx.accounts.deposit.to_account_info().lamports()
+        } else {
+            0
+        };
+        let net_contribution_lamports = amount_lamports.saturating_sub(deposit_rent_lamports);
+        require!(net_contribution_lamports > 0, PingyError::PingAmountTooSmall);
+
+        if deposit_rent_lamports > 0 {
+            transfer_from_thread_escrow_to_account(
+                &ctx.accounts.thread_escrow.to_account_info(),
+                &ctx.accounts.user.to_account_info(),
+                deposit_rent_lamports,
+            )?;
+        }
+
         msg!(
-            "ping_deposit amount={} user={} escrow={} thread={}",
+            "ping_deposit gross={} rent={} net={} user={} escrow={} thread={}",
             amount_lamports,
+            deposit_rent_lamports,
+            net_contribution_lamports,
             ctx.accounts.user.key(),
             ctx.accounts.thread_escrow.key(),
             thread_id
         );
         thread.total_escrow_lamports = thread
             .total_escrow_lamports
-            .checked_add(amount_lamports)
+            .checked_add(net_contribution_lamports)
             .ok_or(PingyError::AmountOverflow)?;
 
         let previous_status;
@@ -201,7 +220,7 @@ pub mod pingy_spawn {
 
             deposit.refundable_lamports = deposit
                 .refundable_lamports
-                .checked_add(amount_lamports)
+                .checked_add(net_contribution_lamports)
                 .ok_or(PingyError::AmountOverflow)?;
 
             if deposit.status == DepositStatus::Approved {
@@ -1645,6 +1664,8 @@ pub enum PingyError {
     InvalidThreadId,
     #[msg("Invalid amount")]
     InvalidAmount,
+    #[msg("Ping amount is too small after setup costs")]
+    PingAmountTooSmall,
     #[msg("Thread id mismatch")]
     ThreadMismatch,
     #[msg("User mismatch")]
