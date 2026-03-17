@@ -5779,6 +5779,17 @@ function encodeU64Arg(v){
       state.onchainMeta = {};
     }
 
+    function clearWalletDerivedState(prevWallet = null){
+      state.userEscrow = null;
+      state.maxPingLamports = 0;
+      state.maxPingCommittedLamports = 0;
+      state.grossCommitDebugMeta = {};
+      if(prevWallet){
+        delete state.walletBalances[prevWallet];
+        delete state.walletBalancesMeta[prevWallet];
+      }
+    }
+
     async function refreshRoomFromChain(){
       const tasks = state.rooms.map((room) => refreshRoomOnchainSnapshot(room.id, { force: true }));
       if(connectedWallet) tasks.push(fetchConnectedWalletDepositSnapshot());
@@ -5786,53 +5797,83 @@ function encodeU64Arg(v){
       if(activeRoomId && connectedWallet) await refreshConnectedWalletEscrowLine(activeRoomId);
     }
 
-    function clearConnectedWallet(){
-      if(connectedWallet) console.log("[pingy] wallet disconnected");
+    function clearConnectedWallet(opts = {}){
+      const prevWallet = connectedWallet;
+      if(prevWallet) console.log("[wallet-sync] wallet disconnected", { wallet: prevWallet, reason: opts.reason || "unknown" });
       setConnectedWallet(null);
+      clearWalletDerivedState(prevWallet);
       clearWalletScopedCaches();
       refreshWalletViews();
       updateEarningsUI();
+      console.log("[wallet-sync] cleared previous wallet state", { from: prevWallet, to: null });
+    }
+
+    async function handleWalletChanged(nextWallet, opts = {}){
+      const prevWallet = connectedWallet;
+      const normalizedNextWallet = nextWallet || null;
+      console.log("[wallet-sync] switching wallet", { from: prevWallet, to: normalizedNextWallet, source: opts.source || "unknown" });
+      if(!normalizedNextWallet){
+        clearConnectedWallet({ reason: opts.source || "wallet-changed-empty" });
+        return;
+      }
+
+      setConnectedWallet(normalizedNextWallet);
+      clearWalletDerivedState(prevWallet && prevWallet !== normalizedNextWallet ? prevWallet : null);
+      clearWalletScopedCaches();
+      console.log("[wallet-sync] cleared previous wallet state", { from: prevWallet, to: normalizedNextWallet });
+
+      await refreshRoomFromChain();
+      console.log("[wallet-sync] refreshed balances for new wallet", { wallet: normalizedNextWallet });
+      refreshWalletViews();
+      updateEarningsUI();
+      console.log("[wallet-sync] rerender complete", { wallet: normalizedNextWallet, activeRoomId: activeRoomId || null });
+      if(!opts.silent) showToast("wallet switched.");
     }
 
     async function syncWalletFromProvider(provider, opts = {}){
       if(!provider) return;
       const nextWallet = provider.publicKey?.toBase58?.() || provider.publicKey?.toString?.() || null;
       const prevWallet = connectedWallet;
-      if(nextWallet === prevWallet) return;
       if(!nextWallet){
-        clearConnectedWallet();
+        await handleWalletChanged(null, { ...opts, source: opts.source || "sync-empty" });
         return;
       }
-      setConnectedWallet(nextWallet);
-      clearWalletScopedCaches();
-      await refreshRoomFromChain();
-      refreshWalletViews();
-      if(!opts.silent) showToast("wallet switched.");
+      if(nextWallet === prevWallet && !opts.forceRefresh) return;
+      await handleWalletChanged(nextWallet, { ...opts, source: opts.source || "sync" });
     }
 
     async function reconcileWalletFromProvider(opts = {}){
       const provider = getProvider();
-      if(!provider) return;
-      await syncWalletFromProvider(provider, opts);
+      if(!provider){
+        clearConnectedWallet({ reason: "reconcile-provider-missing" });
+        return;
+      }
+      const providerWallet = provider.publicKey?.toBase58?.() || provider.publicKey?.toString?.() || null;
+      const isConnected = provider?.isConnected === true || !!providerWallet;
+      if(!isConnected || !providerWallet){
+        clearConnectedWallet({ reason: "reconcile-provider-disconnected" });
+        return;
+      }
+      await syncWalletFromProvider(provider, { ...opts, source: opts.source || "reconcile" });
     }
 
     function bindWalletListeners(provider){
       if(!provider || typeof provider.on !== "function" || boundWalletProviders.has(provider)) return;
       provider.on("accountChanged", async (pubkey) => {
-        console.log("[wallet] accountChanged", pubkey?.toBase58?.() || null);
+        console.log("[wallet-sync] accountChanged fired", { next: pubkey?.toBase58?.() || pubkey?.toString?.() || null });
         if(!pubkey){
-          clearConnectedWallet();
+          clearConnectedWallet({ reason: "accountChanged-null" });
           return;
         }
-        await syncWalletFromProvider(provider);
+        await syncWalletFromProvider(provider, { source: "accountChanged" });
       });
       provider.on("connect", async () => {
-        console.log("[wallet] connect", provider.publicKey?.toBase58?.() || null);
-        await syncWalletFromProvider(provider, { silent: true });
+        console.log("[wallet-sync] connect", provider.publicKey?.toBase58?.() || null);
+        await syncWalletFromProvider(provider, { silent: true, source: "connect" });
       });
       provider.on("disconnect", () => {
-        console.log("[wallet] disconnect");
-        clearConnectedWallet();
+        console.log("[wallet-sync] disconnect");
+        clearConnectedWallet({ reason: "provider-disconnect" });
       });
       boundWalletProviders.add(provider);
     }
@@ -5915,16 +5956,14 @@ async function connectMock(){
     const nextWallet = resp && resp.publicKey ? resp.publicKey.toString() : null;
     if(!nextWallet) return;
 
-    setConnectedWallet(nextWallet);
     console.log("[pingy] provider.publicKey after connect:", provider?.publicKey?.toString?.() || provider?.publicKey);
     toast.classList.remove("on");
 
     if(!profile.wallet_first_seen_ms) profile.wallet_first_seen_ms = Date.now();
-    if(!profile.namesByWallet[connectedWallet]) profile.namesByWallet[connectedWallet] = "big_hitter";
+    if(!profile.namesByWallet[nextWallet]) profile.namesByWallet[nextWallet] = "big_hitter";
     saveProfileLocal();
 
-    await refreshRoomFromChain();
-    refreshWalletViews();
+    await syncWalletFromProvider(provider, { silent: true, forceRefresh: true, source: "connect-button" });
   } catch(err){
     console.error("[pingy] connect error:", err);
     const code = Number(err && err.code);
@@ -5945,9 +5984,7 @@ async function disconnectMock(){
     try { await provider.disconnect(); }
     catch(e){ /* no-op */ }
   }
-  clearConnectedWallet();
-  state.userEscrow = null;
-  refreshWalletViews();
+  clearConnectedWallet({ reason: "manual-disconnect" });
   showToast("disconnected.");
 }
 
