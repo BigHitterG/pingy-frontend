@@ -155,21 +155,68 @@ const $ = (id) => document.getElementById(id);
     }
 
 
-    function applyPingFeeToLamports(inputLamports){
-      const safeInputLamports = Math.max(0, Math.floor(Number(inputLamports || 0)));
+    function computePingFeeBreakdownLamports(grossPositionInputLamports){
+      const safeInputLamports = Math.max(0, Math.floor(Number(grossPositionInputLamports || 0)));
       const feeLamports = Math.ceil((safeInputLamports * PING_FEE_BPS) / BPS_DENOM);
       const committedLamports = Math.max(0, safeInputLamports - feeLamports);
       return {
-        inputLamports: safeInputLamports,
+        grossPositionInputLamports: safeInputLamports,
         feeLamports,
         committedLamports,
       };
     }
 
-    function grossInputForTargetCommittedLamports(targetCommittedLamports){
+    function computeGrossPositionInputForCommittedLamports(targetCommittedLamports){
       const safeTargetLamports = Math.max(0, Math.floor(Number(targetCommittedLamports || 0)));
       if(safeTargetLamports <= 0) return 0;
       return Math.ceil((safeTargetLamports * BPS_DENOM) / (BPS_DENOM - PING_FEE_BPS));
+    }
+
+    function computeRegularPingSpendModel({ grossWalletInputLamports }){
+      const safeGrossWalletInputLamports = Math.max(0, Math.floor(Number(grossWalletInputLamports || 0)));
+      const feeMath = computePingFeeBreakdownLamports(safeGrossWalletInputLamports);
+      return {
+        grossWalletInputLamports: safeGrossWalletInputLamports,
+        grossPositionInputLamports: safeGrossWalletInputLamports,
+        feeLamports: feeMath.feeLamports,
+        committedLamports: feeMath.committedLamports,
+      };
+    }
+
+    function computeCreatorSpawnSpendModel({ walletBalanceLamports, committedCapLamports, bootstrapCostLamports, networkBufferLamports, totalWalletSpendLamports = null }){
+      const safeWalletBalanceLamports = Math.max(0, Math.floor(Number(walletBalanceLamports || 0)));
+      const safeCommittedCapLamports = Math.max(0, Math.floor(Number(committedCapLamports || 0)));
+      const safeBootstrapCostLamports = Math.max(0, Math.floor(Number(bootstrapCostLamports || 0)));
+      const safeNetworkBufferLamports = Math.max(0, Math.floor(Number(networkBufferLamports || 0)));
+      if(totalWalletSpendLamports != null){
+        const total = Math.max(0, Math.floor(Number(totalWalletSpendLamports || 0)));
+        const grossPositionInputLamports = Math.max(0, total - safeBootstrapCostLamports);
+        const feeMath = computePingFeeBreakdownLamports(grossPositionInputLamports);
+        return {
+          committedTargetLamports: feeMath.committedLamports,
+          grossPositionInputLamports,
+          feeLamports: feeMath.feeLamports,
+          bootstrapCostLamports: safeBootstrapCostLamports,
+          totalWalletSpendLamports: total,
+        };
+      }
+      const maxSpend = Math.max(0, safeWalletBalanceLamports - safeNetworkBufferLamports);
+      const maxGrossPositionInputLamports = Math.max(0, maxSpend - safeBootstrapCostLamports);
+      const maxCommittedByBalanceLamports = computePingFeeBreakdownLamports(maxGrossPositionInputLamports).committedLamports;
+      const targetCommittedLamports = Math.min(safeCommittedCapLamports, maxCommittedByBalanceLamports);
+      let grossPositionInputLamports = Math.min(maxGrossPositionInputLamports, computeGrossPositionInputForCommittedLamports(targetCommittedLamports));
+      let feeMath = computePingFeeBreakdownLamports(grossPositionInputLamports);
+      while(grossPositionInputLamports > 0 && feeMath.committedLamports > targetCommittedLamports){
+        grossPositionInputLamports -= 1;
+        feeMath = computePingFeeBreakdownLamports(grossPositionInputLamports);
+      }
+      return {
+        committedTargetLamports: feeMath.committedLamports,
+        grossPositionInputLamports,
+        feeLamports: feeMath.feeLamports,
+        bootstrapCostLamports: safeBootstrapCostLamports,
+        totalWalletSpendLamports: grossPositionInputLamports + safeBootstrapCostLamports,
+      };
     }
 
     function isCountedDepositStatus(status){
@@ -649,42 +696,6 @@ const $ = (id) => document.getElementById(id);
       };
     }
 
-    function getRoomDisplayReceiptBackingMap(room){
-      if(!room || typeof room !== "object") return {};
-      if(!room.display_receipt_rent_sol_by_wallet || typeof room.display_receipt_rent_sol_by_wallet !== "object" || Array.isArray(room.display_receipt_rent_sol_by_wallet)){
-        room.display_receipt_rent_sol_by_wallet = {};
-      }
-      return room.display_receipt_rent_sol_by_wallet;
-    }
-
-    function getWalletDisplayReceiptBackingSol(room, wallet, walletRow = null){
-      if(!room || !wallet) return 0;
-      const byWallet = getRoomDisplayReceiptBackingMap(room);
-      const stored = Number(byWallet[wallet]);
-      if(Number.isFinite(stored) && stored > 0) return stored;
-      const row = walletRow || readRoomEscrowSnapshot(room).byWallet?.[wallet] || {};
-      const rowStored = Number(row.display_receipt_rent_sol ?? row.gross_display_backing_sol ?? 0);
-      if(Number.isFinite(rowStored) && rowStored > 0) return rowStored;
-      return 0;
-    }
-
-    function rememberWalletDisplayReceiptBackingLamports(room, wallet, backingLamports){
-      if(!room || !wallet) return 0;
-      const byWallet = getRoomDisplayReceiptBackingMap(room);
-      const existing = Number(byWallet[wallet]);
-      if(Number.isFinite(existing) && existing > 0) return existing;
-      const backingSol = Math.max(0, Number(backingLamports || 0) / LAMPORTS_PER_SOL);
-      if(backingSol <= 0) return 0;
-      byWallet[wallet] = backingSol;
-      return backingSol;
-    }
-
-    function clearWalletDisplayReceiptBacking(room, wallet){
-      if(!room || !wallet) return;
-      const byWallet = getRoomDisplayReceiptBackingMap(room);
-      if(Object.prototype.hasOwnProperty.call(byWallet, wallet)) delete byWallet[wallet];
-    }
-
     function buildRoomBootstrapCostMeta(totalLamports = 0, { known = false, note = "" } = {}){
       const safeLamports = Math.max(0, Math.round(Number(totalLamports || 0)));
       return {
@@ -783,13 +794,7 @@ const $ = (id) => document.getElementById(id);
       const row = walletRow || snapshot.byWallet?.[wallet] || {};
       const committedSolFromRow = Number(row.committed_sol);
       if(Number.isFinite(committedSolFromRow)) return Math.max(0, committedSolFromRow);
-
-      const fallbackCommittedSol = Math.max(0, Number(row.withdrawable_sol ?? row.escrow_sol ?? row.allocated_sol ?? 0));
-      if(fallbackCommittedSol <= 0){
-        clearWalletDisplayReceiptBacking(room, wallet);
-        return 0;
-      }
-      return fallbackCommittedSol + getWalletDisplayReceiptBackingSol(room, wallet, row);
+      return Math.max(0, Number(row.withdrawable_sol ?? row.escrow_sol ?? row.allocated_sol ?? 0));
     }
 
     function getRoomGrossCommittedSol(room){
@@ -798,40 +803,6 @@ const $ = (id) => document.getElementById(id);
       return Number((snapshot.approvedWallets || []).reduce((sum, wallet) => {
         return sum + getWalletGrossCommittedSol(room, wallet, snapshot.byWallet?.[wallet]);
       }, 0));
-    }
-
-    async function syncCreatorDisplayBackingFromDeposit(roomId){
-      const room = roomById(roomId);
-      if(!room || !connectedWallet || room.state !== "SPAWNING") return 0;
-      if(!isCreator(room, connectedWallet)) return 0;
-
-      const snapshot = state.onchain?.[roomId] || room.onchain || {};
-      const row = snapshot.byWallet?.[connectedWallet] || null;
-      const existingBackingSol = getWalletDisplayReceiptBackingSol(room, connectedWallet, row);
-      if(existingBackingSol > 0) return existingBackingSol;
-
-      const totalDepositLamports = Math.max(0, Number(await fetchConnectedWalletDepositLamports(roomId) || 0));
-      const creatorWallet = room.creator_wallet || connectedWallet;
-      const creatorCommitSol = Number(room.creator_commit_sol);
-      const creatorGrossInputLamports = Math.max(0, Math.round((Number.isFinite(creatorCommitSol) ? creatorCommitSol : 0) * LAMPORTS_PER_SOL));
-      const currentNetCommittedLamports = Math.max(0, Math.round(Number(
-        row?.committed_sol ?? row?.withdrawable_sol ?? row?.escrow_sol ?? row?.allocated_sol ?? (totalDepositLamports / LAMPORTS_PER_SOL)
-      ) * LAMPORTS_PER_SOL));
-      const inferredBackingLamports = Math.max(0, creatorGrossInputLamports - currentNetCommittedLamports);
-      const storedBackingSol = rememberWalletDisplayReceiptBackingLamports(room, connectedWallet, inferredBackingLamports);
-
-      console.log("[ping-debug] syncCreatorDisplayBackingFromDeposit", {
-        roomId,
-        creatorWallet,
-        creatorCommitSol,
-        creatorGrossInputLamports,
-        currentNetCommittedLamports,
-        totalDepositLamports,
-        inferredBackingLamports,
-        storedBackingSol,
-      });
-
-      return storedBackingSol;
     }
 
     function getRoomCreatorBuySol(room){
@@ -3273,8 +3244,9 @@ const $ = (id) => document.getElementById(id);
         committed_sol: nextCommittedSol,
         withdrawable_lamports: nextCommittedLamports,
         withdrawable_sol: nextCommittedSol,
-        escrow_sol: nextCommittedSol,
+        allocated_lamports: nextCommittedLamports,
         allocated_sol: nextCommittedSol,
+        escrow_sol: nextCommittedSol,
       };
 
       snapshot.total_allocated_lamports = Math.max(0, Number(snapshot.total_allocated_lamports || 0) + safeCommittedLamports);
@@ -4271,10 +4243,12 @@ function encodeU64Arg(v){
       const committedLamports = Math.max(0, Math.floor(Number(debugMeta?.committedLamports || 0)));
       const depositBackingLamports = Math.max(0, Math.floor(Number(debugMeta?.depositBackingLamports || 0)));
       const expectedDepositInstructionLamports = Math.max(0, Math.floor(Number(debugMeta?.expectedDepositInstructionLamports || 0)));
+      const bootstrapCostLamports = Math.max(0, Math.floor(Number(debugMeta?.bootstrapCostLamports || 0)));
       const depositInstruction = tx.instructions
         .map((ix) => parsePingDepositDetails(ix))
         .find((details) => !!details && (expectedDepositInstructionLamports <= 0 || details.lamports === expectedDepositInstructionLamports));
-      const expectedBundleOutflowLamports = expectedFeeLamports + expectedDepositInstructionLamports;
+      const parsedBundleOutflowLamports = expectedFeeLamports + expectedDepositInstructionLamports;
+      const inferredBootstrapOutflowLamports = Math.max(0, expectedWalletOutflowLamports - parsedBundleOutflowLamports);
       console.log("[ping-debug] final instruction bundle before send", {
         instructionCount: tx.instructions.length,
         instructionProgramIds: tx.instructions.map((ix) => ix.programId?.toBase58?.()),
@@ -4284,10 +4258,12 @@ function encodeU64Arg(v){
         depositInstruction,
         expectedWalletOutflowLamports,
         expectedDepositInstructionLamports,
-        expectedBundleOutflowLamports,
+        parsedBundleOutflowLamports,
+        inferredBootstrapOutflowLamports,
         committedLamports,
         depositBackingLamports,
         feeLamports: expectedFeeLamports,
+        bootstrapCostLamports,
       });
       console.log("[ping-debug] FINAL TX INSTRUCTIONS", tx.instructions.map((ix, idx) => ({
         idx,
@@ -4305,8 +4281,19 @@ function encodeU64Arg(v){
       if(expectedDepositInstructionLamports > 0 && !depositInstruction){
         throw new Error("Missing Pingy deposit instruction in transaction bundle");
       }
-      if(expectedWalletOutflowLamports > 0 && expectedBundleOutflowLamports !== expectedWalletOutflowLamports){
-        throw new Error(`Transaction bundle outflow mismatch (expected ${expectedWalletOutflowLamports}, built ${expectedBundleOutflowLamports})`);
+      if(expectedWalletOutflowLamports > 0 && parsedBundleOutflowLamports > expectedWalletOutflowLamports){
+        throw new Error(`Transaction bundle outflow mismatch (expected <= ${expectedWalletOutflowLamports}, parsed ${parsedBundleOutflowLamports})`);
+      }
+      if(bootstrapCostLamports > 0 && inferredBootstrapOutflowLamports <= 0){
+        throw new Error(`Expected bootstrap outflow (${bootstrapCostLamports}) was not reflected in wallet outflow`);
+      }
+
+      if(bootstrapCostLamports > 0){
+        console.log("[ping-debug] bootstrap outflow estimate vs inferred", {
+          bootstrapCostLamports,
+          inferredBootstrapOutflowLamports,
+          deltaLamports: inferredBootstrapOutflowLamports - bootstrapCostLamports,
+        });
       }
 
       console.log("[ping-debug] sendProgramInstruction program checks", {
@@ -5626,24 +5613,20 @@ function encodeU64Arg(v){
       try {
         const lamports = await fetchConnectedWalletDepositLamports(roomId);
         if(activeRoomId !== roomId) return;
-        const netCommittedSol = Number(lamports || 0) / LAMPORTS_PER_SOL;
         const snapshot = state.onchain?.[roomId] || {};
         snapshot.byWallet = snapshot.byWallet || {};
+        const committedLamports = Math.max(0, Math.round(Number(lamports || 0)));
         snapshot.byWallet[connectedWallet] = {
           ...(snapshot.byWallet[connectedWallet] || {}),
-          committed_sol: netCommittedSol,
-          committed_lamports: Number(lamports || 0),
-          escrow_sol: netCommittedSol,
-          withdrawable_sol: netCommittedSol,
+          committed_sol: committedLamports / LAMPORTS_PER_SOL,
+          committed_lamports: committedLamports,
+          escrow_sol: committedLamports / LAMPORTS_PER_SOL,
+          withdrawable_sol: committedLamports / LAMPORTS_PER_SOL,
+          allocated_sol: committedLamports / LAMPORTS_PER_SOL,
+          withdrawable_lamports: committedLamports,
+          allocated_lamports: committedLamports,
         };
         state.onchain[roomId] = snapshot;
-        if(
-          r.state === "SPAWNING" &&
-          isCreator(r, connectedWallet) &&
-          getWalletDisplayReceiptBackingSol(r, connectedWallet, snapshot.byWallet[connectedWallet]) <= 0
-        ){
-          await syncCreatorDisplayBackingFromDeposit(roomId);
-        }
         const grossCommittedSol = getWalletGrossCommittedSol(r, connectedWallet, snapshot.byWallet[connectedWallet]);
         meLine.textContent = `you: your committed amount ${grossCommittedSol.toFixed(3)} SOL`;
       } catch(err){
@@ -7083,15 +7066,10 @@ if(connectBtn){
       const wallets = Array.from(new Set(Object.keys(snapshot.byWallet || {})));
       const rows = wallets.map((wallet) => {
         const row = snapshot.byWallet?.[wallet] || {};
-        const hasCommittedField = Number.isFinite(Number(row.committed_sol));
         const netCommittedSol = Math.max(0, Number(row.committed_sol ?? row.withdrawable_sol ?? row.escrow_sol ?? row.allocated_sol ?? 0));
-        const displayReceiptBackingSol = hasCommittedField ? 0 : getWalletDisplayReceiptBackingSol(room, wallet, row);
-        const grossCommittedSol = netCommittedSol > 0 ? (netCommittedSol + displayReceiptBackingSol) : 0;
         return {
           wallet,
-          net_committed_sol: Number(netCommittedSol.toFixed(9)),
-          display_receipt_backing_sol: Number(displayReceiptBackingSol.toFixed(9)),
-          gross_committed_sol: Number(grossCommittedSol.toFixed(9)),
+          committed_sol: Number(netCommittedSol.toFixed(9)),
         };
       });
       console.log("[ping-debug] gross commitment by wallet", { roomId: room.id, rows });
@@ -7314,42 +7292,40 @@ if(connectBtn){
     async function setCreatorCommitMax(){
       if(!connectedWallet) return showToast("connect wallet first.");
       await refreshWalletBalances(connectedWallet, { force: true });
-      await estimateDepositRentLamports();
       const launchConfigResult = validateCreateLaunchConfig(getCreateLaunchConfig());
       if(!launchConfigResult.ok) return;
       const launchConfig = launchConfigResult.config;
       const launchMode = launchConfig.launchMode || "spawn";
       const walletSnapshot = state.walletBalances[connectedWallet] || {};
       const balanceLamports = Math.max(0, Math.floor(Number(walletSnapshot.nativeSol || 0) * LAMPORTS_PER_SOL));
-      const capCommittedLamports = launchMode === "spawn" ? configWalletCapLamports(launchConfig) : Number.MAX_SAFE_INTEGER;
-      const depositRentLamports = launchMode === "spawn" ? Number(state.depositRentLamportsEstimate || 0) : 0;
-      const bootstrapReserveLamports = launchMode === "spawn" ? estimateCreatorBootstrapReserveLamports(connectedWallet) : 0;
-      const reserveLamports = depositRentLamports + bootstrapReserveLamports + CREATOR_MAX_TX_FEE_RESERVE_LAMPORTS;
-      const spendableAllInLamports = Math.max(0, balanceLamports - bootstrapReserveLamports - CREATOR_MAX_TX_FEE_RESERVE_LAMPORTS);
-      const spendableCommitInputLamports = Math.max(0, spendableAllInLamports - depositRentLamports);
-      const maxCommittedFromBalance = launchMode === "spawn"
-        ? applyPingFeeToLamports(spendableCommitInputLamports).committedLamports
-        : Math.max(0, balanceLamports - CREATOR_MAX_TX_FEE_RESERVE_LAMPORTS);
-      const targetCommittedLamports = Math.max(0, Math.min(capCommittedLamports, maxCommittedFromBalance));
-      const requiredGrossInputLamports = launchMode === "spawn"
-        ? grossInputForTargetCommittedLamports(targetCommittedLamports) + depositRentLamports
-        : targetCommittedLamports;
+      const input = $("newCommit");
+      if(launchMode !== "spawn"){
+        if(input) input.value = formatLamportsAsSol(Math.max(0, balanceLamports - CREATOR_MAX_TX_FEE_RESERVE_LAMPORTS));
+        updateCreateCommitFeePreview();
+        return;
+      }
+      const creatorModel = computeCreatorSpawnSpendModel({
+        walletBalanceLamports: balanceLamports,
+        committedCapLamports: configWalletCapLamports(launchConfig),
+        bootstrapCostLamports: estimateCreatorBootstrapReserveLamports(connectedWallet),
+        networkBufferLamports: CREATOR_MAX_TX_FEE_RESERVE_LAMPORTS,
+      });
       console.log("[ping-debug] max ping calculation", {
         roomId: null,
         wallet: connectedWallet,
-        targetCommittedLamports,
-        requiredGrossInputLamports,
+        committedTargetLamports: creatorModel.committedTargetLamports,
+        grossPositionInputLamports: creatorModel.grossPositionInputLamports,
+        totalWalletSpendLamports: creatorModel.totalWalletSpendLamports,
         availableBalanceLamports: balanceLamports,
-        reserveLamports,
         mode: "creator",
       });
-      const input = $("newCommit");
-      if(input) input.value = formatLamportsAsSol(requiredGrossInputLamports);
+      if(input) input.value = formatLamportsAsSol(creatorModel.totalWalletSpendLamports);
       updateCreateCommitFeePreview();
     }
 
     async function createCoinFromForm(){
       if(!connectedWallet) return showToast("connect wallet first.");
+      await refreshWalletBalances(connectedWallet, { force: true });
       console.log("[ping-debug] spawn button handler start", { connectedWallet, launchBackend: PINGY_LAUNCH_BACKEND });
       const name = ($("newName").value||"").trim();
       const ticker = ($("newTicker").value||"").trim().toUpperCase();
@@ -7375,8 +7351,10 @@ if(connectBtn){
       const TICKER_RE = /^[A-Z0-9]{1,10}$/;
       if(!TICKER_RE.test(ticker)) return alert("ticker must be 1–10 chars, A–Z and 0–9 only (no spaces).");
       if(commitStr && (!Number.isFinite(commitInputSol) || Number.isNaN(commitInputSol) || commitInputSol <= 0)) return alert("commit must be a valid SOL amount.");
-      const creatorInputLamports = Math.floor(commitInputSol * LAMPORTS_PER_SOL);
-      if(commitInputSol > 0 && creatorInputLamports <= 0) return alert("commit must be at least 1 lamport.");
+      const creatorTotalSpendLamports = Math.floor(commitInputSol * LAMPORTS_PER_SOL);
+      if(commitInputSol > 0 && creatorTotalSpendLamports <= 0) return alert("commit must be at least 1 lamport.");
+      const creatorWalletBalanceLamports = Math.max(0, Math.floor(Number(state.walletBalances?.[connectedWallet]?.nativeSol || 0) * LAMPORTS_PER_SOL));
+      if(creatorTotalSpendLamports > creatorWalletBalanceLamports) return alert("insufficient wallet balance for total spend.");
 
       const launchConfigResult = validateCreateLaunchConfig(getCreateLaunchConfig());
       if(!launchConfigResult.ok){
@@ -7389,21 +7367,26 @@ if(connectBtn){
       }
       const launchConfig = launchConfigResult.config;
       const launchMode = launchConfig.launchMode || "spawn";
-      const shouldEstimateCreateDepositRent = shouldUseOnchain() && launchMode === "spawn" && creatorInputLamports > 0;
-      const estimatedCreateDepositRentLamports = shouldEstimateCreateDepositRent ? await estimateDepositRentLamports() : 0;
-      const creatorCommitInputLamports = Math.max(0, creatorInputLamports - estimatedCreateDepositRentLamports);
       const creatorFeeMath = launchMode === "spawn"
-        ? applyPingFeeToLamports(creatorCommitInputLamports)
-        : { inputLamports: creatorInputLamports, feeLamports: 0, committedLamports: creatorInputLamports };
-      const commitLamports = creatorFeeMath.committedLamports;
+        ? computeCreatorSpawnSpendModel({
+            walletBalanceLamports: Number.MAX_SAFE_INTEGER,
+            committedCapLamports: Number.MAX_SAFE_INTEGER,
+            bootstrapCostLamports: estimateCreatorBootstrapReserveLamports(connectedWallet),
+            networkBufferLamports: 0,
+            totalWalletSpendLamports: creatorTotalSpendLamports,
+          })
+        : {
+            committedTargetLamports: creatorTotalSpendLamports,
+            grossPositionInputLamports: creatorTotalSpendLamports,
+            feeLamports: 0,
+            bootstrapCostLamports: 0,
+            totalWalletSpendLamports: creatorTotalSpendLamports,
+          };
+      const commitLamports = creatorFeeMath.committedTargetLamports;
       const commit = commitLamports / LAMPORTS_PER_SOL;
-      const createDepositTotalLamports = launchMode === "spawn"
-        ? commitLamports + estimatedCreateDepositRentLamports
-        : commitLamports;
-      const expectedCreateNetContributionLamports = commitLamports;
-      if(launchMode === "spawn" && creatorInputLamports > 0 && commitLamports <= 0){
-        const minSol = ((estimatedCreateDepositRentLamports + 2) / LAMPORTS_PER_SOL).toFixed(9);
-        return alert(`commit must be more than ${minSol} SOL to fund a committed contribution after fee.`);
+      const createDepositTotalLamports = commitLamports;
+      if(launchMode === "spawn" && creatorTotalSpendLamports > 0 && commitLamports <= 0){
+        return alert("Total spend must exceed estimated room creation + Pingy fee to create a committed amount.");
       }
       let createTxSignature = "";
       let creatorFeeTransferSignature = "";
@@ -7418,12 +7401,11 @@ if(connectBtn){
       console.log("[ping-debug] ping fee math", {
         roomId: id,
         wallet: connectedWallet,
-        grossAllInInputLamports: creatorInputLamports,
-        depositRentLamports: estimatedCreateDepositRentLamports,
-        feeBaseLamports: creatorFeeMath.inputLamports,
-        inputLamports: creatorFeeMath.inputLamports,
+        totalWalletSpendLamports: creatorTotalSpendLamports,
+        bootstrapCostLamports: creatorFeeMath.bootstrapCostLamports,
+        grossPositionInputLamports: creatorFeeMath.grossPositionInputLamports,
         feeLamports: creatorFeeMath.feeLamports,
-        committedLamports: creatorFeeMath.committedLamports,
+        committedLamports: creatorFeeMath.committedTargetLamports,
         capRemainingLamports: launchMode === "spawn" ? configWalletCapLamports(launchConfig) : null,
       });
 
@@ -7452,20 +7434,20 @@ if(connectBtn){
             const createPath = commitLamports > 0 ? "combined-init+deposit" : "init-only";
             console.log("[ping-debug] spawn funding branch entered", {
               roomId: id,
-              commitLamports,
+              committedLamports: commitLamports,
               createDepositTotalLamports,
               shouldFund: commitLamports > 0,
               launchBackend: PINGY_LAUNCH_BACKEND,
             });
             console.log("[ping-debug] create flow", {
               launchMode: launchConfig.launchMode,
-              commitLamports,
+              committedLamports: commitLamports,
               createDepositTotalLamports,
               path: createPath,
             });
             if(commitLamports > 0){
               const creatorFeeIx = buildPingFeeTransferInstruction(creatorFeeMath.feeLamports);
-              console.log("[ping-debug] before Phantom funding tx", { roomId: id, commitLamports, createDepositTotalLamports, estimatedCreateDepositRentLamports, hasCreatorFeeInstruction: !!creatorFeeIx });
+              console.log("[ping-debug] before Phantom funding tx", { roomId: id, commitLamports, createDepositTotalLamports, hasCreatorFeeInstruction: !!creatorFeeIx });
               const depositBundle = await pingWithOptionalThreadInitTx(id, createDepositTotalLamports, true, launchConfig, {
                 includeLegacyNativeAssets,
               });
@@ -7475,23 +7457,24 @@ if(connectBtn){
               ];
               createTxSignature = await sendProgramInstructions(instructions, {
                 feeRecipient: PINGY_FEE_RECIPIENT,
-                expectedWalletOutflowLamports: creatorInputLamports,
+                expectedWalletOutflowLamports: creatorTotalSpendLamports,
                 committedLamports: commitLamports,
-                depositBackingLamports: estimatedCreateDepositRentLamports,
-                expectedDepositInstructionLamports: createDepositTotalLamports,
+                depositBackingLamports: 0,
+                expectedDepositInstructionLamports: commitLamports,
                 feeLamports: creatorFeeMath.feeLamports,
+                bootstrapCostLamports: creatorFeeMath.bootstrapCostLamports,
               });
               creatorFeeTransferSignature = creatorFeeIx ? createTxSignature : "";
               if(creatorFeeIx){
                 console.log("[ping-debug] creator fee transfer", {
                   roomId: id,
                   wallet: connectedWallet,
-                  grossInputLamports: creatorInputLamports,
-                  depositBackingLamports: estimatedCreateDepositRentLamports,
-                  feeBaseLamports: creatorFeeMath.inputLamports,
+                  totalWalletSpendLamports: creatorTotalSpendLamports,
+                  depositBackingLamports: 0,
+                  grossPositionInputLamports: creatorFeeMath.grossPositionInputLamports,
                   feeLamports: creatorFeeMath.feeLamports,
                   committedLamports: commitLamports,
-                  createDepositTotalLamports,
+                  expectedDepositInstructionLamports: commitLamports,
                   transferSignature: creatorFeeTransferSignature,
                 });
               }
@@ -7510,7 +7493,7 @@ if(connectBtn){
           try {
             console.log("[ping-debug] create flow", {
               launchMode: launchConfig.launchMode,
-              commitLamports,
+              committedLamports: commitLamports,
               path: "instant",
             });
             await initializeThreadTx(id, launchConfig);
@@ -7537,7 +7520,7 @@ if(connectBtn){
       normalizeLaunchRoom(r, { launchMode, creatorCommitSol: commit });
       r.creator_ping_fee_lamports = creatorFeeMath.feeLamports;
       r.creator_ping_fee_sol = creatorFeeMath.feeLamports / LAMPORTS_PER_SOL;
-      r.creator_ping_input_lamports = creatorInputLamports;
+      r.creator_ping_input_lamports = creatorTotalSpendLamports;
       r.approval = { [creatorWallet]: "approved" };
       r.approverWallets = r.approverWallets || {};
       r.blockedWallets = r.blockedWallets || {};
@@ -7577,19 +7560,6 @@ if(connectBtn){
           isCreator: isCreator(r, connectedWallet),
         });
       }
-      let storedDisplayBackingSol = 0;
-      if(shouldEstimateCreateDepositRent){
-        const displayBackingWallet = r.creator_wallet || connectedWallet;
-        storedDisplayBackingSol = rememberWalletDisplayReceiptBackingLamports(r, displayBackingWallet, estimatedCreateDepositRentLamports);
-        console.log("[ping-debug] creator spawn display backing", {
-          roomId: r.id,
-          displayBackingWallet,
-          commitLamports,
-          estimatedDepositRentLamports: estimatedCreateDepositRentLamports,
-          expectedNetContributionLamports: expectedCreateNetContributionLamports,
-          storedDisplayBackingSol,
-        });
-      }
       let bootstrapMeta = buildRoomBootstrapCostMeta(0, {
         known: launchMode !== "spawn",
         note: launchMode === "spawn"
@@ -7611,8 +7581,7 @@ if(connectBtn){
       console.log("[ping-debug] create bootstrap tracking", {
         roomId: r.id,
         launchMode,
-        commitLamports,
-        estimatedDepositRentLamports: estimatedCreateDepositRentLamports,
+        committedLamports: commitLamports,
         bootstrapCostLamports: r.bootstrap_cost_lamports,
         bootstrapCostSol: r.bootstrap_cost_sol,
         bootstrapLocked: r.bootstrap_locked === true,
@@ -7655,7 +7624,6 @@ if(connectBtn){
 
       if(shouldUseOnchain() && launchMode === "spawn"){
         await fetchRoomOnchainSnapshot(id);
-        await syncCreatorDisplayBackingFromDeposit(id);
         await refreshConnectedWalletEscrowLine(id);
         await fetchConnectedWalletDepositSnapshot();
         const createdRoom = roomById(id);
@@ -9041,10 +9009,10 @@ if(connectBtn){
       return (Math.max(0, Number(lamports || 0)) / LAMPORTS_PER_SOL).toFixed(9).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
     }
 
-    function formatPingPreview(inputLamports, feeLamports, committedLamports){
+    function formatRegularPingPreview(inputLamports, feeLamports, committedLamports){
       return (
         `Input: ${formatLamportsAsSol(inputLamports)} SOL • ` +
-        `Pingy fee (1%): ${formatLamportsAsSol(feeLamports)} SOL • ` +
+        `Pingy fee: ${formatLamportsAsSol(feeLamports)} SOL • ` +
         `Committed: ${formatLamportsAsSol(committedLamports)} SOL`
       );
     }
@@ -9054,10 +9022,19 @@ if(connectBtn){
       if(!preview) return;
       const inputSol = Number(($("pingAmount")?.value || "").trim()) || 0;
       const inputLamports = Math.floor(Math.max(0, inputSol) * LAMPORTS_PER_SOL);
-      const fee = applyPingFeeToLamports(inputLamports);
-      preview.textContent = formatPingPreview(inputLamports, fee.feeLamports, fee.committedLamports);
+      const model = computeRegularPingSpendModel({ grossWalletInputLamports: inputLamports });
+      preview.textContent = formatRegularPingPreview(model.grossWalletInputLamports, model.feeLamports, model.committedLamports);
     }
 
+
+    function formatCreatorSpawnPreview(totalLamports, feeLamports, bootstrapLamports, committedLamports){
+      return (
+        `Total spend: ${formatLamportsAsSol(totalLamports)} SOL • ` +
+        `Pingy fee: ${formatLamportsAsSol(feeLamports)} SOL • ` +
+        `Room creation: ${formatLamportsAsSol(bootstrapLamports)} SOL • ` +
+        `Committed: ${formatLamportsAsSol(committedLamports)} SOL`
+      );
+    }
     function updateCreateCommitFeePreview(){
       const preview = $("newCommitFeePreview");
       if(!preview) return;
@@ -9067,37 +9044,23 @@ if(connectBtn){
       const launchMode = getCreateLaunchMode();
       const inputLamports = Math.floor(Math.max(0, inputSol) * LAMPORTS_PER_SOL);
 
-      const estimatedRentLamports =
-        launchMode === "spawn" && shouldUseOnchain()
-          ? Number(state.depositRentLamportsEstimate || 0)
-          : 0;
-
-      const depositBackingLamports = Math.max(0, Math.min(inputLamports, estimatedRentLamports));
-      const feeInputLamports = Math.max(0, inputLamports - depositBackingLamports);
-
-      const fee = launchMode === "spawn"
-        ? applyPingFeeToLamports(feeInputLamports)
-        : { inputLamports, feeLamports: 0, committedLamports: inputLamports };
-
-      preview.textContent = formatPingPreview(inputLamports, fee.feeLamports, fee.committedLamports);
-    }
-
-    function hasExistingDeposit(userDeposit = {}){
-      return !!userDeposit?.exists;
-    }
-
-    async function estimateDepositRentLamports(){
-      if(Number.isInteger(state.depositRentLamportsEstimate) && state.depositRentLamportsEstimate > 0){
-        return state.depositRentLamportsEstimate;
+      if(launchMode !== "spawn"){
+        preview.textContent = formatRegularPingPreview(inputLamports, 0, inputLamports);
+        return;
       }
-      try {
-        const rentLamports = await connection.getMinimumBalanceForRentExemption(DEPOSIT_ACCOUNT_DATA_SIZE, "confirmed");
-        state.depositRentLamportsEstimate = Number(rentLamports || 0);
-      } catch(err){
-        console.warn("[ping-debug] failed to estimate deposit rent", err);
-        state.depositRentLamportsEstimate = 0;
-      }
-      return Number(state.depositRentLamportsEstimate || 0);
+      const creatorModel = computeCreatorSpawnSpendModel({
+        walletBalanceLamports: Number.MAX_SAFE_INTEGER,
+        committedCapLamports: Number.MAX_SAFE_INTEGER,
+        bootstrapCostLamports: estimateCreatorBootstrapReserveLamports(connectedWallet),
+        networkBufferLamports: 0,
+        totalWalletSpendLamports: inputLamports,
+      });
+      preview.textContent = `${formatCreatorSpawnPreview(
+        creatorModel.totalWalletSpendLamports,
+        creatorModel.feeLamports,
+        creatorModel.bootstrapCostLamports,
+        creatorModel.committedTargetLamports
+      )} (room creation estimated)`;
     }
 
     function updateActionModalCopy(room){
@@ -9124,7 +9087,7 @@ if(connectBtn){
 
       if(pingModalHelp){
         pingModalHelp.textContent = isSpawning
-          ? "Your entered amount is all-in. Pingy takes a 1% fee, and the rest becomes your committed amount. A small network fee may apply."
+          ? "Your entered amount is total spend. Pingy takes a 1% fee. The rest becomes your committed amount."
           : isPumpPostSpawn
             ? "Launched coins trade outside Pingy. Pingy remains the coordination and watch layer."
             : isBonded
@@ -9189,14 +9152,10 @@ if(connectBtn){
       }
       const userDeposit = state.userEscrow || {};
       const capRemainingCommittedLamports = computeMaxPingLamports(r, userDeposit);
-      const includeDepositRent = !hasExistingDeposit(userDeposit);
-      const estimatedRentLamports = includeDepositRent ? Number(state.depositRentLamportsEstimate || 0) : 0;
       const walletBalanceLamports = Math.max(0, Math.floor(Number(state.walletBalances[connectedWallet]?.nativeSol || 0) * LAMPORTS_PER_SOL));
-      const spendableInputLamports = Math.max(0, walletBalanceLamports - estimatedRentLamports);
-      const maxCommittedByBalanceLamports = applyPingFeeToLamports(spendableInputLamports).committedLamports;
+      const maxCommittedByBalanceLamports = computeRegularPingSpendModel({ grossWalletInputLamports: walletBalanceLamports }).committedLamports;
       const targetCommittedLamports = Math.max(0, Math.min(capRemainingCommittedLamports, maxCommittedByBalanceLamports));
-      const maxGrossInputLamports = grossInputForTargetCommittedLamports(targetCommittedLamports);
-      const maxGrossLamports = Math.max(0, maxGrossInputLamports + estimatedRentLamports);
+      const maxGrossLamports = computeGrossPositionInputForCommittedLamports(targetCommittedLamports);
       state.maxPingLamports = maxGrossLamports;
       state.maxPingCommittedLamports = targetCommittedLamports;
       const maxSol = maxGrossLamports / LAMPORTS_PER_SOL;
@@ -9219,7 +9178,6 @@ if(connectBtn){
       updateActionModalCopy(r);
       $("pingAmount").value = "";
       await refreshWalletBalances(connectedWallet, { force: true });
-      await estimateDepositRentLamports();
       $("pingRoomLine").textContent = `coin: ${r.name}  $${r.ticker}`;
       updatePingAllocationHint(rid);
       updatePingFeePreview();
@@ -9255,12 +9213,12 @@ if(connectBtn){
       if(!input) return;
       input.value = formatLamportsAsSol(maxLamports);
       const availableBalanceLamports = Math.floor(Number((state.walletBalances[connectedWallet]?.nativeSol || 0)) * LAMPORTS_PER_SOL);
-      const reserveLamports = Number(state.userEscrow?.exists ? 0 : (state.depositRentLamportsEstimate || 0));
+      const reserveLamports = 0;
       console.log("[ping-debug] max ping calculation", {
         roomId: rid,
         wallet: connectedWallet,
         targetCommittedLamports: Number(state.maxPingCommittedLamports || 0),
-        requiredGrossInputLamports: Math.max(0, maxLamports - reserveLamports),
+        requiredGrossInputLamports: maxLamports,
         availableBalanceLamports,
         reserveLamports,
         mode: "regular",
@@ -9336,15 +9294,10 @@ if(connectBtn){
         const onchainMode = shouldUseOnchain();
         const mockPos = onchainMode ? null : ensurePos(r, connectedWallet);
         const userDeposit = onchainMode ? (state.userEscrow || {}) : { exists: !!mockPos?.deposit_exists };
-        const estimatedDepositRentLamports = hasExistingDeposit(userDeposit) ? 0 : await estimateDepositRentLamports();
-        const pingFeeMath = applyPingFeeToLamports(amountLamports);
-        const committedLamports = pingFeeMath.committedLamports;
-        const escrowContributionLamports = Math.max(0, committedLamports - estimatedDepositRentLamports);
-        if(escrowContributionLamports <= 0){
-          const minSol = ((estimatedDepositRentLamports + 1) / LAMPORTS_PER_SOL).toFixed(9);
-          showToast(`Enter more than ${minSol} SOL so your all-in ping can fund a committed contribution.`);
-          return;
-        }
+        const pingSpendModel = computeRegularPingSpendModel({ grossWalletInputLamports: amountLamports });
+        const committedLamports = pingSpendModel.committedLamports;
+        const depositBackingLamports = 0;
+        const escrowContributionLamports = committedLamports;
 
         if(onchainMode){
           const netCapacityLamports = computeMaxPingLamports(r, userDeposit);
@@ -9354,14 +9307,14 @@ if(connectBtn){
           }
           console.log("[ping-debug] regular ping final math", {
             grossInputLamports: amountLamports,
-            feeLamports: pingFeeMath.feeLamports,
+            feeLamports: pingSpendModel.feeLamports,
             committedLamports,
-            depositBackingLamports: estimatedDepositRentLamports,
+            depositBackingLamports,
             escrowContributionLamports,
             expectedWalletOutflowLamports: amountLamports,
-            expectedDepositInstructionLamports: escrowContributionLamports + estimatedDepositRentLamports,
+            expectedDepositInstructionLamports: committedLamports,
           });
-          console.log("[ping-debug] all-in ping amount conversion", { solAmount, grossEnteredLamports: amountLamports, estimatedDepositRentLamports, escrowContributionLamports });
+          console.log("[ping-debug] all-in ping amount conversion", { solAmount, grossEnteredLamports: amountLamports, escrowContributionLamports });
           const walletPk = new PublicKey(connectedWallet);
           const [threadPda] = await deriveThreadPda(rid);
           const [depositPda] = await deriveDepositPda(rid, walletPk);
@@ -9380,10 +9333,10 @@ if(connectBtn){
           const escrowInfoBefore = await connection.getAccountInfo(threadEscrowPda, "confirmed");
           const balBefore = escrowInfoBefore ? await connection.getBalance(threadEscrowPda, "confirmed") : 0;
           try {
-            const feeIx = buildPingFeeTransferInstruction(pingFeeMath.feeLamports);
+            const feeIx = buildPingFeeTransferInstruction(pingSpendModel.feeLamports);
             const depositBundle = await pingWithOptionalThreadInitTx(
               rid,
-              escrowContributionLamports + estimatedDepositRentLamports,
+              committedLamports,
               !threadInfo,
               null
             );
@@ -9395,9 +9348,10 @@ if(connectBtn){
               feeRecipient: PINGY_FEE_RECIPIENT,
               expectedWalletOutflowLamports: amountLamports,
               committedLamports,
-              depositBackingLamports: estimatedDepositRentLamports,
-              expectedDepositInstructionLamports: escrowContributionLamports + estimatedDepositRentLamports,
-              feeLamports: pingFeeMath.feeLamports,
+              depositBackingLamports,
+              expectedDepositInstructionLamports: committedLamports,
+              feeLamports: pingSpendModel.feeLamports,
+              bootstrapCostLamports: 0,
             });
             const feeTransferSignature = feeIx ? sig : "";
             if(feeIx){
@@ -9405,8 +9359,8 @@ if(connectBtn){
                 roomId: rid,
                 wallet: connectedWallet,
                 grossInputLamports: amountLamports,
-                depositBackingLamports: estimatedDepositRentLamports,
-                feeLamports: pingFeeMath.feeLamports,
+                depositBackingLamports,
+                feeLamports: pingSpendModel.feeLamports,
                 committedLamports,
                 transferSignature: feeTransferSignature,
               });
@@ -9423,7 +9377,6 @@ if(connectBtn){
               deltaLamports,
               deltaSol,
               grossEnteredLamports: amountLamports,
-              estimatedDepositRentLamports,
               expectedCommittedLamports: committedLamports,
               expectedEscrowContributionLamports: escrowContributionLamports,
               feeTransferSignature,
@@ -9431,7 +9384,6 @@ if(connectBtn){
               escrowExplorer: explorerAddressUrl(threadEscrowPda.toBase58()),
             });
             showToast(`Thread escrow deposit +${deltaSol.toFixed(9)} SOL (all-in ping ${solAmount} SOL)`);
-            if(!hasExistingDeposit(userDeposit)) rememberWalletDisplayReceiptBackingLamports(r, connectedWallet, estimatedDepositRentLamports);
             console.log("[ping-debug] explorer links", {
               tx: explorerTxUrl(sig),
               threadEscrow: explorerAddressUrl(threadEscrowPda.toBase58()),
@@ -9457,11 +9409,9 @@ if(connectBtn){
           console.log("[ping-debug] mock all-in ping amount conversion", {
             solAmount,
             grossEnteredLamports: amountLamports,
-            estimatedDepositRentLamports,
             escrowContributionLamports,
             committedLamports,
           });
-          if(!hasExistingDeposit(userDeposit)) rememberWalletDisplayReceiptBackingLamports(r, connectedWallet, estimatedDepositRentLamports);
         }
 
         applyOptimisticSpawnCommitLamports(r, connectedWallet, committedLamports);
@@ -9549,7 +9499,6 @@ if(connectBtn){
         } else {
           applySpawnUncommit(r, connectedWallet, cur);
         }
-        clearWalletDisplayReceiptBacking(r, connectedWallet);
 
         state.chat[r.id] = state.chat[r.id] || [];
         state.chat[r.id].push({ ts: nowStamp(), wallet: connectedWallet, text:`withdrew ${grossCommittedBeforeWithdraw.toFixed(3)} SOL (full committed amount withdrawal, returned to wallet).`, kind: "activity" });
