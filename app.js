@@ -8916,10 +8916,7 @@ if(connectBtn){
       if(!preview) return;
       const inputSol = Number(($("pingAmount")?.value || "").trim()) || 0;
       const inputLamports = Math.floor(Math.max(0, inputSol) * LAMPORTS_PER_SOL);
-      const userDeposit = state.userEscrow || {};
-      const depositBackingLamports = !hasExistingDeposit(userDeposit) ? Number(state.depositRentLamportsEstimate || 0) : 0;
-      const feeInputLamports = Math.max(0, inputLamports - Math.max(0, Math.min(inputLamports, depositBackingLamports)));
-      const fee = applyPingFeeToLamports(feeInputLamports);
+      const fee = applyPingFeeToLamports(inputLamports);
       preview.textContent = formatPingPreview(inputLamports, fee.feeLamports, fee.committedLamports);
     }
 
@@ -9206,9 +9203,9 @@ if(connectBtn){
         const mockPos = onchainMode ? null : ensurePos(r, connectedWallet);
         const userDeposit = onchainMode ? (state.userEscrow || {}) : { exists: !!mockPos?.deposit_exists };
         const estimatedDepositRentLamports = hasExistingDeposit(userDeposit) ? 0 : await estimateDepositRentLamports();
-        const inputForCommitLamports = Math.max(0, amountLamports - estimatedDepositRentLamports);
-        const pingFeeMath = applyPingFeeToLamports(inputForCommitLamports);
-        const netContributionLamports = pingFeeMath.committedLamports;
+        const pingFeeMath = applyPingFeeToLamports(amountLamports);
+        const committedLamports = pingFeeMath.committedLamports;
+        const netContributionLamports = Math.max(0, committedLamports - estimatedDepositRentLamports);
         if(netContributionLamports <= 0){
           const minSol = ((estimatedDepositRentLamports + 1) / LAMPORTS_PER_SOL).toFixed(9);
           showToast(`Enter more than ${minSol} SOL so your all-in ping can fund a committed contribution.`);
@@ -9226,7 +9223,6 @@ if(connectBtn){
             wallet: connectedWallet,
             grossInputLamports: amountLamports,
             depositBackingLamports: estimatedDepositRentLamports,
-            feeBaseLamports: pingFeeMath.inputLamports,
             inputLamports: pingFeeMath.inputLamports,
             feeLamports: pingFeeMath.feeLamports,
             committedLamports: pingFeeMath.committedLamports,
@@ -9262,7 +9258,7 @@ if(connectBtn){
                 debugMeta: {
                   feeRecipient: PINGY_FEE_RECIPIENT,
                   expectedWalletOutflowLamports: amountLamports,
-                  committedLamports: netContributionLamports,
+                  committedLamports,
                   depositBackingLamports: estimatedDepositRentLamports,
                   feeLamports: pingFeeMath.feeLamports,
                 },
@@ -9275,9 +9271,8 @@ if(connectBtn){
                 wallet: connectedWallet,
                 grossInputLamports: amountLamports,
                 depositBackingLamports: estimatedDepositRentLamports,
-                feeBaseLamports: pingFeeMath.inputLamports,
                 feeLamports: pingFeeMath.feeLamports,
-                committedLamports: netContributionLamports,
+                committedLamports,
                 transferSignature: feeTransferSignature,
               });
             }
@@ -9294,7 +9289,8 @@ if(connectBtn){
               deltaSol,
               grossEnteredLamports: amountLamports,
               estimatedDepositRentLamports,
-              expectedNetContributionLamports: netContributionLamports,
+              expectedCommittedLamports: committedLamports,
+              expectedEscrowContributionLamports: netContributionLamports,
               feeTransferSignature,
               txExplorer: explorerTxUrl(sig),
               escrowExplorer: explorerAddressUrl(threadEscrowPda.toBase58()),
@@ -9337,7 +9333,7 @@ if(connectBtn){
 
         state.chat[r.id] = state.chat[r.id] || [];
         const statusText = isApproved(r, connectedWallet) ? "approved" : "pending approval";
-        state.chat[r.id].push({ ts: nowStamp(), wallet: "SYSTEM", text:`@${shortWallet(connectedWallet)} pinged ${solAmount.toFixed(3)} SOL gross (${(netContributionLamports / LAMPORTS_PER_SOL).toFixed(3)} committed, ${statusText})`, kind: "system_activity" });
+        state.chat[r.id].push({ ts: nowStamp(), wallet: "SYSTEM", text:`@${shortWallet(connectedWallet)} pinged ${solAmount.toFixed(3)} SOL gross (${(committedLamports / LAMPORTS_PER_SOL).toFixed(3)} committed, ${statusText})`, kind: "system_activity" });
 
         maybeAdvance(r);
 
