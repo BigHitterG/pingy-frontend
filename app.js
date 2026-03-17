@@ -5294,13 +5294,13 @@ function encodeU64Arg(v){
     }
 
 
-    async function fetchConnectedWalletDepositSnapshot(){
-      if(!connectedWallet || !activeRoomId) {
+    async function fetchConnectedWalletDepositSnapshot(roomId = activeRoomId){
+      if(!connectedWallet || !roomId) {
         state.userEscrow = null;
         return null;
       }
       const walletPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
-      const [depositPda] = await deriveDepositPda(activeRoomId, walletPk);
+      const [depositPda] = await deriveDepositPda(roomId, walletPk);
       const info = await connection.getAccountInfo(depositPda, "confirmed");
       if(!info || !info.data || info.data.length < 8){
         state.userEscrow = { exists: false, refundable_lamports: 0, allocated_lamports: 0, deposit_pda: depositPda.toBase58() };
@@ -9102,18 +9102,29 @@ if(connectBtn){
     // Ping / Unping flow
     // Use an explicit room id for modals so home-card clicks can't race view changes.
     let modalRoomId = null;
-    function computeMaxPingLamports(room, userDeposit = {}){
+    function computeMaxPingLamports(room, userDeposit = {}, wallet = connectedWallet){
       const targetLamports = Number(room?.onchain?.spawn_target_lamports || 0);
       const totalAllocatedLamports = Number(room?.onchain?.total_allocated_lamports || 0);
       const presetCapLamports = configWalletCapLamports({
         spawnTargetLamports: targetLamports,
         maxWalletShareBps: roomMaxWalletShareBps(room),
       });
-      const userAllocatedLamports = Number(userDeposit?.allocated_lamports || 0);
       if(targetLamports <= 0 || presetCapLamports <= 0) return 0;
-      const need = Math.max(0, targetLamports - totalAllocatedLamports);
-      const walletRemaining = Math.max(0, presetCapLamports - userAllocatedLamports);
-      return Math.max(0, Math.min(need, walletRemaining));
+      const roomWalletRow = wallet ? (room?.onchain?.byWallet?.[wallet] || null) : null;
+      const resolvedWalletCommittedLamports = resolveWalletCommittedLamports(room, wallet, roomWalletRow || userDeposit || {});
+      const totalRoomRemainingLamports = Math.max(0, targetLamports - totalAllocatedLamports);
+      const walletRemainingLamports = Math.max(0, presetCapLamports - resolvedWalletCommittedLamports);
+      const finalMaxPingLamports = Math.max(0, Math.min(totalRoomRemainingLamports, walletRemainingLamports));
+      console.log("[ping-debug] spawn cap calculation", {
+        roomId: room?.id,
+        wallet,
+        walletCapLamports: presetCapLamports,
+        resolvedWalletCommittedLamports,
+        walletRemainingLamports,
+        totalRoomRemainingLamports,
+        finalMaxPingLamports,
+      });
+      return finalMaxPingLamports;
     }
 
     function formatLamportsAsSol(lamports){
@@ -9288,6 +9299,8 @@ if(connectBtn){
       modalRoomId = rid;
       updateActionModalCopy(r);
       $("pingAmount").value = "";
+      await fetchRoomOnchainSnapshot(rid);
+      await fetchConnectedWalletDepositSnapshot(rid);
       await refreshWalletBalances(connectedWallet, { force: true });
       $("pingRoomLine").textContent = `coin: ${r.name}  $${r.ticker}`;
       updatePingAllocationHint(rid);
@@ -9589,11 +9602,10 @@ if(connectBtn){
       }
 
       closeModal($("pingBack"));
-      renderRoom(rid);
-      renderHome();
       await fetchRoomOnchainSnapshot(rid);
-      await fetchConnectedWalletDepositSnapshot();
+      await fetchConnectedWalletDepositSnapshot(rid);
       if(connectedWallet) await fetchWalletBalancesSnapshot(connectedWallet);
+      updatePingAllocationHint(rid);
       renderRoom(rid);
       r._pulseUntil = Date.now() + 900;
       r._lastActivity = Date.now();
