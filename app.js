@@ -4440,7 +4440,6 @@ function encodeU64Arg(v){
       }
       const opts = options || {};
       const includeLegacyNativeAssets = opts.includeLegacyNativeAssets !== false;
-      const preInstructions = Array.isArray(opts.preInstructions) ? opts.preInstructions.filter(Boolean) : [];
       const walletPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
       const [threadPda] = await deriveThreadPda(rid);
       const [spawnPoolPda] = await deriveSpawnPoolPda(rid);
@@ -4458,7 +4457,7 @@ function encodeU64Arg(v){
         feeVaultPda = (await deriveFeeVaultPda())[0];
       }
 
-      const instructions = [...preInstructions];
+      const instructions = [];
       const config = createConfig || getCreateLaunchConfig();
       if(includeThreadInit){
         instructions.push(new TransactionInstruction({
@@ -4512,7 +4511,6 @@ function encodeU64Arg(v){
       }));
 
       const instructionNames = [
-        ...(preInstructions.length > 0 ? ["ping_fee_transfer"] : []),
         ...(includeThreadInit
           ? ["initialize_thread_core", ...(includeLegacyNativeAssets ? ["initialize_thread_assets"] : []), "ping_deposit"]
           : ["ping_deposit"]),
@@ -4524,7 +4522,10 @@ function encodeU64Arg(v){
         instructionNames,
       });
 
-      return sendProgramInstructions(instructions, opts.debugMeta || null);
+      return {
+        instructions,
+        signers: [],
+      };
     }
 
     async function initializeThreadTx(threadId, createConfig = null, options = null){
@@ -7372,16 +7373,20 @@ if(connectBtn){
             if(commitLamports > 0){
               const creatorFeeIx = buildPingFeeTransferInstruction(creatorFeeMath.feeLamports);
               console.log("[ping-debug] before Phantom funding tx", { roomId: id, commitLamports, createDepositTotalLamports, estimatedCreateDepositRentLamports, hasCreatorFeeInstruction: !!creatorFeeIx });
-              createTxSignature = await pingWithOptionalThreadInitTx(id, createDepositTotalLamports, true, launchConfig, {
+              const depositBundle = await pingWithOptionalThreadInitTx(id, createDepositTotalLamports, true, launchConfig, {
                 includeLegacyNativeAssets,
-                preInstructions: creatorFeeIx ? [creatorFeeIx] : [],
-                debugMeta: {
-                  feeRecipient: PINGY_FEE_RECIPIENT,
-                  expectedWalletOutflowLamports: creatorInputLamports,
-                  committedLamports: commitLamports,
-                  depositBackingLamports: estimatedCreateDepositRentLamports,
-                  feeLamports: creatorFeeMath.feeLamports,
-                },
+              });
+              const instructions = [
+                ...(creatorFeeIx ? [creatorFeeIx] : []),
+                ...(depositBundle.instructions || []),
+              ];
+              createTxSignature = await sendProgramInstructions(instructions, {
+                feeRecipient: PINGY_FEE_RECIPIENT,
+                expectedWalletOutflowLamports: creatorInputLamports,
+                committedLamports: commitLamports,
+                depositBackingLamports: estimatedCreateDepositRentLamports,
+                expectedDepositInstructionLamports: createDepositTotalLamports,
+                feeLamports: creatorFeeMath.feeLamports,
               });
               creatorFeeTransferSignature = creatorFeeIx ? createTxSignature : "";
               if(creatorFeeIx){
@@ -9287,23 +9292,24 @@ if(connectBtn){
           const balBefore = escrowInfoBefore ? await connection.getBalance(threadEscrowPda, "confirmed") : 0;
           try {
             const feeIx = buildPingFeeTransferInstruction(pingFeeMath.feeLamports);
-            const sig = await pingWithOptionalThreadInitTx(
+            const depositBundle = await pingWithOptionalThreadInitTx(
               rid,
               escrowContributionLamports + estimatedDepositRentLamports,
               !threadInfo,
-              null,
-              {
-                preInstructions: feeIx ? [feeIx] : [],
-                debugMeta: {
-                  feeRecipient: PINGY_FEE_RECIPIENT,
-                  expectedWalletOutflowLamports: amountLamports,
-                  committedLamports,
-                  depositBackingLamports: estimatedDepositRentLamports,
-                  expectedDepositInstructionLamports: escrowContributionLamports + estimatedDepositRentLamports,
-                  feeLamports: pingFeeMath.feeLamports,
-                },
-              }
+              null
             );
+            const instructions = [
+              ...(feeIx ? [feeIx] : []),
+              ...(depositBundle.instructions || []),
+            ];
+            const sig = await sendProgramInstructions(instructions, {
+              feeRecipient: PINGY_FEE_RECIPIENT,
+              expectedWalletOutflowLamports: amountLamports,
+              committedLamports,
+              depositBackingLamports: estimatedDepositRentLamports,
+              expectedDepositInstructionLamports: escrowContributionLamports + estimatedDepositRentLamports,
+              feeLamports: pingFeeMath.feeLamports,
+            });
             const feeTransferSignature = feeIx ? sig : "";
             if(feeIx){
               console.log("[ping-debug] ping fee transfer", {
