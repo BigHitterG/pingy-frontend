@@ -8903,6 +8903,14 @@ if(connectBtn){
       return (Math.max(0, Number(lamports || 0)) / LAMPORTS_PER_SOL).toFixed(9).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
     }
 
+    function formatPingPreview(inputLamports, feeLamports, committedLamports){
+      return (
+        `Input: ${formatLamportsAsSol(inputLamports)} SOL • ` +
+        `Pingy fee (1%): ${formatLamportsAsSol(feeLamports)} SOL • ` +
+        `Committed: ${formatLamportsAsSol(committedLamports)} SOL`
+      );
+    }
+
     function updatePingFeePreview(){
       const preview = $("pingFeePreview");
       if(!preview) return;
@@ -8912,7 +8920,7 @@ if(connectBtn){
       const depositBackingLamports = !hasExistingDeposit(userDeposit) ? Number(state.depositRentLamportsEstimate || 0) : 0;
       const feeInputLamports = Math.max(0, inputLamports - Math.max(0, Math.min(inputLamports, depositBackingLamports)));
       const fee = applyPingFeeToLamports(feeInputLamports);
-      preview.textContent = `Input: ${formatLamportsAsSol(inputLamports)} SOL • Deposit backing: ${formatLamportsAsSol(Math.max(0, Math.min(inputLamports, depositBackingLamports)))} SOL • Pingy fee (1%): ${formatLamportsAsSol(fee.feeLamports)} SOL • Committed: ${formatLamportsAsSol(fee.committedLamports)} SOL`;
+      preview.textContent = formatPingPreview(inputLamports, fee.feeLamports, fee.committedLamports);
     }
 
     function updateCreateCommitFeePreview(){
@@ -8936,11 +8944,7 @@ if(connectBtn){
         ? applyPingFeeToLamports(feeInputLamports)
         : { inputLamports, feeLamports: 0, committedLamports: inputLamports };
 
-      preview.textContent =
-        `Input: ${formatLamportsAsSol(inputLamports)} SOL • ` +
-        `Deposit backing: ${formatLamportsAsSol(depositBackingLamports)} SOL • ` +
-        `Pingy fee (1%): ${formatLamportsAsSol(fee.feeLamports)} SOL • ` +
-        `Committed: ${formatLamportsAsSol(fee.committedLamports)} SOL`;
+      preview.textContent = formatPingPreview(inputLamports, fee.feeLamports, fee.committedLamports);
     }
 
     function hasExistingDeposit(userDeposit = {}){
@@ -8985,9 +8989,7 @@ if(connectBtn){
 
       if(pingModalHelp){
         pingModalHelp.textContent = isSpawning
-          ? (isNativeLaunchBackend()
-            ? "During spawn, your Ping amount is all-in for this action. A tiny network fee still applies, and you can unping to withdraw before spawn completes."
-            : "Your Ping amount is all-in for your committed amount. A tiny network fee may still apply.")
+          ? "Your entered amount is all-in. Pingy takes a 1% fee, and the rest becomes your committed amount. A small network fee may apply."
           : isPumpPostSpawn
             ? "Launched coins trade outside Pingy. Pingy remains the coordination and watch layer."
             : isBonded
