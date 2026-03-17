@@ -219,6 +219,51 @@ const $ = (id) => document.getElementById(id);
       };
     }
 
+    function splitCommittedLamportsForCreator({ committedLamports, depositBackingLamports }){
+      const safeCommittedLamports = Math.max(0, Math.floor(Number(committedLamports || 0)));
+      const safeDepositBackingLamports = Math.max(0, Math.floor(Number(depositBackingLamports || 0)));
+      const clampedDepositBackingLamports = Math.min(safeCommittedLamports, safeDepositBackingLamports);
+      return {
+        depositBackingLamports: clampedDepositBackingLamports,
+        escrowContributionLamports: Math.max(0, safeCommittedLamports - clampedDepositBackingLamports),
+      };
+    }
+
+    function getCreatorDepositBackingLamports(room){
+      return Math.max(0, Math.floor(Number(room?.creator_deposit_backing_lamports || 0)));
+    }
+
+    function resolveWalletCommittedLamportsForDisplay(room, wallet, row = null){
+      const sourceRow = row || {};
+      const baseLamports = Math.max(0, Math.round(Number(
+        sourceRow.committed_lamports
+        ?? sourceRow.withdrawable_lamports
+        ?? sourceRow.allocated_lamports
+        ?? ((Number(sourceRow.committed_sol ?? sourceRow.withdrawable_sol ?? sourceRow.escrow_sol ?? sourceRow.allocated_sol ?? 0) || 0) * LAMPORTS_PER_SOL)
+      ) || 0));
+      const creatorWallet = String(room?.creator_wallet || "").trim();
+      const normalizedWallet = String(wallet || "").trim();
+      const isCreatorWallet = !!creatorWallet && creatorWallet === normalizedWallet;
+      if(!isCreatorWallet || room?.launch_mode !== "spawn") return baseLamports;
+      const backingLamports = getCreatorDepositBackingLamports(room);
+      if(backingLamports <= 0) return baseLamports;
+      const backingIncluded = sourceRow?.creator_backing_included === true;
+      if(backingIncluded) return baseLamports;
+      return baseLamports + backingLamports;
+    }
+
+    async function estimateCreatorDepositBackingLamports(roomId, wallet){
+      const rid = String(roomId || "").trim();
+      const creatorWallet = String(wallet || "").trim();
+      if(!rid || !creatorWallet) return 0;
+      const walletPk = parsePublicKeyStrict(creatorWallet, "creator wallet");
+      const [depositPda] = await deriveDepositPda(rid, walletPk);
+      const existingDepositInfo = await connection.getAccountInfo(depositPda, "confirmed");
+      if(existingDepositInfo?.data?.length >= 8) return 0;
+      const rentLamports = await connection.getMinimumBalanceForRentExemption(DEPOSIT_ACCOUNT_DATA_SIZE);
+      return Math.max(0, Math.floor(Number(rentLamports || 0)));
+    }
+
     function isCountedDepositStatus(status){
       const normalized = normalizeDepositStatus(status);
       return normalized === "approved" || normalized === "swept";
@@ -661,17 +706,31 @@ const $ = (id) => document.getElementById(id);
             ?? row.allocated_lamports
             ?? (committedSol * LAMPORTS_PER_SOL)
           ) || 0));
+          const withdrawableLamports = Math.max(0, Math.round(Number(
+            row.withdrawable_lamports
+            ?? row.allocated_lamports
+            ?? row.committed_lamports
+            ?? (Number(row.withdrawable_sol ?? row.allocated_sol ?? committedSol) * LAMPORTS_PER_SOL)
+          ) || 0));
+          const allocatedLamports = Math.max(0, Math.round(Number(
+            row.allocated_lamports
+            ?? row.withdrawable_lamports
+            ?? row.committed_lamports
+            ?? (Number(row.allocated_sol ?? row.withdrawable_sol ?? committedSol) * LAMPORTS_PER_SOL)
+          ) || 0));
+          const withdrawableSol = Math.max(0, Number(row.withdrawable_sol ?? (withdrawableLamports / LAMPORTS_PER_SOL) ?? committedSol));
+          const allocatedSol = Math.max(0, Number(row.allocated_sol ?? (allocatedLamports / LAMPORTS_PER_SOL) ?? committedSol));
 
           byWallet[wallet] = {
             ...row,
             status,
             committed_sol: committedSol,
             committed_lamports: committedLamports,
-            escrow_sol: committedSol,
-            withdrawable_sol: committedSol,
-            allocated_sol: committedSol,
-            withdrawable_lamports: committedLamports,
-            allocated_lamports: committedLamports,
+            escrow_sol: withdrawableSol,
+            withdrawable_sol: withdrawableSol,
+            allocated_sol: allocatedSol,
+            withdrawable_lamports: withdrawableLamports,
+            allocated_lamports: allocatedLamports,
           };
 
           if(isCountedDepositStatus(status)) approvedWallets.push(wallet);
@@ -792,6 +851,8 @@ const $ = (id) => document.getElementById(id);
       if(!room || !wallet) return 0;
       const snapshot = readRoomEscrowSnapshot(room);
       const row = walletRow || snapshot.byWallet?.[wallet] || {};
+      const committedLamports = resolveWalletCommittedLamportsForDisplay(room, wallet, row);
+      if(committedLamports > 0) return committedLamports / LAMPORTS_PER_SOL;
       const committedSolFromRow = Number(row.committed_sol);
       if(Number.isFinite(committedSolFromRow)) return Math.max(0, committedSolFromRow);
       return Math.max(0, Number(row.withdrawable_sol ?? row.escrow_sol ?? row.allocated_sol ?? 0));
@@ -5149,6 +5210,7 @@ function encodeU64Arg(v){
           withdrawable_lamports: Number((deposit.allocated_lamports || 0) + (deposit.refundable_lamports || 0)),
           allocated_lamports: Number(deposit.allocated_lamports || 0),
           refundable_lamports: Number(deposit.refundable_lamports || 0),
+          creator_backing_included: true,
           spawn_token_allocation: Number(deposit.spawn_token_allocation || 0),
           spawn_tokens_claimed: Number(deposit.spawn_tokens_claimed || 0),
           deposit_pda: acct.pubkey.toBase58()
@@ -5615,19 +5677,38 @@ function encodeU64Arg(v){
         if(activeRoomId !== roomId) return;
         const snapshot = state.onchain?.[roomId] || {};
         snapshot.byWallet = snapshot.byWallet || {};
-        const committedLamports = Math.max(0, Math.round(Number(lamports || 0)));
+        const fetchedDepositLamports = Math.max(0, Math.round(Number(lamports || 0)));
+        const committedLamports = resolveWalletCommittedLamportsForDisplay(r, connectedWallet, {
+          ...(snapshot.byWallet[connectedWallet] || {}),
+          committed_lamports: fetchedDepositLamports,
+          withdrawable_lamports: fetchedDepositLamports,
+          allocated_lamports: fetchedDepositLamports,
+          creator_backing_included: false,
+        });
         snapshot.byWallet[connectedWallet] = {
           ...(snapshot.byWallet[connectedWallet] || {}),
           committed_sol: committedLamports / LAMPORTS_PER_SOL,
           committed_lamports: committedLamports,
-          escrow_sol: committedLamports / LAMPORTS_PER_SOL,
-          withdrawable_sol: committedLamports / LAMPORTS_PER_SOL,
-          allocated_sol: committedLamports / LAMPORTS_PER_SOL,
-          withdrawable_lamports: committedLamports,
-          allocated_lamports: committedLamports,
+          escrow_sol: fetchedDepositLamports / LAMPORTS_PER_SOL,
+          withdrawable_sol: fetchedDepositLamports / LAMPORTS_PER_SOL,
+          allocated_sol: fetchedDepositLamports / LAMPORTS_PER_SOL,
+          withdrawable_lamports: fetchedDepositLamports,
+          allocated_lamports: fetchedDepositLamports,
+          creator_backing_included: true,
         };
         state.onchain[roomId] = snapshot;
         const grossCommittedSol = getWalletGrossCommittedSol(r, connectedWallet, snapshot.byWallet[connectedWallet]);
+        if(isCreator(r, connectedWallet)){
+          console.log("[ping-debug] creator committed refresh", {
+            roomId,
+            connectedWallet,
+            creatorCommittedShownLamports: committedLamports,
+            creatorCommittedShownSol: grossCommittedSol,
+            creatorOnchainRow: snapshot.byWallet[connectedWallet],
+            creatorDepositLamportsFetched: fetchedDepositLamports,
+            creatorBackingLamportsUsed: getCreatorDepositBackingLamports(r),
+          });
+        }
         meLine.textContent = `you: your committed amount ${grossCommittedSol.toFixed(3)} SOL`;
       } catch(err){
         console.warn("[pingy] failed to refresh connected wallet deposit", err);
@@ -7384,7 +7465,6 @@ if(connectBtn){
           };
       const commitLamports = creatorFeeMath.committedTargetLamports;
       const commit = commitLamports / LAMPORTS_PER_SOL;
-      const createDepositTotalLamports = commitLamports;
       if(launchMode === "spawn" && creatorTotalSpendLamports > 0 && commitLamports <= 0){
         return alert("Total spend must exceed estimated room creation + Pingy fee to create a committed amount.");
       }
@@ -7398,14 +7478,38 @@ if(connectBtn){
         }
       }
       const id = "r" + Math.random().toString(16).slice(2,6);
+      let creatorDepositBackingLamports = 0;
+      let creatorEscrowContributionLamports = commitLamports;
+      if(launchMode === "spawn" && commitLamports > 0){
+        try {
+          creatorDepositBackingLamports = await estimateCreatorDepositBackingLamports(id, connectedWallet);
+        } catch(backingErr){
+          console.warn("[ping-debug] creator deposit backing estimation failed", {
+            roomId: id,
+            wallet: connectedWallet,
+            error: String(backingErr?.message || backingErr),
+          });
+        }
+        const creatorSplit = splitCommittedLamportsForCreator({
+          committedLamports: commitLamports,
+          depositBackingLamports: creatorDepositBackingLamports,
+        });
+        creatorDepositBackingLamports = creatorSplit.depositBackingLamports;
+        creatorEscrowContributionLamports = creatorSplit.escrowContributionLamports;
+      }
+      const createDepositTotalLamports = commitLamports;
       console.log("[ping-debug] ping fee math", {
         roomId: id,
         wallet: connectedWallet,
-        totalWalletSpendLamports: creatorTotalSpendLamports,
+        creatorTotalSpendLamports,
         bootstrapCostLamports: creatorFeeMath.bootstrapCostLamports,
         grossPositionInputLamports: creatorFeeMath.grossPositionInputLamports,
         feeLamports: creatorFeeMath.feeLamports,
-        committedLamports: creatorFeeMath.committedTargetLamports,
+        committedTargetLamports: creatorFeeMath.committedTargetLamports,
+        depositBackingLamports: creatorDepositBackingLamports,
+        escrowContributionLamports: creatorEscrowContributionLamports,
+        expectedWalletOutflowLamports: creatorTotalSpendLamports,
+        expectedDepositInstructionLamports: createDepositTotalLamports,
         capRemainingLamports: launchMode === "spawn" ? configWalletCapLamports(launchConfig) : null,
       });
 
@@ -7459,7 +7563,7 @@ if(connectBtn){
                 feeRecipient: PINGY_FEE_RECIPIENT,
                 expectedWalletOutflowLamports: creatorTotalSpendLamports,
                 committedLamports: commitLamports,
-                depositBackingLamports: 0,
+                depositBackingLamports: creatorDepositBackingLamports,
                 expectedDepositInstructionLamports: commitLamports,
                 feeLamports: creatorFeeMath.feeLamports,
                 bootstrapCostLamports: creatorFeeMath.bootstrapCostLamports,
@@ -7469,11 +7573,14 @@ if(connectBtn){
                 console.log("[ping-debug] creator fee transfer", {
                   roomId: id,
                   wallet: connectedWallet,
-                  totalWalletSpendLamports: creatorTotalSpendLamports,
-                  depositBackingLamports: 0,
+                  creatorTotalSpendLamports,
+                  bootstrapCostLamports: creatorFeeMath.bootstrapCostLamports,
                   grossPositionInputLamports: creatorFeeMath.grossPositionInputLamports,
                   feeLamports: creatorFeeMath.feeLamports,
-                  committedLamports: commitLamports,
+                  committedTargetLamports: commitLamports,
+                  depositBackingLamports: creatorDepositBackingLamports,
+                  escrowContributionLamports: creatorEscrowContributionLamports,
+                  expectedWalletOutflowLamports: creatorTotalSpendLamports,
                   expectedDepositInstructionLamports: commitLamports,
                   transferSignature: creatorFeeTransferSignature,
                 });
@@ -7521,6 +7628,9 @@ if(connectBtn){
       r.creator_ping_fee_lamports = creatorFeeMath.feeLamports;
       r.creator_ping_fee_sol = creatorFeeMath.feeLamports / LAMPORTS_PER_SOL;
       r.creator_ping_input_lamports = creatorTotalSpendLamports;
+      r.creator_committed_target_lamports = commitLamports;
+      r.creator_deposit_backing_lamports = creatorDepositBackingLamports;
+      r.creator_escrow_contribution_lamports = creatorEscrowContributionLamports;
       r.approval = { [creatorWallet]: "approved" };
       r.approverWallets = r.approverWallets || {};
       r.blockedWallets = r.blockedWallets || {};
