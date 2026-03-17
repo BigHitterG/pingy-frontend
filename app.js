@@ -4153,6 +4153,21 @@ function encodeU64Arg(v){
       };
     }
 
+    function parsePingDepositDetails(ix){
+      if(!ix || ix.programId?.toBase58?.() !== PROGRAM_ID.toBase58()) return null;
+      const keys = Array.isArray(ix.keys) ? ix.keys : [];
+      if(keys.length !== 5) return null;
+      if(keys[4]?.pubkey?.toBase58?.() !== SystemProgram.programId.toBase58()) return null;
+      const data = ix.data;
+      if(!(data instanceof Uint8Array) || data.length < 8) return null;
+      const lamportsOffset = data.length - 8;
+      if(lamportsOffset < 0) return null;
+      const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+      return {
+        lamports: Number(view.getBigUint64(lamportsOffset, true)),
+      };
+    }
+
     async function sendProgramInstructions(ixs, debugMeta = null){
       const provider = getProvider();
       if(!provider) throw new Error("Phantom not found");
@@ -4201,18 +4216,43 @@ function encodeU64Arg(v){
       const expectedWalletOutflowLamports = Math.max(0, Math.floor(Number(debugMeta?.expectedWalletOutflowLamports || 0)));
       const committedLamports = Math.max(0, Math.floor(Number(debugMeta?.committedLamports || 0)));
       const depositBackingLamports = Math.max(0, Math.floor(Number(debugMeta?.depositBackingLamports || 0)));
+      const expectedDepositInstructionLamports = Math.max(0, Math.floor(Number(debugMeta?.expectedDepositInstructionLamports || 0)));
+      const depositInstruction = tx.instructions
+        .map((ix) => parsePingDepositDetails(ix))
+        .find((details) => !!details && (expectedDepositInstructionLamports <= 0 || details.lamports === expectedDepositInstructionLamports));
+      const expectedBundleOutflowLamports = expectedFeeLamports + expectedDepositInstructionLamports;
       console.log("[ping-debug] final instruction bundle before send", {
         instructionCount: tx.instructions.length,
         instructionProgramIds: tx.instructions.map((ix) => ix.programId?.toBase58?.()),
         hasFeeInstruction: !!feeInstruction,
         feeInstruction,
+        hasDepositInstruction: !!depositInstruction,
+        depositInstruction,
         expectedWalletOutflowLamports,
+        expectedDepositInstructionLamports,
+        expectedBundleOutflowLamports,
         committedLamports,
         depositBackingLamports,
         feeLamports: expectedFeeLamports,
       });
+      console.log("[ping-debug] FINAL TX INSTRUCTIONS", tx.instructions.map((ix, idx) => ({
+        idx,
+        programId: ix.programId?.toBase58?.(),
+        keys: (ix.keys || []).map((k) => ({
+          pubkey: k.pubkey?.toBase58?.(),
+          isSigner: !!k.isSigner,
+          isWritable: !!k.isWritable,
+        })),
+        transferDetails: parseSystemTransferDetails(ix),
+      })));
       if(expectedFeeLamports > 0 && !feeInstruction){
         throw new Error("Missing Pingy fee transfer instruction in transaction bundle");
+      }
+      if(expectedDepositInstructionLamports > 0 && !depositInstruction){
+        throw new Error("Missing Pingy deposit instruction in transaction bundle");
+      }
+      if(expectedWalletOutflowLamports > 0 && expectedBundleOutflowLamports !== expectedWalletOutflowLamports){
+        throw new Error(`Transaction bundle outflow mismatch (expected ${expectedWalletOutflowLamports}, built ${expectedBundleOutflowLamports})`);
       }
 
       console.log("[ping-debug] sendProgramInstruction program checks", {
@@ -9205,8 +9245,8 @@ if(connectBtn){
         const estimatedDepositRentLamports = hasExistingDeposit(userDeposit) ? 0 : await estimateDepositRentLamports();
         const pingFeeMath = applyPingFeeToLamports(amountLamports);
         const committedLamports = pingFeeMath.committedLamports;
-        const netContributionLamports = Math.max(0, committedLamports - estimatedDepositRentLamports);
-        if(netContributionLamports <= 0){
+        const escrowContributionLamports = Math.max(0, committedLamports - estimatedDepositRentLamports);
+        if(escrowContributionLamports <= 0){
           const minSol = ((estimatedDepositRentLamports + 1) / LAMPORTS_PER_SOL).toFixed(9);
           showToast(`Enter more than ${minSol} SOL so your all-in ping can fund a committed contribution.`);
           return;
@@ -9214,21 +9254,20 @@ if(connectBtn){
 
         if(onchainMode){
           const netCapacityLamports = computeMaxPingLamports(r, userDeposit);
-          if(netContributionLamports > netCapacityLamports){
+          if(escrowContributionLamports > netCapacityLamports){
             showToast(`Too much. Max is ${(Number(state.maxPingLamports || 0) / LAMPORTS_PER_SOL).toFixed(3)} SOL.`);
             return;
           }
-          console.log("[ping-debug] ping fee math", {
-            roomId: rid,
-            wallet: connectedWallet,
+          console.log("[ping-debug] regular ping final math", {
             grossInputLamports: amountLamports,
-            depositBackingLamports: estimatedDepositRentLamports,
-            inputLamports: pingFeeMath.inputLamports,
             feeLamports: pingFeeMath.feeLamports,
-            committedLamports: pingFeeMath.committedLamports,
-            capRemainingLamports: netCapacityLamports,
+            committedLamports,
+            depositBackingLamports: estimatedDepositRentLamports,
+            escrowContributionLamports,
+            expectedWalletOutflowLamports: amountLamports,
+            expectedDepositInstructionLamports: escrowContributionLamports + estimatedDepositRentLamports,
           });
-          console.log("[ping-debug] all-in ping amount conversion", { solAmount, grossEnteredLamports: amountLamports, estimatedDepositRentLamports, netContributionLamports });
+          console.log("[ping-debug] all-in ping amount conversion", { solAmount, grossEnteredLamports: amountLamports, estimatedDepositRentLamports, escrowContributionLamports });
           const walletPk = new PublicKey(connectedWallet);
           const [threadPda] = await deriveThreadPda(rid);
           const [depositPda] = await deriveDepositPda(rid, walletPk);
@@ -9250,7 +9289,7 @@ if(connectBtn){
             const feeIx = buildPingFeeTransferInstruction(pingFeeMath.feeLamports);
             const sig = await pingWithOptionalThreadInitTx(
               rid,
-              netContributionLamports + estimatedDepositRentLamports,
+              escrowContributionLamports + estimatedDepositRentLamports,
               !threadInfo,
               null,
               {
@@ -9260,6 +9299,7 @@ if(connectBtn){
                   expectedWalletOutflowLamports: amountLamports,
                   committedLamports,
                   depositBackingLamports: estimatedDepositRentLamports,
+                  expectedDepositInstructionLamports: escrowContributionLamports + estimatedDepositRentLamports,
                   feeLamports: pingFeeMath.feeLamports,
                 },
               }
@@ -9290,7 +9330,7 @@ if(connectBtn){
               grossEnteredLamports: amountLamports,
               estimatedDepositRentLamports,
               expectedCommittedLamports: committedLamports,
-              expectedEscrowContributionLamports: netContributionLamports,
+              expectedEscrowContributionLamports: escrowContributionLamports,
               feeTransferSignature,
               txExplorer: explorerTxUrl(sig),
               escrowExplorer: explorerAddressUrl(threadEscrowPda.toBase58()),
@@ -9319,12 +9359,12 @@ if(connectBtn){
             return;
           }
         } else {
-          const mockNetContributionSol = netContributionLamports / LAMPORTS_PER_SOL;
+          const mockNetContributionSol = escrowContributionLamports / LAMPORTS_PER_SOL;
           console.log("[ping-debug] mock all-in ping amount conversion", {
             solAmount,
             grossEnteredLamports: amountLamports,
             estimatedDepositRentLamports,
-            netContributionLamports,
+            escrowContributionLamports,
             mockNetContributionSol,
           });
           applySpawnCommit(r, connectedWallet, mockNetContributionSol);
