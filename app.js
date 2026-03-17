@@ -606,14 +606,25 @@ const $ = (id) => document.getElementById(id);
           const row = onchain.byWallet[wallet] || {};
           const blocked = !!(r.blockedWallets && r.blockedWallets[wallet]);
           const status = blocked ? "denied" : normalizeDepositStatus(row.status);
-          const rawEscrowSol = Math.max(0, Number(row.withdrawable_sol ?? row.escrow_sol ?? 0));
-          const escrowSol = isCountedDepositStatus(status) ? rawEscrowSol : 0;
+          const rawCommittedSol = Math.max(0, Number(row.committed_sol ?? row.withdrawable_sol ?? row.escrow_sol ?? row.allocated_sol ?? 0));
+          const committedSol = isCountedDepositStatus(status) ? rawCommittedSol : 0;
+          const committedLamports = Math.max(0, Math.round(Number(
+            row.committed_lamports
+            ?? row.withdrawable_lamports
+            ?? row.allocated_lamports
+            ?? (committedSol * LAMPORTS_PER_SOL)
+          ) || 0));
 
           byWallet[wallet] = {
             ...row,
             status,
-            escrow_sol: escrowSol,
-            withdrawable_sol: escrowSol
+            committed_sol: committedSol,
+            committed_lamports: committedLamports,
+            escrow_sol: committedSol,
+            withdrawable_sol: committedSol,
+            allocated_sol: committedSol,
+            withdrawable_lamports: committedLamports,
+            allocated_lamports: committedLamports,
           };
 
           if(isCountedDepositStatus(status)) approvedWallets.push(wallet);
@@ -770,13 +781,15 @@ const $ = (id) => document.getElementById(id);
       if(!room || !wallet) return 0;
       const snapshot = readRoomEscrowSnapshot(room);
       const row = walletRow || snapshot.byWallet?.[wallet] || {};
-      const netCommittedSol = Math.max(0, Number(row.withdrawable_sol ?? row.escrow_sol ?? row.allocated_sol ?? 0));
-      if(netCommittedSol <= 0){
+      const committedSolFromRow = Number(row.committed_sol);
+      if(Number.isFinite(committedSolFromRow)) return Math.max(0, committedSolFromRow);
+
+      const fallbackCommittedSol = Math.max(0, Number(row.withdrawable_sol ?? row.escrow_sol ?? row.allocated_sol ?? 0));
+      if(fallbackCommittedSol <= 0){
         clearWalletDisplayReceiptBacking(room, wallet);
         return 0;
       }
-      const displayReceiptBackingSol = getWalletDisplayReceiptBackingSol(room, wallet, row);
-      return netCommittedSol + displayReceiptBackingSol;
+      return fallbackCommittedSol + getWalletDisplayReceiptBackingSol(room, wallet, row);
     }
 
     function getRoomGrossCommittedSol(room){
@@ -802,7 +815,7 @@ const $ = (id) => document.getElementById(id);
       const creatorCommitSol = Number(room.creator_commit_sol);
       const creatorGrossInputLamports = Math.max(0, Math.round((Number.isFinite(creatorCommitSol) ? creatorCommitSol : 0) * LAMPORTS_PER_SOL));
       const currentNetCommittedLamports = Math.max(0, Math.round(Number(
-        row?.withdrawable_sol ?? row?.escrow_sol ?? row?.allocated_sol ?? (totalDepositLamports / LAMPORTS_PER_SOL)
+        row?.committed_sol ?? row?.withdrawable_sol ?? row?.escrow_sol ?? row?.allocated_sol ?? (totalDepositLamports / LAMPORTS_PER_SOL)
       ) * LAMPORTS_PER_SOL));
       const inferredBackingLamports = Math.max(0, creatorGrossInputLamports - currentNetCommittedLamports);
       const storedBackingSol = rememberWalletDisplayReceiptBackingLamports(room, connectedWallet, inferredBackingLamports);
@@ -3231,6 +3244,48 @@ const $ = (id) => document.getElementById(id);
       return sol;
     }
 
+    function applyOptimisticSpawnCommitLamports(room, wallet, committedLamports){
+      const r = roomById(room?.id || room);
+      if(!r || !wallet) return;
+      const safeCommittedLamports = Math.max(0, Math.round(Number(committedLamports || 0)));
+      if(safeCommittedLamports <= 0) return;
+      const committedSol = safeCommittedLamports / LAMPORTS_PER_SOL;
+
+      applySpawnCommit(r, wallet, committedSol);
+
+      const snapshot = state.onchain?.[r.id] || r.onchain;
+      if(!snapshot) return;
+      if(!snapshot.byWallet || typeof snapshot.byWallet !== "object") snapshot.byWallet = {};
+
+      const existingRow = snapshot.byWallet[wallet] || {};
+      const prevCommittedLamports = Math.max(0, Math.round(Number(
+        existingRow.committed_lamports
+        ?? existingRow.withdrawable_lamports
+        ?? ((Number(existingRow.withdrawable_sol ?? existingRow.escrow_sol ?? 0)) * LAMPORTS_PER_SOL)
+      ) || 0));
+      const nextCommittedLamports = prevCommittedLamports + safeCommittedLamports;
+      const nextCommittedSol = nextCommittedLamports / LAMPORTS_PER_SOL;
+
+      snapshot.byWallet[wallet] = {
+        ...existingRow,
+        status: existingRow.status || "pending",
+        committed_lamports: nextCommittedLamports,
+        committed_sol: nextCommittedSol,
+        withdrawable_lamports: nextCommittedLamports,
+        withdrawable_sol: nextCommittedSol,
+        escrow_sol: nextCommittedSol,
+        allocated_sol: nextCommittedSol,
+      };
+
+      snapshot.total_allocated_lamports = Math.max(0, Number(snapshot.total_allocated_lamports || 0) + safeCommittedLamports);
+      snapshot.total_escrow_lamports = Math.max(0, Number(snapshot.total_escrow_lamports || 0) + safeCommittedLamports);
+      if(!Array.isArray(snapshot.approvedWallets)) snapshot.approvedWallets = [];
+      if(!Array.isArray(snapshot.pendingWallets)) snapshot.pendingWallets = [];
+      if(!snapshot.approvedWallets.includes(wallet) && !snapshot.pendingWallets.includes(wallet)) snapshot.pendingWallets.push(wallet);
+      r.onchain = snapshot;
+      state.onchain[r.id] = snapshot;
+    }
+
     function applySpawnUncommit(r, wallet, solOut){
       const pos = ensurePos(r, wallet);
       const sol = Math.max(0, Number(solOut||0));
@@ -3322,10 +3377,9 @@ const $ = (id) => document.getElementById(id);
         allocated = Number(onchain.total_allocated_lamports || 0) / LAMPORTS_PER_SOL;
       } else {
         const capSol = Number(walletCapSol(r) || 0);
-        const positions = r.positions || {};
         for(const wallet of approvedWallets){
-          const escrow = Math.max(0, Number(positions[wallet]?.escrow_sol || 0));
-          allocated += capSol > 0 ? Math.min(escrow, capSol) : escrow;
+          const committed = Math.max(0, Number(getWalletGrossCommittedSol(r, wallet) || 0));
+          allocated += capSol > 0 ? Math.min(committed, capSol) : committed;
         }
       }
 
@@ -5101,8 +5155,13 @@ function encodeU64Arg(v){
           status: deposit.status,
           refundable_sol: refundableSol,
           allocated_sol: allocatedSol,
+          committed_sol: withdrawableSol,
           withdrawable_sol: withdrawableSol,
           escrow_sol: withdrawableSol,
+          committed_lamports: Number((deposit.allocated_lamports || 0) + (deposit.refundable_lamports || 0)),
+          withdrawable_lamports: Number((deposit.allocated_lamports || 0) + (deposit.refundable_lamports || 0)),
+          allocated_lamports: Number(deposit.allocated_lamports || 0),
+          refundable_lamports: Number(deposit.refundable_lamports || 0),
           spawn_token_allocation: Number(deposit.spawn_token_allocation || 0),
           spawn_tokens_claimed: Number(deposit.spawn_tokens_claimed || 0),
           deposit_pda: acct.pubkey.toBase58()
@@ -5548,9 +5607,7 @@ function encodeU64Arg(v){
       const onchainRow = state.onchain?.[roomId]?.byWallet?.[connectedWallet] || room?.onchain?.byWallet?.[connectedWallet] || null;
       if(onchainRow) return getWalletGrossCommittedSol(room, connectedWallet, onchainRow);
       const local = room.positions?.[connectedWallet] || {};
-      const netCommittedSol = Math.max(0, Number(local.escrow_sol || 0));
-      const displayReceiptBackingSol = getWalletDisplayReceiptBackingSol(room, connectedWallet);
-      return netCommittedSol > 0 ? (netCommittedSol + displayReceiptBackingSol) : 0;
+      return Math.max(0, Number((local.committed_sol ?? local.escrow_sol ?? 0)));
     }
     function myBond(roomId){
       if(!connectedWallet) return 0;
@@ -5574,6 +5631,8 @@ function encodeU64Arg(v){
         snapshot.byWallet = snapshot.byWallet || {};
         snapshot.byWallet[connectedWallet] = {
           ...(snapshot.byWallet[connectedWallet] || {}),
+          committed_sol: netCommittedSol,
+          committed_lamports: Number(lamports || 0),
           escrow_sol: netCommittedSol,
           withdrawable_sol: netCommittedSol,
         };
@@ -5781,8 +5840,6 @@ function encodeU64Arg(v){
 
     function clearWalletDerivedState(prevWallet = null){
       state.userEscrow = null;
-      state.maxPingLamports = 0;
-      state.maxPingCommittedLamports = 0;
       state.grossCommitDebugMeta = {};
       if(prevWallet){
         delete state.walletBalances[prevWallet];
@@ -6886,9 +6943,7 @@ if(connectBtn){
       const onchainRow = room?.onchain?.byWallet?.[wallet] || state.onchain?.[room.id]?.byWallet?.[wallet] || null;
       if(onchainRow) return getWalletGrossCommittedSol(room, wallet, onchainRow);
       const local = room.positions?.[wallet] || {};
-      const netCommittedSol = Math.max(0, Number(local.escrow_sol || 0));
-      if(netCommittedSol <= 0) return 0;
-      return netCommittedSol + getWalletDisplayReceiptBackingSol(room, wallet);
+      return Math.max(0, Number((local.committed_sol ?? local.escrow_sol ?? 0)));
     }
 
     function walletIsRelatedToRoom(room, wallet){
@@ -7028,8 +7083,9 @@ if(connectBtn){
       const wallets = Array.from(new Set(Object.keys(snapshot.byWallet || {})));
       const rows = wallets.map((wallet) => {
         const row = snapshot.byWallet?.[wallet] || {};
-        const netCommittedSol = Math.max(0, Number(row.withdrawable_sol ?? row.escrow_sol ?? row.allocated_sol ?? 0));
-        const displayReceiptBackingSol = getWalletDisplayReceiptBackingSol(room, wallet, row);
+        const hasCommittedField = Number.isFinite(Number(row.committed_sol));
+        const netCommittedSol = Math.max(0, Number(row.committed_sol ?? row.withdrawable_sol ?? row.escrow_sol ?? row.allocated_sol ?? 0));
+        const displayReceiptBackingSol = hasCommittedField ? 0 : getWalletDisplayReceiptBackingSol(room, wallet, row);
         const grossCommittedSol = netCommittedSol > 0 ? (netCommittedSol + displayReceiptBackingSol) : 0;
         return {
           wallet,
@@ -9121,12 +9177,10 @@ if(connectBtn){
       const r = roomById(roomId || activeRoomId);
       if(!r){
         hint.textContent = "Max: 0.000 SOL";
-        state.maxPingLamports = 0;
         return;
       }
       const pingConfirm = $("pingConfirm");
       if(r.state !== "SPAWNING"){
-        state.maxPingLamports = 0;
         hint.textContent = r.state === "BONDED"
           ? "Trading for launched coins is handled outside Pingy."
           : "Trading for launched coins is handled outside Pingy.";
@@ -9164,8 +9218,6 @@ if(connectBtn){
       modalRoomId = rid;
       updateActionModalCopy(r);
       $("pingAmount").value = "";
-      state.maxPingLamports = 0;
-      state.maxPingCommittedLamports = 0;
       await refreshWalletBalances(connectedWallet, { force: true });
       await estimateDepositRentLamports();
       $("pingRoomLine").textContent = `coin: ${r.name}  $${r.ticker}`;
@@ -9296,7 +9348,7 @@ if(connectBtn){
 
         if(onchainMode){
           const netCapacityLamports = computeMaxPingLamports(r, userDeposit);
-          if(escrowContributionLamports > netCapacityLamports){
+          if(committedLamports > netCapacityLamports){
             showToast(`Too much. Max is ${(Number(state.maxPingLamports || 0) / LAMPORTS_PER_SOL).toFixed(3)} SOL.`);
             return;
           }
@@ -9402,17 +9454,17 @@ if(connectBtn){
             return;
           }
         } else {
-          const mockNetContributionSol = escrowContributionLamports / LAMPORTS_PER_SOL;
           console.log("[ping-debug] mock all-in ping amount conversion", {
             solAmount,
             grossEnteredLamports: amountLamports,
             estimatedDepositRentLamports,
             escrowContributionLamports,
-            mockNetContributionSol,
+            committedLamports,
           });
-          applySpawnCommit(r, connectedWallet, mockNetContributionSol);
           if(!hasExistingDeposit(userDeposit)) rememberWalletDisplayReceiptBackingLamports(r, connectedWallet, estimatedDepositRentLamports);
         }
+
+        applyOptimisticSpawnCommitLamports(r, connectedWallet, committedLamports);
 
         state.chat[r.id] = state.chat[r.id] || [];
         const statusText = isApproved(r, connectedWallet) ? "approved" : "pending approval";
@@ -9463,6 +9515,8 @@ if(connectBtn){
       }
 
       closeModal($("pingBack"));
+      renderRoom(rid);
+      renderHome();
       await fetchRoomOnchainSnapshot(rid);
       await fetchConnectedWalletDepositSnapshot();
       if(connectedWallet) await fetchWalletBalancesSnapshot(connectedWallet);
@@ -9482,8 +9536,8 @@ if(connectBtn){
         const curLamports = await fetchConnectedWalletDepositLamports(rid);
         const cur = Number(curLamports || 0) / LAMPORTS_PER_SOL;
         if(cur <= 0) return alert(isNativeLaunchBackend() ? "you have no escrow to withdraw." : "you have no launch contribution to withdraw.");
-        const displayReceiptBackingSol = getWalletDisplayReceiptBackingSol(r, connectedWallet);
-        const grossCommittedBeforeWithdraw = cur + displayReceiptBackingSol;
+        const walletRow = (state.onchain?.[rid]?.byWallet?.[connectedWallet]) || (r.onchain?.byWallet?.[connectedWallet]) || null;
+        const grossCommittedBeforeWithdraw = getWalletGrossCommittedSol(r, connectedWallet, walletRow) || cur;
         if(shouldUseOnchain()){
           try{
             await unpingWithdrawTx(rid);
