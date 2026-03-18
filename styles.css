@@ -255,6 +255,15 @@
       flex-wrap:wrap;
     }
     .chatRoomHeroTitleBlock{min-width:0}
+    .chatRoomContextToggleSlot,
+    #chatContextToggleSlot,
+    #roomContextToggleSlot{
+      display:flex;
+      align-items:flex-start;
+      justify-content:flex-end;
+      min-height:32px;
+      flex:0 0 auto;
+    }
     .chatRoomCoinAvatar{
       width:54px;
       height:54px;
