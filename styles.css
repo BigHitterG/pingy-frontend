@@ -263,14 +263,29 @@
       overflow:hidden;
       flex:0 0 auto;
     }
-    .chatRoomShell{display:flex;flex-direction:column;gap:0;position:relative;overflow:visible;border:0;padding:0}
+    .chatRoomShell{
+      display:flex;
+      flex:1 1 auto;
+      flex-direction:column;
+      gap:10px;
+      min-height:0;
+      overflow:hidden;
+      border:0;
+      padding:0;
+    }
+    .chatRoomChatPanel{
+      display:flex;
+      flex:1 1 auto;
+      min-height:0;
+      padding:0;
+    }
     .chatRoomChat{
-      height:calc(100vh - 176px);
-      min-height:520px;
-      padding:18px 14px 156px;
+      flex:1 1 auto;
+      min-height:0;
+      padding:18px 14px;
       border:0;
       background:transparent;
-      scroll-padding-bottom:156px;
+      scroll-padding-bottom:18px;
     }
     .chatRoomTelegram{
       background:
@@ -380,26 +395,29 @@
     .systemMsg .sysLine{font-style:normal}
 
     .composer{
-      position:sticky;
-      bottom:12px;
-      margin:-88px 10px 0;
+      flex:0 0 auto;
       padding:10px;
       display:grid;
       grid-template-columns:1fr auto;
       gap:8px;
       align-items:end;
       border:1px solid var(--line);
-      background:rgba(255,255,255,0.96);
-      box-shadow:0 10px 28px rgba(17,17,17,0.08);
-      z-index:3;
-      backdrop-filter:blur(8px);
+      background:#fff;
+      min-height:0;
     }
     input,textarea,select{
       width:100%; border:1px solid var(--line); padding:6px 7px; font:inherit;
       color:var(--fg); background:#fff; border-radius:0;
     }
     input:focus,textarea:focus,select:focus{outline:2px solid var(--focus);outline-offset:1px}
-    textarea{resize:none;height:70px}
+    textarea{
+      resize:none;
+      min-height:34px;
+      height:34px;
+      max-height:124px;
+      line-height:1.25;
+      overflow-y:hidden;
+    }
 
     /* Collapsible */
     .collapseHead{
@@ -451,7 +469,7 @@
     .modalTitle{font-weight:700}
 
     #chatView{display:none}
-    #chatView.on{display:flex;flex-direction:column;min-height:calc(100vh - 108px)}
+    #chatView.on{display:flex;flex-direction:column;height:calc(100vh - 108px);min-height:calc(100vh - 108px)}
     .chatRoomHeader{
       position:sticky;
       top:10px;
@@ -495,15 +513,9 @@
   .roomActionDockBtn{padding:14px 16px}
   .chatWrap{padding:10px}
   .chatRoomHeader{top:10px}
-  .chatRoomChat{
-    height:calc(100vh - 188px);
-    min-height:360px;
-    padding:16px 10px 144px;
-    scroll-padding-bottom:144px;
-  }
+  .chatRoomShell{gap:8px}
+  .chatRoomChat{padding:16px 10px}
   .composer{
-    bottom:10px;
-    margin:-82px 0 0;
     grid-template-columns:minmax(0,1fr) auto;
   }
 }
