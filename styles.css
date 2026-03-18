@@ -8,6 +8,7 @@
     html,body{height:100%}
     body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--mono);font-size:13px;line-height:1.25}
     .wrap{max-width:980px;margin:0 auto;padding:10px 12px}
+    .chatWrap{max-width:1200px}
     .topbar{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);padding-bottom:8px;margin-bottom:10px;gap:10px}
     .brand{font-weight:700;letter-spacing:.2px}
     .brandLink{display:inline-flex;align-items:center;gap:8px;color:var(--fg);text-decoration:none}
@@ -261,8 +262,14 @@
       overflow:hidden;
       flex:0 0 auto;
     }
-    .chatRoomShell{display:flex;flex-direction:column;gap:8px}
-    .chatRoomChat{height:min(62vh, 720px)}
+    .chatRoomShell{display:flex;flex-direction:column;gap:0;position:relative;overflow:visible}
+    .chatRoomChat{
+      height:calc(100vh - 208px);
+      min-height:440px;
+      padding:18px 14px 124px;
+      border:0;
+      background:transparent;
+    }
     .chatRoomTelegram{
       background:
         radial-gradient(circle at top right, rgba(255,110,177,0.08), transparent 34%),
@@ -285,6 +292,7 @@
       background:
         linear-gradient(180deg, rgba(255,255,255,0.96), rgba(255,247,252,0.98)),
         repeating-linear-gradient(135deg, rgba(17,17,17,0.02) 0 12px, rgba(255,255,255,0) 12px 24px);
+      scrollbar-gutter:stable both-edges;
     }
 
     .msg{
@@ -363,7 +371,21 @@
     }
     .systemMsg .sysLine{font-style:normal}
 
-    .composer{margin-top:8px;display:grid;grid-template-columns:1fr auto;gap:8px;align-items:start}
+    .composer{
+      position:sticky;
+      bottom:12px;
+      margin:-88px 10px 0;
+      padding:10px;
+      display:grid;
+      grid-template-columns:1fr auto;
+      gap:8px;
+      align-items:end;
+      border:1px solid var(--line);
+      background:rgba(255,255,255,0.96);
+      box-shadow:0 10px 28px rgba(17,17,17,0.08);
+      z-index:3;
+      backdrop-filter:blur(8px);
+    }
     input,textarea,select{
       width:100%; border:1px solid var(--line); padding:6px 7px; font:inherit;
       color:var(--fg); background:#fff; border-radius:0;
@@ -420,6 +442,17 @@
     }
     .modalTitle{font-weight:700}
 
+    #chatView{display:none}
+    #chatView.on{display:block}
+    .chatRoomHeader{
+      position:sticky;
+      top:10px;
+      z-index:4;
+      background:rgba(255,255,255,0.94);
+      backdrop-filter:blur(10px);
+      box-shadow:0 8px 18px rgba(17,17,17,0.05);
+    }
+
 #roomView{padding-bottom:96px}
 .roomActionDock{
   position:fixed;
@@ -452,6 +485,18 @@
   #roomView{padding-bottom:104px}
   .roomActionDock{bottom:10px;padding:0 10px}
   .roomActionDockBtn{padding:14px 16px}
+  .chatWrap{padding:10px}
+  .chatRoomHeader{top:10px}
+  .chatRoomChat{
+    height:calc(100vh - 188px);
+    min-height:360px;
+    padding:16px 10px 116px;
+  }
+  .composer{
+    bottom:10px;
+    margin:-82px 0 0;
+    grid-template-columns:minmax(0,1fr) auto;
+  }
 }
 
     /* Toast */
