@@ -344,6 +344,39 @@
     }
     .modalTitle{font-weight:700}
 
+#roomView{padding-bottom:96px}
+.roomActionDock{
+  position:fixed;
+  left:50%;
+  bottom:12px;
+  transform:translateX(-50%);
+  width:min(980px, calc(100vw - 24px));
+  padding:0 12px;
+  z-index:40;
+  pointer-events:none;
+}
+.roomActionDockBtn{
+  width:100%;
+  padding:12px 14px;
+  background:#111;
+  color:#fff;
+  border-color:#111;
+  pointer-events:auto;
+}
+.roomActionDockBtn.subtle{
+  background:#fff;
+  color:var(--fg);
+  border-color:var(--line);
+}
+.pingActionTabs{gap:6px;flex-wrap:nowrap}
+.pingActionTab{min-width:110px;text-transform:lowercase}
+.pingActionTab.active{border-color:var(--fg);color:var(--fg)}
+@media (max-width:720px){
+  #roomView{padding-bottom:104px}
+  .roomActionDock{bottom:10px;padding:0 10px}
+  .roomActionDockBtn{padding:14px 16px}
+}
+
     /* Toast */
     .toast{
       position:fixed; left:12px; bottom:12px;
