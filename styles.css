@@ -237,6 +237,8 @@
     .roomHeader{display:flex;justify-content:space-between;align-items:baseline;gap:10px;border:1px solid var(--line);padding:10px;margin-bottom:8px;flex-wrap:wrap}
     .roomTitle{font-weight:700}
     .roomMeta{color:var(--muted);white-space:normal;overflow-wrap:anywhere}
+    #roomInfoPanel{min-width:0}
+    #roomDescOut{white-space:normal;overflow-wrap:anywhere;word-break:break-word}
 
     .launchTrustToggle{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;padding:0;border:0;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}
     .launchTrustToggle:focus{outline:2px solid var(--focus);outline-offset:2px}
