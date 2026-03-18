@@ -237,6 +237,9 @@
     .roomHeader{display:flex;justify-content:space-between;align-items:baseline;gap:10px;border:1px solid var(--line);padding:10px;margin-bottom:8px;flex-wrap:wrap}
     .roomTitle{font-weight:700}
     .roomMeta{color:var(--muted);white-space:normal;overflow-wrap:anywhere}
+    .chatRoomHeader{margin-bottom:0}
+    .chatRoomShell{display:flex;flex-direction:column;gap:8px}
+    .chatRoomChat{height:min(62vh, 720px)}
     #roomInfoPanel{min-width:0}
     #roomDescOut{white-space:normal;overflow-wrap:anywhere;word-break:break-word}
 

@@ -2642,6 +2642,7 @@ const $ = (id) => document.getElementById(id);
 
     let homeView;
     let roomView;
+    let chatView;
     let profileView;
     let legalView;
     let homeBtn;
@@ -2844,10 +2845,12 @@ const $ = (id) => document.getElementById(id);
     function setView(which){
       const isHome = (which === "home");
       const isRoom = (which === "room");
+      const isChat = (which === "chat");
       const isProfile = (which === "profile");
       const isLegal = (which === "legal");
       homeView.classList.toggle("on", isHome);
       roomView.classList.toggle("on", isRoom);
+      chatView.classList.toggle("on", isChat);
       profileView.classList.toggle("on", isProfile);
       legalView.classList.toggle("on", isLegal);
       homeBtn.style.display = isHome ? "none" : "inline-block";
@@ -5872,6 +5875,7 @@ function encodeU64Arg(v){
     async function init(){
       homeView = $("homeView");
       roomView = $("roomView");
+      chatView = $("chatView");
       profileView = $("profileView");
       legalView = $("legalView");
       homeBtn = $("homeBtn");
@@ -7229,53 +7233,15 @@ if(connectBtn){
       updatePingsTabUnreadBadge();
     }
 
-    function renderPingThreadChat(threadId){
-      const box = $("pingThreadChatBox");
-      if(!box) return;
-      box.innerHTML = "";
-      const msgs = state.chat[threadId] || [];
-      msgs.forEach((m) => {
-        const row = document.createElement("div");
-        row.className = "msg";
-        const sender = m.wallet === "SYSTEM" ? "system" : displayName(m.wallet);
-        row.innerHTML = `
-          <div class="who"><span class="whoName">${escapeText(sender)}</span></div>
-          <div class="text ${m.wallet === "SYSTEM" ? "sysLine" : ""}">${escapeText(m.text || "")}</div>
-          <div class="ts">${escapeText(m.ts || "")}</div>
-        `;
-        box.appendChild(row);
-      });
-      box.scrollTop = box.scrollHeight;
-    }
-
-    function renderPingThread(threadId){
-      const room = roomById(threadId);
-      if(!room) return;
-      state.activePingThreadId = threadId;
-      const title = $("pingThreadTitle");
-      const meta = $("pingThreadMeta");
-      if(title) title.textContent = `${room.name} $${room.ticker}`;
-      if(meta) meta.textContent = `${pingRelationshipMeta(room, connectedWallet) || "participant"} • ${lifecyclePhaseLabel(room.state)}`;
-      renderPingThreadChat(threadId);
-    }
-
     function openPingsInbox(){
       state.activePingThreadId = null;
-      const inbox = $("pingsView");
-      const thread = $("pingThreadView");
-      if(inbox) inbox.style.display = "block";
-      if(thread) thread.style.display = "none";
       renderPingsView();
     }
 
     function openPingThread(threadId){
       state.activePingThreadId = threadId;
       markPingThreadRead(threadId);
-      const inbox = $("pingsView");
-      const thread = $("pingThreadView");
-      if(inbox) inbox.style.display = "none";
-      if(thread) thread.style.display = "block";
-      renderPingThread(threadId);
+      navigateHash("chat/" + encodeURIComponent(threadId));
       updatePingsTabUnreadBadge();
     }
 
@@ -7372,29 +7338,6 @@ if(connectBtn){
     $("pingsTabBtn")?.addEventListener("click", () => setHomeTab("pings"));
     $("spawnCoinTabBtn")?.addEventListener("click", () => setHomeTab("spawn"));
     $("exploreTabBtn")?.addEventListener("click", () => setHomeTab("explore"));
-    $("pingThreadBackBtn")?.addEventListener("click", () => openPingsInbox());
-    $("pingThreadMarketBtn")?.addEventListener("click", () => openMarketRoomFromPingThread(state.activePingThreadId));
-    $("pingThreadSendBtn")?.addEventListener("click", () => {
-      if(!connectedWallet) return showToast("connect wallet first.");
-      const rid = state.activePingThreadId;
-      if(!rid) return;
-      const input = $("pingThreadInput");
-      const txt = String(input?.value || "").trim();
-      if(!txt) return;
-      state.chat[rid] = state.chat[rid] || [];
-      state.chat[rid].push({ ts: nowStamp(), _ts: Date.now(), wallet: connectedWallet, text: txt, kind: "chat" });
-      if(input) input.value = "";
-      markPingThreadRead(rid);
-      renderPingThreadChat(rid);
-      renderPingsView();
-      updatePingsTabUnreadBadge();
-    });
-    $("pingThreadInput")?.addEventListener("keydown", (e) => {
-      if(e.key === "Enter" && !e.shiftKey){
-        e.preventDefault();
-        $("pingThreadSendBtn")?.click();
-      }
-    });
     mountCreateCoinInSpawnTab();
     setHomeTab("explore");
     updatePingsTabUnreadBadge();
@@ -8294,6 +8237,38 @@ if(connectBtn){
       if(location.hash !== h) history.replaceState(null,"",h);
     }
 
+    function renderChatRoom(roomId, { skipRoomRender = false } = {}){
+      const r = roomById(roomId);
+      if(!r) return;
+      if(!skipRoomRender) renderRoom(roomId);
+      const chatRoomTitle = $("chatRoomTitle");
+      const chatRoomMeta = $("chatRoomMeta");
+      const chatRoomStatePill = $("chatRoomStatePill");
+      const chatRoomMeLine = $("chatRoomMeLine");
+      if(chatRoomTitle) chatRoomTitle.textContent = `${r.name}  $${r.ticker}`;
+      if(chatRoomMeta) chatRoomMeta.textContent = `${pingRelationshipMeta(r, connectedWallet) || "participant"} • ${lifecyclePhaseLabel(r.state)}`;
+      if(chatRoomStatePill) chatRoomStatePill.textContent = isPumpfunPostSpawnRoom(r) ? "conversation" : getDisplayedRoomStatePill(r);
+      if(chatRoomMeLine){
+        if(!connectedWallet) chatRoomMeLine.textContent = "connect wallet";
+        else if(r.state === "SPAWNING") chatRoomMeLine.textContent = `you: your committed amount ${getWalletGrossCommittedSol(r, connectedWallet).toFixed(3)} SOL`;
+        else chatRoomMeLine.textContent = isNativeLaunchBackend() ? `you: ${myBond(roomId).toFixed(3)} tokens on curve` : "you: launch tracked on Pingy";
+      }
+    }
+
+    function openChatRoom(roomId){
+      activeRoomId = roomId;
+      state.activePingThreadId = roomId;
+      setView("chat");
+      renderChatRoom(roomId);
+      if(!(state.devSim.active && state.devSim.roomId === roomId)){
+        refreshRoomOnchainSnapshot(roomId, { force: true }).then(() => {
+          if(activeRoomId === roomId && chatView?.classList.contains("on")) renderChatRoom(roomId);
+        });
+      }
+      const h = "#/chat/" + encodeURIComponent(roomId);
+      if(location.hash !== h) history.replaceState(null,"",h);
+    }
+
     function shareLink(roomId){
       const base = location.origin + location.pathname;
       return base + "#/room/" + encodeURIComponent(roomId);
@@ -9126,6 +9101,7 @@ if(connectBtn){
 
       setComposerState(r);
       renderChat(roomId);
+      if(chatView?.classList.contains("on") && activeRoomId === roomId) renderChatRoom(roomId, { skipRoomRender: true });
     }
 
     // Ping / Unping flow
@@ -9372,6 +9348,12 @@ if(connectBtn){
       return openPingModal(roomId, "unping");
     }
     $("roomPingDockBtn")?.addEventListener("click", () => openPingModal(activeRoomId));
+    $("openChatRoomBtn")?.addEventListener("click", () => {
+      if(activeRoomId) openChatRoom(activeRoomId);
+    });
+    $("chatRoomMarketBtn")?.addEventListener("click", () => {
+      if(activeRoomId) openRoom(activeRoomId);
+    });
     $("pingModePingBtn")?.addEventListener("click", () => {
       setPingActionMode("ping");
       updateActionModalCopy(roomById(modalRoomId || activeRoomId));
@@ -9801,6 +9783,9 @@ if(connectBtn){
       state.chat[activeRoomId].push({ ts: nowStamp(), _ts: Date.now(), wallet: connectedWallet, text: txt, kind: "chat" });
       $("msgInput").value = "";
       renderChat(activeRoomId);
+      if(chatView?.classList.contains("on")) renderChatRoom(activeRoomId, { skipRoomRender: true });
+      renderPingsView();
+      updatePingsTabUnreadBadge();
     });
     $("msgInput").addEventListener("keydown", (e) => {
       if(e.key === "Enter" && !e.shiftKey){
@@ -9935,6 +9920,16 @@ if(connectBtn){
         setView("profile");
         renderProfilePage();
         return;
+      }
+
+      if(parts[0] === "chat" && parts[1]){
+        const ridFromPath = decodeURIComponent(parts[1]);
+        const r = roomById(ridFromPath);
+        if(r){
+          if(!connectedWallet) showToast("connect wallet first.");
+          else openChatRoom(ridFromPath);
+          return;
+        }
       }
 
       if(["privacy", "terms", "fees", "revenue"].includes(parts[0])){
