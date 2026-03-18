@@ -238,8 +238,36 @@
     .roomTitle{font-weight:700}
     .roomMeta{color:var(--muted);white-space:normal;overflow-wrap:anywhere}
     .chatRoomHeader{margin-bottom:0}
+    .chatRoomHero{
+      display:grid;
+      grid-template-columns:auto minmax(0,1fr) auto;
+      gap:10px;
+      align-items:center;
+    }
+    .chatBackBtn{text-transform:lowercase}
+    .chatRoomHeroMain{min-width:0}
+    .chatRoomHeroTitleRow{
+      display:flex;
+      align-items:flex-start;
+      justify-content:space-between;
+      gap:8px;
+      flex-wrap:wrap;
+    }
+    .chatRoomHeroTitleBlock{min-width:0}
+    .chatRoomCoinAvatar{
+      width:54px;
+      height:54px;
+      border-radius:999px;
+      overflow:hidden;
+      flex:0 0 auto;
+    }
     .chatRoomShell{display:flex;flex-direction:column;gap:8px}
     .chatRoomChat{height:min(62vh, 720px)}
+    .chatRoomTelegram{
+      background:
+        radial-gradient(circle at top right, rgba(255,110,177,0.08), transparent 34%),
+        linear-gradient(180deg, #fff 0%, #fcf7fb 100%);
+    }
     #roomInfoPanel{min-width:0}
     #roomDescOut{white-space:normal;overflow-wrap:anywhere;word-break:break-word}
 
@@ -254,37 +282,86 @@
       padding:8px;
       height:36vh;
       overflow:auto;
-      background:#fff;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.96), rgba(255,247,252,0.98)),
+        repeating-linear-gradient(135deg, rgba(17,17,17,0.02) 0 12px, rgba(255,255,255,0) 12px 24px);
     }
 
     .msg{
       display:grid;
-      grid-template-columns: 250px 1fr auto;
+      grid-template-columns:44px minmax(0,1fr);
       gap:10px;
-      padding:6px 0;
-      border-bottom:1px solid #f1f1f1;
-      align-items:start;
+      padding:8px 0;
+      align-items:end;
     }
     @media (max-width:720px){
-      .msg{grid-template-columns:1fr auto;grid-template-rows:auto auto}
-      .msg .who{grid-column:1}
-      .msg .text{grid-column:1 / span 2}
-      .msg .ts{grid-column:2;grid-row:1}
+      .msg{grid-template-columns:40px minmax(0,1fr)}
       .spark{height:180px}
     }
-    .ts{color:var(--muted);white-space:nowrap;text-align:right}
+    .msg.systemMsg{
+      grid-template-columns:minmax(0,1fr);
+      justify-items:center;
+    }
+    .msgAvatar{
+      width:44px;
+      height:44px;
+      border:1px solid var(--line);
+      border-radius:999px;
+      background:#fff;
+      overflow:hidden;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      color:var(--muted);
+      font-weight:700;
+      cursor:pointer;
+      padding:0;
+    }
+    .msgAvatar img{width:100%;height:100%;object-fit:cover;display:block}
+    .msgBubbleWrap{min-width:0;display:flex;flex-direction:column;gap:4px}
+    .msgBubble{
+      display:inline-flex;
+      flex-direction:column;
+      gap:4px;
+      max-width:min(100%, 680px);
+      padding:10px 12px 8px;
+      border:1px solid var(--line);
+      background:rgba(255,255,255,0.92);
+      border-radius:16px 16px 16px 6px;
+      box-shadow:0 8px 18px rgba(17,17,17,0.04);
+    }
+    .msgBubble.mine{
+      margin-left:auto;
+      background:rgba(255,110,177,0.08);
+      border-radius:16px 16px 6px 16px;
+    }
+    .msgBubble.systemBubble{
+      max-width:560px;
+      text-align:center;
+      border-radius:999px;
+      padding:8px 12px;
+      background:#fff;
+    }
+    .ts{color:var(--muted);white-space:nowrap;text-align:right;font-size:12px;align-self:flex-end}
     .who{color:var(--muted);overflow:hidden;text-overflow:ellipsis}
     .who strong{color:var(--fg)}
-    .whoTop{display:flex;align-items:center;gap:6px}
+    .whoTop{display:flex;align-items:center;gap:6px;min-width:0;flex-wrap:wrap}
     .whoName{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .copyBtn{
       border:1px solid var(--line); background:#fff; color:var(--muted);
       padding:1px 5px; cursor:pointer; font:inherit; line-height:1.1;
     }
     .copyBtn:focus{outline:2px solid var(--focus);outline-offset:1px}
-    .walletLink{background:none;border:none;padding:0;color:inherit;font:inherit;cursor:pointer;text-decoration:underline}
+    .walletLink{background:none;border:none;padding:0;color:inherit;font:inherit;cursor:pointer;text-decoration:none;font-weight:700}
     .walletLink:hover{opacity:0.8}
     .text{white-space:pre-wrap;word-break:break-word}
+    .msgContextLine{display:flex;justify-content:space-between;gap:8px;align-items:flex-end}
+    .msgRoleChips{display:flex;gap:6px;flex-wrap:wrap}
+    .sysLine{
+      color:var(--muted);
+      font-style:italic;
+    }
+    .systemMsg .sysLine{font-style:normal}
 
     .composer{margin-top:8px;display:grid;grid-template-columns:1fr auto;gap:8px;align-items:start}
     input,textarea,select{
@@ -310,10 +387,6 @@
     .collapseBody{display:none; margin-top:10px}
     .collapse.on .collapseBody{display:block}
 
-    .sysLine{
-      color:var(--muted);
-      font-style:italic;
-    }
     .sysApprovalLine{
       color:#5f6672;
       font-style:normal;
@@ -681,3 +754,15 @@
 .pingPreview{color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pingMain{min-width:0}
 .pingSide{display:flex;flex-direction:column;align-items:flex-end;gap:6px}
+
+@media (max-width:720px){
+  .chatRoomHero{
+    grid-template-columns:minmax(0,1fr) auto;
+  }
+  .chatBackBtn{grid-column:1 / -1;justify-self:start}
+  .chatRoomCoinAvatar{
+    width:48px;
+    height:48px;
+  }
+  .msgBubble{max-width:100%}
+}

@@ -6200,6 +6200,10 @@ if(connectBtn){
     $("toastConnect").addEventListener("click", connectMock);
     $("toastClose").addEventListener("click", () => toast.classList.remove("on"));
     homeBtn.addEventListener("click", () => navigateHash("home"));
+    $("chatBackBtn")?.addEventListener("click", () => {
+      if(activeRoomId) openRoom(activeRoomId);
+      else navigateHash("home");
+    });
     // Modals
     function openModal(backEl){ backEl.classList.add("on"); }
     function closeModal(backEl){ backEl.classList.remove("on"); }
@@ -8291,13 +8295,26 @@ if(connectBtn){
       const chatRoomMeta = $("chatRoomMeta");
       const chatRoomStatePill = $("chatRoomStatePill");
       const chatRoomMeLine = $("chatRoomMeLine");
+      const chatRoomCoinAvatar = $("chatRoomCoinAvatar");
+      const snapshot = readRoomEscrowSnapshot(r);
+      const approvedCount = Number(r?.onchain?.approved_count || snapshot.approvedWallets?.length || 0);
+      const pendingCount = Number(snapshot?.pendingWallets?.length || 0);
+      const memberCount = Math.max(approvedCount + pendingCount, 1);
+      const activePosters = new Set((state.chat[roomId] || []).filter((m) => m && m.wallet && m.wallet !== "SYSTEM").map((m) => m.wallet)).size;
       if(chatRoomTitle) chatRoomTitle.textContent = `${r.name}  $${r.ticker}`;
-      if(chatRoomMeta) chatRoomMeta.textContent = `${pingRelationshipMeta(r, connectedWallet) || "participant"} • ${lifecyclePhaseLabel(r.state)}`;
+      if(chatRoomMeta) chatRoomMeta.textContent = `${memberCount} member${memberCount === 1 ? "" : "s"} • ${Math.max(activePosters, 1)} active poster${Math.max(activePosters, 1) === 1 ? "" : "s"}`;
       if(chatRoomStatePill) chatRoomStatePill.textContent = isPumpfunPostSpawnRoom(r) ? "conversation" : getDisplayedRoomStatePill(r);
       if(chatRoomMeLine){
         if(!connectedWallet) chatRoomMeLine.textContent = "connect wallet";
-        else if(r.state === "SPAWNING") chatRoomMeLine.textContent = `you: your committed amount ${getWalletGrossCommittedSol(r, connectedWallet).toFixed(3)} SOL`;
+        else if(r.state === "SPAWNING") chatRoomMeLine.textContent = `you • ${pingRelationshipMeta(r, connectedWallet) || "participant"}`;
         else chatRoomMeLine.textContent = isNativeLaunchBackend() ? `you: ${myBond(roomId).toFixed(3)} tokens on curve` : "you: launch tracked on Pingy";
+      }
+      if(chatRoomCoinAvatar){
+        if(r.image){
+          chatRoomCoinAvatar.innerHTML = `<img src="${r.image}" alt="" />`;
+        } else {
+          chatRoomCoinAvatar.innerHTML = `<span class="muted" style="display:block;padding:10px 6px;">${escapeText((r.ticker || "—").slice(0, 2).toUpperCase())}</span>`;
+        }
       }
     }
 
@@ -8313,6 +8330,35 @@ if(connectBtn){
       }
       const h = "#/chat/" + encodeURIComponent(roomId);
       if(location.hash !== h) history.replaceState(null,"",h);
+    }
+
+    function formatChatTimestampLabel(rawTs){
+      const raw = String(rawTs || "").trim();
+      const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})$/);
+      if(!match) return raw || "—";
+      const hours24 = Number(match[4] || 0);
+      const minutes = match[5] || "00";
+      const hours12 = ((hours24 + 11) % 12) + 1;
+      const suffix = hours24 >= 12 ? "PM" : "AM";
+      return `${hours12}:${minutes} ${suffix}`;
+    }
+
+    function renderWalletAvatar(target, wallet, { clickable = false } = {}){
+      if(!target) return;
+      const details = getProfileDetails(wallet);
+      target.innerHTML = "";
+      if(details.image){
+        const im = document.createElement("img");
+        im.src = details.image;
+        im.alt = "";
+        target.appendChild(im);
+      } else {
+        target.textContent = shortWallet(wallet || "wallet").slice(0, 1).toUpperCase();
+      }
+      if(clickable && wallet){
+        target.title = displayName(wallet);
+        target.addEventListener("click", () => openProfile(wallet));
+      }
     }
 
     function shareLink(roomId){
@@ -8391,11 +8437,12 @@ if(connectBtn){
 
       visibleMsgs.forEach((m) => {
         const row = document.createElement("div");
-        row.className = "msg";
-
         const isSys = (m.wallet === "SYSTEM");
+        const isMine = !isSys && connectedWallet && getNormalizedWallet(m.wallet) === getNormalizedWallet(connectedWallet);
+        row.className = `msg${isSys ? " systemMsg" : ""}`;
         const nm = isSys ? "system" : displayName(m.wallet);
         const nameHtml = isSys ? `<strong>${escapeText(nm)}</strong>` : escapeText(nm);
+        const timeLabel = formatChatTimestampLabel(m.ts);
 
         let extras = "";
         if(!isSys && r){
@@ -8417,18 +8464,26 @@ if(connectBtn){
 
         const systemClass = isApprovalSystemMessage(m) ? "sysApprovalLine" : "";
         row.innerHTML = `
-          <div class="who">
-            <div class="whoTop">
-              <button class="copyBtn" title="copy wallet">⧉</button>
-              <span class="whoName">${nameHtml}</span>
-              ${extras}
+          ${isSys ? "" : `<button class="msgAvatar" type="button" title="open profile"></button>`}
+          <div class="msgBubbleWrap">
+            <div class="msgBubble ${isSys ? "systemBubble" : ""} ${isMine ? "mine" : ""}">
+              <div class="who">
+                <div class="whoTop">
+                  ${isSys ? "" : `<button class="copyBtn" title="copy wallet">⧉</button>`}
+                  <span class="whoName">${nameHtml}</span>
+                </div>
+              </div>
+              <div class="text ${isSys ? "sysLine" : ""} ${systemClass}">${escapeText(m.text)}</div>
+              <div class="msgContextLine">
+                <div class="msgRoleChips">${extras}</div>
+                <div class="ts">${escapeText(timeLabel)}</div>
+              </div>
             </div>
           </div>
-          <div class="text ${isSys ? "sysLine" : ""} ${systemClass}">${escapeText(m.text)}</div>
-          <div class="ts">${escapeText(m.ts)}</div>
         `;
 
         if(!isSys){
+          renderWalletAvatar(row.querySelector(".msgAvatar"), m.wallet, { clickable: true });
           const whoName = row.querySelector(".whoName");
           if(whoName){
             whoName.innerHTML = "";
@@ -8439,6 +8494,7 @@ if(connectBtn){
             btn.addEventListener("click", () => openProfile(m.wallet));
             whoName.appendChild(btn);
           }
+          row.querySelector(".copyBtn").addEventListener("click", () => copyToClipboard(m.wallet));
         }
 
         if(isApprovalSystemMessage(m)){
@@ -8454,8 +8510,6 @@ if(connectBtn){
             textNode.appendChild(document.createTextNode(" was approved as a pinger"));
           }
         }
-
-        row.querySelector(".copyBtn").addEventListener("click", () => copyToClipboard(m.wallet));
 
         box.appendChild(row);
       });
