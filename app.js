@@ -2685,6 +2685,7 @@ const $ = (id) => document.getElementById(id);
     let profileView;
     let legalView;
     let homeBtn;
+    let roomContextToggleBtn;
 
     let walletPill;
     let walletMenu;
@@ -2893,6 +2894,11 @@ const $ = (id) => document.getElementById(id);
       profileView.classList.toggle("on", isProfile);
       legalView.classList.toggle("on", isLegal);
       homeBtn.style.display = isHome ? "none" : "inline-block";
+      if(roomContextToggleBtn){
+        const showRoomContextToggle = (isRoom || isChat) && !!activeRoomId;
+        roomContextToggleBtn.style.display = showRoomContextToggle ? "inline-block" : "none";
+        roomContextToggleBtn.textContent = isChat ? "market" : "chat";
+      }
       const roomActionDock = $("roomActionDock");
       if(roomActionDock) roomActionDock.style.display = isRoom ? "block" : "none";
       if(isHome) startMoversSimulation();
@@ -5918,6 +5924,7 @@ function encodeU64Arg(v){
       profileView = $("profileView");
       legalView = $("legalView");
       homeBtn = $("homeBtn");
+      roomContextToggleBtn = $("roomContextToggleBtn");
 
       walletPill = $("walletPill");
       walletMenu = $("walletMenu");
@@ -9403,11 +9410,10 @@ if(connectBtn){
       return openPingModal(roomId, "unping");
     }
     $("roomPingDockBtn")?.addEventListener("click", () => openPingModal(activeRoomId));
-    $("openChatRoomBtn")?.addEventListener("click", () => {
-      if(activeRoomId) openChatRoom(activeRoomId);
-    });
-    $("chatRoomMarketBtn")?.addEventListener("click", () => {
-      if(activeRoomId) openRoom(activeRoomId);
+    roomContextToggleBtn?.addEventListener("click", () => {
+      if(!activeRoomId) return;
+      if(chatView?.classList.contains("on")) openRoom(activeRoomId);
+      else openChatRoom(activeRoomId);
     });
     $("pingModePingBtn")?.addEventListener("click", () => {
       setPingActionMode("ping");
