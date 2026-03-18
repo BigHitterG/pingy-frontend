@@ -8293,22 +8293,13 @@ if(connectBtn){
       if(!skipRoomRender) renderRoom(roomId);
       const chatRoomTitle = $("chatRoomTitle");
       const chatRoomMeta = $("chatRoomMeta");
-      const chatRoomStatePill = $("chatRoomStatePill");
-      const chatRoomMeLine = $("chatRoomMeLine");
       const chatRoomCoinAvatar = $("chatRoomCoinAvatar");
       const snapshot = readRoomEscrowSnapshot(r);
       const approvedCount = Number(r?.onchain?.approved_count || snapshot.approvedWallets?.length || 0);
       const pendingCount = Number(snapshot?.pendingWallets?.length || 0);
       const memberCount = Math.max(approvedCount + pendingCount, 1);
-      const activePosters = new Set((state.chat[roomId] || []).filter((m) => m && m.wallet && m.wallet !== "SYSTEM").map((m) => m.wallet)).size;
       if(chatRoomTitle) chatRoomTitle.textContent = `${r.name}  $${r.ticker}`;
-      if(chatRoomMeta) chatRoomMeta.textContent = `${memberCount} member${memberCount === 1 ? "" : "s"} • ${Math.max(activePosters, 1)} active poster${Math.max(activePosters, 1) === 1 ? "" : "s"}`;
-      if(chatRoomStatePill) chatRoomStatePill.textContent = isPumpfunPostSpawnRoom(r) ? "conversation" : getDisplayedRoomStatePill(r);
-      if(chatRoomMeLine){
-        if(!connectedWallet) chatRoomMeLine.textContent = "connect wallet";
-        else if(r.state === "SPAWNING") chatRoomMeLine.textContent = `you • ${pingRelationshipMeta(r, connectedWallet) || "participant"}`;
-        else chatRoomMeLine.textContent = isNativeLaunchBackend() ? `you: ${myBond(roomId).toFixed(3)} tokens on curve` : "you: launch tracked on Pingy";
-      }
+      if(chatRoomMeta) chatRoomMeta.textContent = `${memberCount} member${memberCount === 1 ? "" : "s"}`;
       if(chatRoomCoinAvatar){
         if(r.image){
           chatRoomCoinAvatar.innerHTML = `<img src="${r.image}" alt="" />`;
@@ -8917,7 +8908,7 @@ if(connectBtn){
       const pingersList = $("pingersList");
       const approversList = $("approversList");
       const isInstantLaunch = roomLaunchMode(r) === "instant";
-      const pingersPanel = $("pingersToggle")?.closest(".panel");
+      const pingersPanel = $("chatPingersPanel");
       if(pingersPanel) pingersPanel.style.display = isInstantLaunch ? "none" : "block";
 
       const makeWalletRow = (wallet, walletRow = {}, actions = []) => {

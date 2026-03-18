@@ -388,32 +388,26 @@
     <div class="view" id="chatView">
       <div class="chatRoomHeader panel">
         <div class="chatRoomHero">
-          <button class="btn subtle small chatBackBtn" id="chatBackBtn" type="button">back</button>
           <div class="chatRoomHeroMain">
             <div class="chatRoomHeroTitleRow">
               <div class="chatRoomHeroTitleBlock">
                 <div class="h" id="chatRoomTitle" style="margin-bottom:2px;">thread</div>
                 <div class="muted tiny" id="chatRoomMeta">—</div>
               </div>
-              <span class="k" id="chatRoomStatePill">conversation</span>
             </div>
-            <div class="row" style="margin-top:8px;">
-              <div class="muted" id="chatRoomMeLine">—</div>
+            <div id="chatPingersPanel" style="margin-top:8px;">
+              <button class="btn subtle small" id="pingersToggle">pingers ▸</button>
+              <div id="pingersContent" style="display:none; margin-top:8px;">
+                <div class="tiny">PENDING</div>
+                <div id="pendingList" style="margin-top:4px;"></div>
+                <div class="tiny">PINGERS</div>
+                <div id="pingersList" style="margin-top:4px;"></div>
+                <div class="tiny" style="margin-top:8px;">APPROVERS</div>
+                <div id="approversList" style="margin-top:4px;"></div>
+              </div>
             </div>
           </div>
           <div class="chatRoomCoinAvatar mosaic img" id="chatRoomCoinAvatar" aria-hidden="true"><span class="muted" style="display:block;padding:10px 6px;">—</span></div>
-        </div>
-      </div>
-
-      <div class="panel" style="margin-top:10px;">
-        <button class="btn subtle small" id="pingersToggle">pingers ▸</button>
-        <div id="pingersContent" style="display:none; margin-top:8px;">
-          <div class="tiny">PENDING</div>
-          <div id="pendingList" style="margin-top:4px;"></div>
-          <div class="tiny">PINGERS</div>
-          <div id="pingersList" style="margin-top:4px;"></div>
-          <div class="tiny" style="margin-top:8px;">APPROVERS</div>
-          <div id="approversList" style="margin-top:4px;"></div>
         </div>
       </div>
 
