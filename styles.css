@@ -358,9 +358,10 @@
 .roomActionDockBtn{
   width:100%;
   padding:12px 14px;
-  background:#111;
+  background:#ff6eb1;
   color:#fff;
-  border-color:#111;
+  border-color:#ff6eb1;
+  box-shadow:0 6px 16px rgba(255,110,177,.28);
   pointer-events:auto;
 }
 .roomActionDockBtn.subtle{
