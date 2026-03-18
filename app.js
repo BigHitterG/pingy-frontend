@@ -7828,7 +7828,7 @@ if(connectBtn){
       return walletFromRoute || connectedWallet;
     }
 
-    const DEFAULT_PROFILE_AVATAR = "./assets/pingy-logo.svg";
+    const DEFAULT_PROFILE_AVATAR = "./assets/IMG_1566.png";
 
     function appendAvatarImage(target, src){
       if(!target || !src) return false;
@@ -8309,7 +8309,7 @@ if(connectBtn){
         if(r.image){
           chatRoomCoinAvatar.innerHTML = `<img src="${r.image}" alt="" />`;
         } else {
-          chatRoomCoinAvatar.innerHTML = `<span class="muted" style="display:block;padding:10px 6px;">${escapeText((r.ticker || "—").slice(0, 2).toUpperCase())}</span>`;
+          chatRoomCoinAvatar.innerHTML = `<img src="${DEFAULT_PROFILE_AVATAR}" alt="" />`;
         }
       }
     }
@@ -8530,6 +8530,30 @@ if(connectBtn){
       $("msgInput").disabled = !enabled;
       $("sendBtn").disabled = !enabled;
       $("msgInput").placeholder = denied ? (isNativeLaunchBackend() ? "Denied from this spawn. Your SOL remains in escrow until you unping." : "Denied from this spawn. Your committed SOL stays in the launch vault until you unping.") : (enabled ? "message" : "connect wallet");
+    }
+
+    function autoSizeComposer(){
+      const input = $("msgInput");
+      if(!input) return;
+      const computed = window.getComputedStyle(input);
+      const lineHeight = parseFloat(computed.lineHeight) || 16;
+      const paddingTop = parseFloat(computed.paddingTop) || 0;
+      const paddingBottom = parseFloat(computed.paddingBottom) || 0;
+      const borderTop = parseFloat(computed.borderTopWidth) || 0;
+      const borderBottom = parseFloat(computed.borderBottomWidth) || 0;
+      const minHeight = Math.ceil(lineHeight + paddingTop + paddingBottom + borderTop + borderBottom);
+      const maxHeight = Math.ceil((lineHeight * 6) + paddingTop + paddingBottom + borderTop + borderBottom);
+      input.style.height = `${minHeight}px`;
+      const nextHeight = Math.max(minHeight, Math.min(input.scrollHeight, maxHeight));
+      input.style.height = `${nextHeight}px`;
+      input.style.overflowY = input.scrollHeight > maxHeight ? "auto" : "hidden";
+    }
+
+    function resetComposer(){
+      const input = $("msgInput");
+      if(!input) return;
+      input.value = "";
+      autoSizeComposer();
     }
 
 
@@ -9897,11 +9921,14 @@ if(connectBtn){
 
       state.chat[activeRoomId] = state.chat[activeRoomId] || [];
       state.chat[activeRoomId].push({ ts: nowStamp(), _ts: Date.now(), wallet: connectedWallet, text: txt, kind: "chat" });
-      $("msgInput").value = "";
+      resetComposer();
       renderChat(activeRoomId);
       if(chatView?.classList.contains("on")) renderChatRoom(activeRoomId, { skipRoomRender: true });
       renderPingsView();
       updatePingsTabUnreadBadge();
+    });
+    $("msgInput").addEventListener("input", () => {
+      autoSizeComposer();
     });
     $("msgInput").addEventListener("keydown", (e) => {
       if(e.key === "Enter" && !e.shiftKey){
@@ -9909,6 +9936,7 @@ if(connectBtn){
         $("sendBtn").click();
       }
     });
+    autoSizeComposer();
 
     const LEGAL_PAGES = {
       privacy: {
