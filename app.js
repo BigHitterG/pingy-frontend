@@ -750,13 +750,52 @@ const $ = (id) => document.getElementById(id);
         };
       }
 
+      const approval = r.approval || {};
+      const positions = r.positions || {};
+      const blockedWallets = r.blockedWallets || {};
+      const byWallet = {};
+      const approvedWallets = [];
+      const pendingWallets = [];
+      const wallets = new Set([
+        ...Object.keys(approval),
+        ...Object.keys(positions),
+        ...Object.keys(blockedWallets),
+      ]);
+      if(r.creator_wallet) wallets.add(r.creator_wallet);
+
+      wallets.forEach((wallet) => {
+        if(!wallet) return;
+        const blocked = !!blockedWallets[wallet];
+        const status = blocked
+          ? "denied"
+          : normalizeDepositStatus(approval[wallet] || (wallet === r.creator_wallet ? "approved" : ""));
+        const position = positions[wallet] || {};
+        const committedSol = Math.max(0, Number(position.committed_sol ?? position.escrow_sol ?? 0) || 0);
+        const committedLamports = Math.max(0, Math.round(committedSol * LAMPORTS_PER_SOL));
+
+        byWallet[wallet] = {
+          ...position,
+          status,
+          committed_lamports: committedLamports,
+          committed_sol: committedSol,
+          withdrawable_lamports: committedLamports,
+          withdrawable_sol: committedSol,
+          allocated_lamports: committedLamports,
+          allocated_sol: committedSol,
+          escrow_sol: committedSol,
+        };
+
+        if(isCountedDepositStatus(status)) approvedWallets.push(wallet);
+        if(status === "pending") pendingWallets.push(wallet);
+      });
+
       return {
         roomId: r.id,
         admin: r.creator_wallet,
         approverWallets: r.creator_wallet ? [r.creator_wallet] : [],
-        byWallet: {},
-        approvedWallets: [],
-        pendingWallets: []
+        byWallet,
+        approvedWallets,
+        pendingWallets
       };
     }
 
@@ -8311,6 +8350,14 @@ if(connectBtn){
         && m.kind === "system_approval"
         && !!m.approvedWallet
       );
+      const isVisibleSystemMessage = (m) => {
+        if(!m || m.wallet !== "SYSTEM") return false;
+        if(isApprovalSystemMessage(m)) return true;
+        const text = String(m.text || "").trim();
+        if(!text) return false;
+        if(m.kind === "system_activity" && /submitted a (buy|sell) tx on-chain/i.test(text)) return false;
+        return true;
+      };
       const isTradeActivityText = (text) => {
         const t = String(text || "");
         if(!t) return false;
@@ -8321,13 +8368,21 @@ if(connectBtn){
       };
       const isMainChatMessage = (m) => {
         if(!m) return false;
-        if(m.wallet === "SYSTEM") return isApprovalSystemMessage(m);
+        if(m.wallet === "SYSTEM") return isVisibleSystemMessage(m);
         if(m.kind === "activity") return false;
         if(isTradeActivityText(m.text)) return false;
         return true;
       };
 
-      msgs.filter(isMainChatMessage).forEach((m) => {
+      const visibleMsgs = msgs.filter(isMainChatMessage);
+      if(!visibleMsgs.length){
+        const empty = document.createElement("div");
+        empty.className = "muted tiny";
+        empty.textContent = "No chat yet. Start the thread here.";
+        box.appendChild(empty);
+      }
+
+      visibleMsgs.forEach((m) => {
         const row = document.createElement("div");
         row.className = "msg";
 
