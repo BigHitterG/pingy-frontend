@@ -9113,7 +9113,7 @@ if(connectBtn){
       const isPumpPostSpawn = isPumpfunPostSpawnRoom(r);
       const bondedTradeLocked = r.state === "BONDED";
       if(roomPingDockBtn){
-        roomPingDockBtn.textContent = isPumpPostSpawn ? "market external" : (r.state === "SPAWNING" ? "ping it" : "buy");
+        roomPingDockBtn.textContent = isPumpPostSpawn ? "market external" : (r.state === "SPAWNING" ? "ping" : "buy");
         roomPingDockBtn.classList.toggle("subtle", bondedTradeLocked || !connectedWallet);
         roomPingDockBtn.disabled = !connectedWallet || bondedTradeLocked || !!(connectedWallet && r.blockedWallets && r.blockedWallets[connectedWallet]);
       }
