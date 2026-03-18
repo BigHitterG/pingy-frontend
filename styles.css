@@ -267,9 +267,10 @@
     .chatRoomChat{
       height:calc(100vh - 176px);
       min-height:520px;
-      padding:18px 14px 124px;
+      padding:18px 14px 156px;
       border:0;
       background:transparent;
+      scroll-padding-bottom:156px;
     }
     .chatRoomTelegram{
       background:
@@ -307,9 +308,15 @@
       .msg{grid-template-columns:40px minmax(0,1fr)}
       .spark{height:180px}
     }
-    .msg.systemMsg{
+    .msg.systemMsg,
+    .msg.mine{
       grid-template-columns:minmax(0,1fr);
+    }
+    .msg.systemMsg{
       justify-items:center;
+    }
+    .msg.mine .msgBubbleWrap{
+      align-items:flex-end;
     }
     .msgAvatar{
       width:44px;
@@ -491,7 +498,8 @@
   .chatRoomChat{
     height:calc(100vh - 188px);
     min-height:360px;
-    padding:16px 10px 116px;
+    padding:16px 10px 144px;
+    scroll-padding-bottom:144px;
   }
   .composer{
     bottom:10px;

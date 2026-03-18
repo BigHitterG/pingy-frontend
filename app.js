@@ -7828,16 +7828,21 @@ if(connectBtn){
       return walletFromRoute || connectedWallet;
     }
 
+    const DEFAULT_PROFILE_AVATAR = "./assets/pingy-logo.svg";
+
+    function appendAvatarImage(target, src){
+      if(!target || !src) return false;
+      const im = document.createElement("img");
+      im.src = src;
+      im.alt = "";
+      target.appendChild(im);
+      return true;
+    }
+
     function renderProfileAvatar(wallet, dataUrl){
       const avatar = $("profileAvatar");
       avatar.innerHTML = "";
-      if(dataUrl){
-        const im = document.createElement("img");
-        im.src = dataUrl;
-        im.alt = "";
-        avatar.appendChild(im);
-        return;
-      }
+      if(appendAvatarImage(avatar, dataUrl || DEFAULT_PROFILE_AVATAR)) return;
       avatar.textContent = shortWallet(wallet || "wallet").slice(0,1).toUpperCase();
     }
 
@@ -8338,12 +8343,7 @@ if(connectBtn){
       if(!target) return;
       const details = getProfileDetails(wallet);
       target.innerHTML = "";
-      if(details.image){
-        const im = document.createElement("img");
-        im.src = details.image;
-        im.alt = "";
-        target.appendChild(im);
-      } else {
+      if(!appendAvatarImage(target, details.image || DEFAULT_PROFILE_AVATAR)){
         target.textContent = shortWallet(wallet || "wallet").slice(0, 1).toUpperCase();
       }
       if(clickable && wallet){
@@ -8435,7 +8435,7 @@ if(connectBtn){
         const row = document.createElement("div");
         const isSys = (m.wallet === "SYSTEM");
         const isMine = !isSys && connectedWallet && getNormalizedWallet(m.wallet) === getNormalizedWallet(connectedWallet);
-        row.className = `msg${isSys ? " systemMsg" : ""}`;
+        row.className = `msg${isSys ? " systemMsg" : ""}${isMine ? " mine" : ""}`;
         const nm = isSys ? "system" : displayName(m.wallet);
         const nameHtml = isSys ? `<strong>${escapeText(nm)}</strong>` : escapeText(nm);
         const timeLabel = formatChatTimestampLabel(m.ts);
@@ -8460,7 +8460,7 @@ if(connectBtn){
 
         const systemClass = isApprovalSystemMessage(m) ? "sysApprovalLine" : "";
         row.innerHTML = `
-          ${isSys ? "" : `<button class="msgAvatar" type="button" title="open profile"></button>`}
+          ${isSys || isMine ? "" : `<button class="msgAvatar" type="button" title="open profile"></button>`}
           <div class="msgBubbleWrap">
             <div class="msgBubble ${isSys ? "systemBubble" : ""} ${isMine ? "mine" : ""}">
               <div class="who">
