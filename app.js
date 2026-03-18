@@ -2703,8 +2703,6 @@ const $ = (id) => document.getElementById(id);
     let toastTimer = null;
     let onchainBanner;
     let onchainBannerText;
-    let roomContextToggleDefaultParent = null;
-    let roomContextToggleDefaultNextSibling = null;
     let onchainEnabled = true;
     const onchainReasons = [];
     let traceCounter = 0;
@@ -2884,25 +2882,6 @@ const $ = (id) => document.getElementById(id);
       }, state.movers.tickMs);
     }
 
-    function syncRoomContextToggle(which){
-      if(!roomContextToggleBtn) return;
-      const isRoom = (which === "room");
-      const isChat = (which === "chat");
-      const showRoomContextToggle = (isRoom || isChat) && !!activeRoomId;
-      const targetSlot = isChat ? $("chatContextToggleSlot") : (isRoom ? $("roomContextToggleSlot") : null);
-      if(targetSlot && roomContextToggleBtn.parentElement !== targetSlot){
-        targetSlot.appendChild(roomContextToggleBtn);
-      } else if(!targetSlot && roomContextToggleDefaultParent && roomContextToggleBtn.parentElement !== roomContextToggleDefaultParent){
-        if(roomContextToggleDefaultNextSibling?.parentNode === roomContextToggleDefaultParent){
-          roomContextToggleDefaultParent.insertBefore(roomContextToggleBtn, roomContextToggleDefaultNextSibling);
-        } else {
-          roomContextToggleDefaultParent.appendChild(roomContextToggleBtn);
-        }
-      }
-      roomContextToggleBtn.style.display = showRoomContextToggle ? "inline-block" : "none";
-      roomContextToggleBtn.textContent = isChat ? "market" : "chat";
-    }
-
     function setView(which){
       const isHome = (which === "home");
       const isRoom = (which === "room");
@@ -2915,7 +2894,11 @@ const $ = (id) => document.getElementById(id);
       profileView.classList.toggle("on", isProfile);
       legalView.classList.toggle("on", isLegal);
       homeBtn.style.display = isHome ? "none" : "inline-block";
-      syncRoomContextToggle(which);
+      if(roomContextToggleBtn){
+        const showRoomContextToggle = (isRoom || isChat) && !!activeRoomId;
+        roomContextToggleBtn.style.display = showRoomContextToggle ? "inline-block" : "none";
+        roomContextToggleBtn.textContent = isChat ? "market" : "chat";
+      }
       const roomActionDock = $("roomActionDock");
       if(roomActionDock) roomActionDock.style.display = isRoom ? "block" : "none";
       if(isHome) startMoversSimulation();
@@ -5942,8 +5925,6 @@ function encodeU64Arg(v){
       legalView = $("legalView");
       homeBtn = $("homeBtn");
       roomContextToggleBtn = $("roomContextToggleBtn");
-      roomContextToggleDefaultParent = roomContextToggleBtn?.parentElement || null;
-      roomContextToggleDefaultNextSibling = roomContextToggleBtn?.nextSibling || null;
 
       walletPill = $("walletPill");
       walletMenu = $("walletMenu");
@@ -8324,7 +8305,6 @@ if(connectBtn){
       const memberCount = Math.max(approvedCount + pendingCount, 1);
       if(chatRoomTitle) chatRoomTitle.textContent = `${r.name}  $${r.ticker}`;
       if(chatRoomMeta) chatRoomMeta.textContent = `${memberCount} member${memberCount === 1 ? "" : "s"}`;
-      syncRoomContextToggle("chat");
       if(chatRoomCoinAvatar){
         if(r.image){
           chatRoomCoinAvatar.innerHTML = `<img src="${r.image}" alt="" />`;
@@ -9101,7 +9081,6 @@ if(connectBtn){
 
       // market + chart
       const marketPanel = $("marketPanel");
-      syncRoomContextToggle("room");
       if(marketPanel){
         marketPanel.style.display = "block";
         const mc = Number(r.market_cap_usd || 0);
