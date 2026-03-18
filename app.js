@@ -4087,7 +4087,8 @@ const $ = (id) => document.getElementById(id);
       activeHomeTab: "explore",
       activePingThreadId: null,
       pingReadByWallet: {},
-      grossCommitDebugMeta: {}
+      grossCommitDebugMeta: {},
+      launchTrustExpandedByRoom: {}
     };
 
     const ONCHAIN_REFRESH_MS = 7000;
@@ -5757,6 +5758,33 @@ function encodeU64Arg(v){
         panel.style.display = show ? "block" : "none";
         btn.setAttribute("aria-expanded", show ? "true" : "false");
       });
+    }
+
+    function isLaunchTrustExpanded(roomId){
+      return !!state.launchTrustExpandedByRoom?.[roomId];
+    }
+
+    function setLaunchTrustExpanded(roomId, expanded){
+      if(!roomId) return;
+      state.launchTrustExpandedByRoom = state.launchTrustExpandedByRoom || {};
+      state.launchTrustExpandedByRoom[roomId] = !!expanded;
+    }
+
+    function syncLaunchTrustPanel(roomId){
+      const toggle = $("launchTrustToggle");
+      const body = $("launchTrustBody");
+      if(!toggle || !body) return;
+      const expanded = isLaunchTrustExpanded(roomId);
+      toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+      body.style.display = expanded ? "block" : "none";
+      if(toggle.dataset.boundRoomId !== roomId){
+        toggle.onclick = () => {
+          const nextExpanded = !isLaunchTrustExpanded(roomId);
+          setLaunchTrustExpanded(roomId, nextExpanded);
+          syncLaunchTrustPanel(roomId);
+        };
+        toggle.dataset.boundRoomId = roomId;
+      }
     }
 
     function setImagePreview(elId, dataUrl, emptyText){
@@ -8553,6 +8581,8 @@ if(connectBtn){
       const walletPubkey = connectedWallet;
       const isAdmin = !!threadAdminPubkey && !!walletPubkey && toBase58String(threadAdminPubkey) === toBase58String(walletPubkey);
       const canModerateApprovals = isApprover(r, connectedWallet);
+
+      syncLaunchTrustPanel(roomId);
 
       const launchTrustLines = $("launchTrustLines");
       if(launchTrustLines){

@@ -238,6 +238,12 @@
     .roomTitle{font-weight:700}
     .roomMeta{color:var(--muted);white-space:normal;overflow-wrap:anywhere}
 
+    .launchTrustToggle{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;padding:0;border:0;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}
+    .launchTrustToggle:focus{outline:2px solid var(--focus);outline-offset:2px}
+    .launchTrustTitle{margin:0}
+    .launchTrustArrow{width:0;height:0;border-top:7px solid transparent;border-bottom:7px solid transparent;border-left:10px solid var(--muted);flex:0 0 auto;transition:transform 140ms ease}
+    .launchTrustToggle[aria-expanded="true"] .launchTrustArrow{transform:rotate(90deg)}
+
     .chat{
       border:1px solid var(--line);
       padding:8px;
