@@ -2851,6 +2851,8 @@ const $ = (id) => document.getElementById(id);
       profileView.classList.toggle("on", isProfile);
       legalView.classList.toggle("on", isLegal);
       homeBtn.style.display = isHome ? "none" : "inline-block";
+      const roomActionDock = $("roomActionDock");
+      if(roomActionDock) roomActionDock.style.display = isRoom ? "block" : "none";
       if(isHome) startMoversSimulation();
       else stopMoversSimulation();
     }
@@ -6159,7 +6161,6 @@ if(connectBtn){
     $("profileDisconnect").addEventListener("click", () => { closeModal($("profileBack")); disconnectMock(); });
     wireModal($("editProfileBack"), $("editProfileClose"));
     wireModal($("pingBack"), $("pingClose"));
-    wireModal($("unpingBack"), $("unpingClose"));
     wireModal($("shareBack"), $("shareClose"));
 
     const visibleModalOverlays = Array.from(document.querySelectorAll(".modalBack"))
@@ -9108,16 +9109,14 @@ if(connectBtn){
       $("meLine").textContent = connectedWallet ? me : "connect wallet";
       if(connectedWallet && r.state === "SPAWNING") refreshConnectedWalletEscrowLine(roomId);
 
-      const pingBtn = $("pingBtn");
-      const unpingBtn = $("unpingBtn");
+      const roomPingDockBtn = $("roomPingDockBtn");
       const isPumpPostSpawn = isPumpfunPostSpawnRoom(r);
-      if(pingBtn) pingBtn.textContent = isPumpPostSpawn ? "market external" : (r.state === "SPAWNING" ? "ping" : "buy");
-      if(unpingBtn) unpingBtn.textContent = isPumpPostSpawn ? "market external" : (r.state === "SPAWNING" ? "unping" : "sell");
-
       const bondedTradeLocked = r.state === "BONDED";
-
-      $("pingBtn").disabled = !connectedWallet || bondedTradeLocked || !!(connectedWallet && r.blockedWallets && r.blockedWallets[connectedWallet]);
-      $("unpingBtn").disabled = !connectedWallet || bondedTradeLocked;
+      if(roomPingDockBtn){
+        roomPingDockBtn.textContent = isPumpPostSpawn ? "market external" : (r.state === "SPAWNING" ? "ping it" : "buy");
+        roomPingDockBtn.classList.toggle("subtle", bondedTradeLocked || !connectedWallet);
+        roomPingDockBtn.disabled = !connectedWallet || bondedTradeLocked || !!(connectedWallet && r.blockedWallets && r.blockedWallets[connectedWallet]);
+      }
       updateActionModalCopy(r);
 
       const bondedStatusPanel = $("bondedStatusPanel");
@@ -9132,6 +9131,34 @@ if(connectBtn){
     // Ping / Unping flow
     // Use an explicit room id for modals so home-card clicks can't race view changes.
     let modalRoomId = null;
+    let pingActionMode = "ping";
+
+    function setPingActionMode(mode){
+      const nextMode = mode === "unping" ? "unping" : "ping";
+      pingActionMode = nextMode;
+      const pingModePingBtn = $("pingModePingBtn");
+      const pingModeUnpingBtn = $("pingModeUnpingBtn");
+      const pingPanel = $("pingPanel");
+      const unpingPanel = $("unpingPanel");
+      const pingConfirm = $("pingConfirm");
+      const unpingConfirm = $("unpingConfirm");
+      const pingWalletSmokeTest = $("pingWalletSmokeTest");
+      if(pingModePingBtn){
+        pingModePingBtn.classList.toggle("active", nextMode === "ping");
+        pingModePingBtn.classList.toggle("subtle", nextMode !== "ping");
+        pingModePingBtn.setAttribute("aria-pressed", nextMode === "ping" ? "true" : "false");
+      }
+      if(pingModeUnpingBtn){
+        pingModeUnpingBtn.classList.toggle("active", nextMode === "unping");
+        pingModeUnpingBtn.classList.toggle("subtle", nextMode !== "unping");
+        pingModeUnpingBtn.setAttribute("aria-pressed", nextMode === "unping" ? "true" : "false");
+      }
+      if(pingPanel) pingPanel.style.display = nextMode === "ping" ? "block" : "none";
+      if(unpingPanel) unpingPanel.style.display = nextMode === "unping" ? "block" : "none";
+      if(pingConfirm) pingConfirm.style.display = nextMode === "ping" ? "inline-block" : "none";
+      if(unpingConfirm) unpingConfirm.style.display = nextMode === "unping" ? "inline-block" : "none";
+      if(pingWalletSmokeTest) pingWalletSmokeTest.style.display = nextMode === "ping" ? "inline-block" : "none";
+    }
     function computeMaxPingLamports(room, userDeposit = {}, wallet = connectedWallet){
       const targetLamports = Number(room?.onchain?.spawn_target_lamports || 0);
       const totalAllocatedLamports = Number(room?.onchain?.total_allocated_lamports || 0);
@@ -9223,7 +9250,6 @@ if(connectBtn){
       const isPumpPostSpawn = isPumpfunPostSpawnRoom(r);
 
       const pingModalTitle = $("pingModalTitle");
-      const unpingModalTitle = $("unpingModalTitle");
       const pingAmountUnit = $("pingAmountUnit");
       const unpingAmountUnit = $("unpingAmountUnit");
       const pingModalHelp = $("pingModalHelp");
@@ -9232,8 +9258,11 @@ if(connectBtn){
       const unpingConfirm = $("unpingConfirm");
       const unpingAmount = $("unpingAmount");
 
-      if(pingModalTitle) pingModalTitle.textContent = isPumpPostSpawn ? "launch follow" : (isBonded ? "launched" : (isSpawning ? "ping" : "buy"));
-      if(unpingModalTitle) unpingModalTitle.textContent = isPumpPostSpawn ? "launch follow" : (isBonded ? "launched" : (isSpawning ? "unping" : "sell"));
+      if(pingModalTitle) pingModalTitle.textContent = isPumpPostSpawn
+        ? "launch follow"
+        : (pingActionMode === "unping"
+          ? (isBonded ? "launched" : (isSpawning ? "unping" : "sell"))
+          : (isBonded ? "launched" : (isSpawning ? "ping" : "buy")));
       if(pingAmountUnit) pingAmountUnit.textContent = "SOL";
       if(unpingAmountUnit) unpingAmountUnit.textContent = isSpawning ? "SOL" : "tokens";
 
@@ -9317,7 +9346,8 @@ if(connectBtn){
       if(pingConfirm) pingConfirm.disabled = maxGrossLamports <= 0;
     }
 
-    async function openPingModal(roomId){
+    async function openPingModal(roomId, mode = "ping"){
+      setPingActionMode(mode);
       if(!connectedWallet) return showToast("connect wallet first.");
       const rid = roomId || activeRoomId;
       const r = roomById(rid);
@@ -9335,21 +9365,21 @@ if(connectBtn){
       $("pingRoomLine").textContent = `coin: ${r.name}  $${r.ticker}`;
       updatePingAllocationHint(rid);
       updatePingFeePreview();
+      updateActionModalCopy(r);
       openModal($("pingBack"));
     }
     function openUnpingModal(roomId){
-      if(!connectedWallet) return showToast("connect wallet first.");
-      const rid = roomId || activeRoomId;
-      const r = roomById(rid);
-      if(!r) return;
-      r.onchain = state.onchain?.[rid] || r.onchain || {};
-      if(r.state === "BONDED" || isPumpfunPostSpawnRoom(r)) return alert("Trading for launched coins is handled outside Pingy.");
-      modalRoomId = rid;
-      updateActionModalCopy(r);
-      $("unpingRoomLine").textContent = `coin: ${r.name}  $${r.ticker}`;
-      openModal($("unpingBack"));
+      return openPingModal(roomId, "unping");
     }
-    $("pingBtn").addEventListener("click", () => openPingModal(activeRoomId));
+    $("roomPingDockBtn")?.addEventListener("click", () => openPingModal(activeRoomId));
+    $("pingModePingBtn")?.addEventListener("click", () => {
+      setPingActionMode("ping");
+      updateActionModalCopy(roomById(modalRoomId || activeRoomId));
+    });
+    $("pingModeUnpingBtn")?.addEventListener("click", () => {
+      setPingActionMode("unping");
+      updateActionModalCopy(roomById(modalRoomId || activeRoomId));
+    });
     const claimSpawnBtn = $("claimSpawnBtn");
     if(claimSpawnBtn){
       claimSpawnBtn.addEventListener("click", async () => {
@@ -9381,7 +9411,7 @@ if(connectBtn){
       updatePingFeePreview();
       if(r && r.state !== "SPAWNING") input.value = "";
     });
-    $("unpingBtn").addEventListener("click", () => openUnpingModal(activeRoomId));
+
     const openPumpfunBtn = $("openPumpfunBtn");
     if(openPumpfunBtn) openPumpfunBtn.addEventListener("click", () => openExternalLaunchForRoom(activeRoomId));
     const refreshExternalStatusBtn = $("refreshExternalStatusBtn");
@@ -9747,7 +9777,7 @@ if(connectBtn){
         return alert("Trading for launched coins is handled outside Pingy.");
       }
 
-      closeModal($("unpingBack"));
+      closeModal($("pingBack"));
       await fetchRoomOnchainSnapshot(rid);
       await fetchConnectedWalletDepositSnapshot();
       if(connectedWallet) await fetchWalletBalancesSnapshot(connectedWallet);

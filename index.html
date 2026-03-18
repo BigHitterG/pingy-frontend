@@ -375,8 +375,6 @@
 
 
       <div class="row" style="gap:8px; margin-bottom:8px;">
-        <button class="btn" id="pingBtn">ping</button>
-        <button class="btn subtle" id="unpingBtn">unping</button>
         <div class="muted" id="meLine">—</div>
       </div>
 
@@ -508,7 +506,12 @@
       <div class="col" style="gap:8px;">
         <div class="muted" id="pingRoomLine">—</div>
 
-        <div class="panel">
+        <div class="row pingActionTabs" role="tablist" aria-label="ping actions">
+          <button class="btn pingActionTab active" id="pingModePingBtn" type="button" data-ping-action="ping" aria-pressed="true">ping</button>
+          <button class="btn subtle pingActionTab" id="pingModeUnpingBtn" type="button" data-ping-action="unping" aria-pressed="false">unping</button>
+        </div>
+
+        <div class="panel" id="pingPanel">
           <div class="h">amount</div>
           <div class="row" style="margin-top:8px;">
             <div class="muted" id="pingAmountUnit" style="min-width:120px;">SOL</div>
@@ -520,26 +523,7 @@
           <div class="muted" id="pingAllocationHint" style="margin-top:8px;">This contributes up to 0.000 SOL to the launch vault.</div>
         </div>
 
-        <div class="row" style="justify-content:flex-end;">
-          <button class="btn subtle" id="pingWalletSmokeTest">wallet smoke test (1 lamport)</button>
-          <button class="btn" id="pingConfirm">ping</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- UNPING MODAL -->
-  <div class="modalBack" id="unpingBack" role="dialog" aria-modal="true">
-    <div class="modal">
-      <div class="modalHead">
-        <div class="modalTitle" id="unpingModalTitle">unping</div>
-        <button class="btn subtle" id="unpingClose">close</button>
-      </div>
-
-      <div class="col" style="gap:8px;">
-        <div class="muted" id="unpingRoomLine">—</div>
-
-        <div class="panel">
+        <div class="panel" id="unpingPanel" style="display:none;">
           <div class="h">amount</div>
           <div class="row" style="margin-top:8px;">
             <div class="muted" id="unpingAmountUnit" style="min-width:120px;">SOL</div>
@@ -548,11 +532,17 @@
           <div class="muted" id="unpingModalHelp" style="margin-top:8px;">Before spawn completes, you can unping to withdraw your contribution.</div>
         </div>
 
-        <div class="row" style="justify-content:flex-end;">
-          <button class="btn" id="unpingConfirm">unping (withdraw contribution)</button>
+        <div class="row pingModalActions" style="justify-content:flex-end;">
+          <button class="btn subtle" id="pingWalletSmokeTest">wallet smoke test (1 lamport)</button>
+          <button class="btn" id="pingConfirm">ping</button>
+          <button class="btn" id="unpingConfirm" style="display:none;">unping (withdraw contribution)</button>
         </div>
       </div>
     </div>
+  </div>
+
+  <div class="roomActionDock" id="roomActionDock" style="display:none;">
+    <button class="btn roomActionDockBtn" id="roomPingDockBtn" type="button">ping it</button>
   </div>
 
   <!-- SHARE MODAL -->
