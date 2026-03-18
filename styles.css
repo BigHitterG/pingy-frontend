@@ -282,6 +282,7 @@
     .chatRoomChat{
       flex:1 1 auto;
       min-height:0;
+      height:100%;
       padding:18px 14px;
       border:0;
       background:transparent;
@@ -304,7 +305,7 @@
     .chat{
       border:1px solid var(--line);
       padding:8px;
-      height:36vh;
+      min-height:36vh;
       overflow:auto;
       background:
         linear-gradient(180deg, rgba(255,255,255,0.96), rgba(255,247,252,0.98)),
@@ -469,7 +470,7 @@
     .modalTitle{font-weight:700}
 
     #chatView{display:none}
-    #chatView.on{display:flex;flex-direction:column;height:calc(100vh - 108px);min-height:calc(100vh - 108px)}
+    #chatView.on{display:flex;flex-direction:column;height:calc(100vh - 108px);height:calc(100dvh - 108px);min-height:calc(100vh - 108px);min-height:calc(100dvh - 108px)}
     .chatRoomHeader{
       position:sticky;
       top:10px;
