@@ -8384,6 +8384,11 @@ if(connectBtn){
 
     function renderChat(roomId){
       const box = $("chatBox");
+      if(!box) return;
+      const prevScrollTop = box.scrollTop;
+      const prevScrollHeight = box.scrollHeight;
+      const prevClientHeight = box.clientHeight;
+      const wasNearBottom = (prevScrollHeight - (prevScrollTop + prevClientHeight)) <= 32;
       box.innerHTML = "";
       const msgs = state.chat[roomId] || [];
       const r = roomById(roomId);
@@ -8505,7 +8510,12 @@ if(connectBtn){
         box.appendChild(row);
       });
 
-      box.scrollTop = box.scrollHeight;
+      if(wasNearBottom){
+        box.scrollTop = box.scrollHeight;
+      } else {
+        const scrollDelta = box.scrollHeight - prevScrollHeight;
+        box.scrollTop = Math.max(0, prevScrollTop + scrollDelta);
+      }
     }
 
     function canPost(r){

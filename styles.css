@@ -8,7 +8,7 @@
     html,body{height:100%}
     body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--mono);font-size:13px;line-height:1.25}
     .wrap{max-width:980px;margin:0 auto;padding:10px 12px}
-    .chatWrap{max-width:1200px}
+    .chatWrap{max-width:980px}
     .topbar{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);padding-bottom:8px;margin-bottom:10px;gap:10px}
     .brand{font-weight:700;letter-spacing:.2px}
     .brandLink{display:inline-flex;align-items:center;gap:8px;color:var(--fg);text-decoration:none}
@@ -265,8 +265,8 @@
     }
     .chatRoomShell{display:flex;flex-direction:column;gap:0;position:relative;overflow:visible;border:0;padding:0}
     .chatRoomChat{
-      height:calc(100vh - 208px);
-      min-height:440px;
+      height:calc(100vh - 176px);
+      min-height:520px;
       padding:18px 14px 124px;
       border:0;
       background:transparent;
@@ -444,7 +444,7 @@
     .modalTitle{font-weight:700}
 
     #chatView{display:none}
-    #chatView.on{display:block}
+    #chatView.on{display:flex;flex-direction:column;min-height:calc(100vh - 108px)}
     .chatRoomHeader{
       position:sticky;
       top:10px;
