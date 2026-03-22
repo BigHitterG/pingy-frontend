@@ -20,6 +20,11 @@ import {
   TransactionInstruction,
   TOKEN_PROGRAM_ID,
 } from "./lib/solana.js";
+import {
+  listRoomsMetadata as listSupabaseRoomsMetadata,
+  insertRoomMetadata as insertSupabaseRoomMetadata,
+  deleteRoomMetadataByRowId as deleteSupabaseRoomMetadataByRowId,
+} from "./lib/supabase.js";
 
 function surfaceFatalMessage(prefix, err){
   const message = String(err?.message || err || "unknown error");
@@ -3105,6 +3110,111 @@ const $ = (id) => document.getElementById(id);
       maxWalletSharePctMax: 20,
     };
 
+    function defaultPersistedRoomLaunchConfig(){
+      const preset = PRESETS.fast;
+      const spawnTargetSol = Number(preset.targetSol || 0);
+      const maxWalletShareBps = Number(preset.maxWalletShareBps || 0);
+      return {
+        launchMode: "spawn",
+        launchPreset: preset.key,
+        minApprovedWallets: Number(preset.minWallets || 0),
+        spawnTargetSol,
+        spawnTargetLamports: Math.round(spawnTargetSol * LAMPORTS_PER_SOL),
+        maxWalletShareBps,
+        maxWalletSharePct: maxWalletShareBps / 100,
+        capPerWalletSol: spawnTargetSol * (maxWalletShareBps / 10000),
+      };
+    }
+
+    function normalizeSupabaseRoomRowId(rowId){
+      const numericId = Number(rowId);
+      if(!Number.isFinite(numericId) || numericId <= 0) return "";
+      return String(Math.trunc(numericId));
+    }
+
+    function normalizeSupabasePublicRoomId(publicId){
+      // `public_id` is now the canonical app-facing room identity for routes, lookup,
+      // and any on-chain thread ids created after the Supabase row reservation step.
+      const normalizedPublicId = String(publicId || "").trim();
+      return normalizedPublicId || "";
+    }
+
+    function applyPersistedRoomMetadata(room, row = {}){
+      if(!room || !row || typeof row !== "object") return room;
+      const normalizedRowId = normalizeSupabaseRoomRowId(row.id);
+      if(normalizedRowId) room._supabaseRowId = normalizedRowId;
+      const normalizedPublicId = normalizeSupabasePublicRoomId(row.public_id);
+      if(normalizedPublicId) room.public_id = normalizedPublicId;
+      if(typeof row.description === "string") room.desc = row.description;
+      if(typeof row.image_path === "string" && row.image_path.trim()) room.image = row.image_path.trim();
+      if(typeof row.banner_path === "string" && row.banner_path.trim()) room.banner = row.banner_path.trim();
+      if(typeof row.created_at === "string" && row.created_at.trim()) room.created_at = row.created_at.trim();
+      if(typeof row.is_test === "boolean") room.is_test = row.is_test;
+      return room;
+    }
+
+    function mapSupabaseRoomRowToRoom(row){
+      if(!row || typeof row !== "object") return null;
+      const roomId = normalizeSupabasePublicRoomId(row.public_id);
+      if(!roomId) return null;
+      const room = mkRoom(
+        roomId,
+        String(row.name || "").trim() || "untitled",
+        String(row.ticker || "").trim().toUpperCase() || "PINGY",
+        String(row.description || "").trim(),
+        defaultPersistedRoomLaunchConfig(),
+        String(row.creator_wallet || "").trim() || DEFAULT_MOCK_CREATOR_WALLET,
+      );
+      applyPersistedRoomMetadata(room, row);
+      return room;
+    }
+
+    async function loadRoomsFromSupabase(){
+      const result = await listSupabaseRoomsMetadata();
+      if(!result?.ok){
+        if(result?.skipped) console.info("[pingy] supabase rooms disabled; keeping local fallback rooms");
+        else console.warn("[pingy] failed loading Supabase rooms; keeping local fallback rooms", result?.error || "unknown error");
+        return [];
+      }
+      return Array.isArray(result.data)
+        ? result.data.map(mapSupabaseRoomRowToRoom).filter(Boolean)
+        : [];
+    }
+
+    async function hydrateRoomsFromSupabase(){
+      // Keep the existing mock/local rooms as a transition fallback. Replace them only
+      // when Supabase returns actual room rows so the UI still works without config.
+      const persistedRooms = await loadRoomsFromSupabase();
+      if(persistedRooms.length <= 0) return false;
+      state.rooms = persistedRooms;
+      return true;
+    }
+
+    async function reserveSupabaseRoomMetadata(payload){
+      const result = await insertSupabaseRoomMetadata(payload);
+      if(!result?.ok){
+        if(!result?.skipped) console.warn("[pingy] failed reserving Supabase room row", result?.error || "unknown error");
+        return null;
+      }
+      const row = result.data && typeof result.data === "object" ? result.data : null;
+      const rowId = normalizeSupabaseRoomRowId(row?.id);
+      const runtimeRoomId = normalizeSupabasePublicRoomId(row?.public_id);
+      if(!row || !rowId || !runtimeRoomId){
+        console.warn("[pingy] Supabase room insert returned an unusable public_id; falling back to local room id");
+        return null;
+      }
+      return { row, rowId, runtimeRoomId };
+    }
+
+    async function cleanupReservedSupabaseRoom(reservation){
+      const rowId = normalizeSupabaseRoomRowId(reservation?.rowId || reservation?.row?.id);
+      if(!rowId) return;
+      const result = await deleteSupabaseRoomMetadataByRowId(rowId);
+      if(!result?.ok && !result?.skipped){
+        console.warn("[pingy] failed cleaning up Supabase room row after create failure", result?.error || "unknown error");
+      }
+    }
+
     function getCreateLaunchMode(){
       return String($("newLaunchMode")?.value || "spawn").toLowerCase() === "instant" ? "instant" : "spawn";
     }
@@ -5942,6 +6052,7 @@ function encodeU64Arg(v){
       updateOnchainBanner();
 
       loadProfileLocal();
+      await hydrateRoomsFromSupabase();
 
     async function providerConnect(provider, opts){
       if(!provider || typeof provider.connect !== "function"){
@@ -7498,7 +7609,18 @@ if(connectBtn){
           return alert(`commit exceeds ${roomLaunchLabel({ launch_mode: "spawn", launch_preset: launchConfig.launchPreset })} cap (${(presetCapLamports / LAMPORTS_PER_SOL).toFixed(3)} SOL max committed).`);
         }
       }
-      const id = "r" + Math.random().toString(16).slice(2,6);
+      const roomMetadataPayload = {
+        name,
+        ticker,
+        creator_wallet: connectedWallet,
+        description: desc,
+        // TODO: move image_path/banner_path to Supabase Storage once media upload is migrated.
+        image_path: newImgData || "",
+        banner_path: newBannerData || "",
+        is_test: DEV_SIMULATION,
+      };
+      const reservedSupabaseRoom = await reserveSupabaseRoomMetadata(roomMetadataPayload);
+      const id = reservedSupabaseRoom?.runtimeRoomId || ("r" + Math.random().toString(16).slice(2,6));
       let creatorDepositBackingLamports = 0;
       let creatorEscrowContributionLamports = commitLamports;
       if(launchMode === "spawn" && commitLamports > 0){
@@ -7538,6 +7660,7 @@ if(connectBtn){
         if(DEBUG_WALLET_SMOKE_BEFORE_SPAWN_TX && launchMode === "spawn"){
           const smokeRes = await runWalletSmokeTest();
           if(!smokeRes?.ok && isInvalidWalletArgumentsError(smokeRes?.error)){
+            await cleanupReservedSupabaseRoom(reservedSupabaseRoom);
             showToast("Wallet transport failed before spawn tx.");
             return;
           }
@@ -7612,6 +7735,7 @@ if(connectBtn){
             }
           } catch(e){
             console.error("[ping-debug] funding tx failed", { roomId: id, commitLamports, error: String(e?.message || e) });
+            await cleanupReservedSupabaseRoom(reservedSupabaseRoom);
             if(isWalletTxRejected(e)) showToast("Create cancelled — no coin or commit was submitted.");
             else if(commitLamports > 0) reportTxError(e, includeLegacyNativeAssets ? "initialize_thread_core + initialize_thread_assets + ping_deposit failed during create" : "initialize_thread_core + ping_deposit failed during create");
             else reportTxError(e, includeLegacyNativeAssets ? "initialize_thread_core + initialize_thread_assets failed during create" : "initialize_thread_core failed during create");
@@ -7629,6 +7753,7 @@ if(connectBtn){
               await buyTx(id, commitLamports);
             }
           } catch (e){
+            await cleanupReservedSupabaseRoom(reservedSupabaseRoom);
             if(launchMode === "instant" && commitLamports > 0){
               reportTxError(e, "initialize_thread_core + initialize_thread_assets + instant buy transaction failed");
             } else {
@@ -7642,10 +7767,12 @@ if(connectBtn){
       const r = mkRoom(id, name, ticker, desc, launchConfig, connectedWallet);
       const creatorWallet = String(connectedWallet || "").trim();
       if(!creatorWallet){
+        await cleanupReservedSupabaseRoom(reservedSupabaseRoom);
         showToast("connect wallet first.");
         return;
       }
       normalizeLaunchRoom(r, { launchMode, creatorCommitSol: commit });
+      if(reservedSupabaseRoom?.row) applyPersistedRoomMetadata(r, reservedSupabaseRoom.row);
       r.creator_ping_fee_lamports = creatorFeeMath.feeLamports;
       r.creator_ping_fee_sol = creatorFeeMath.feeLamports / LAMPORTS_PER_SOL;
       r.creator_ping_input_lamports = creatorTotalSpendLamports;
@@ -7659,6 +7786,7 @@ if(connectBtn){
       r.socials = { x: xUrl, tg: tgUrl, web: webUrl };
       if(newImgData) r.image = newImgData;
       if(newBannerData) r.banner = newBannerData;
+      if(typeof r.is_test !== "boolean") r.is_test = DEV_SIMULATION;
       if(launchMode === "instant" && isNativeLaunchBackend()){
         r.token_address = mockTokenAddress(r.ticker || r.name || "PINGY");
         if(!shouldUseOnchain() && commit > 0){
