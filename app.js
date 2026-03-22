@@ -6006,7 +6006,6 @@ function encodeU64Arg(v){
       clearWalletDerivedState(prevWallet);
       clearWalletScopedCaches();
       refreshWalletViews();
-      updateEarningsUI();
       console.log("[wallet-sync] cleared previous wallet state", { from: prevWallet, to: null });
     }
 
@@ -6027,7 +6026,6 @@ function encodeU64Arg(v){
       await refreshRoomFromChain();
       console.log("[wallet-sync] refreshed balances for new wallet", { wallet: normalizedNextWallet });
       refreshWalletViews();
-      updateEarningsUI();
       console.log("[wallet-sync] rerender complete", { wallet: normalizedNextWallet, activeRoomId: activeRoomId || null });
       if(!opts.silent) showToast("wallet switched.");
     }
