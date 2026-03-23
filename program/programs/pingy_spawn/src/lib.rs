@@ -1,4 +1,5 @@
 use anchor_lang::prelude::*;
+use anchor_lang::solana_program::hash::hashv;
 use anchor_lang::system_program;
 use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token::{self, Mint, MintTo, Token, TokenAccount, Transfer};
@@ -23,6 +24,10 @@ pub const MAX_WALLET_SHARE_BPS_MIN: u16 = 200;
 pub const MAX_WALLET_SHARE_BPS_MAX: u16 = 2000;
 pub const LAUNCH_MODE_SPAWN: u8 = 0;
 pub const LAUNCH_MODE_INSTANT: u8 = 1;
+
+fn room_seed_bytes(thread_id: &str) -> [u8; 32] {
+    hashv(&[thread_id.as_bytes()]).to_bytes()
+}
 
 #[program]
 pub mod pingy_spawn {
@@ -474,9 +479,10 @@ pub mod pingy_spawn {
             .ok_or(PingyError::AccountingUnderflow)?;
         require!(claimable > 0, PingyError::NothingToClaim);
 
+        let room_seed = room_seed_bytes(&thread_id);
         let signer_seeds: &[&[&[u8]]] = &[&[
             b"curve_authority",
-            thread_id.as_bytes(),
+            room_seed.as_ref(),
             &[ctx.accounts.curve.curve_authority_bump],
         ]];
 
@@ -556,9 +562,10 @@ pub mod pingy_spawn {
             });
         }
 
+        let room_seed = room_seed_bytes(&thread_id);
         let signer_seeds: &[&[&[u8]]] = &[&[
             b"curve_authority",
-            thread_id.as_bytes(),
+            room_seed.as_ref(),
             &[ctx.accounts.curve.curve_authority_bump],
         ]];
 
@@ -837,9 +844,10 @@ fn mint_total_supply_to_curve_vault<'info>(
         return Ok(());
     }
 
+    let room_seed = room_seed_bytes(thread_id);
     let signer_seeds: &[&[&[u8]]] = &[&[
         b"curve_authority",
-        thread_id.as_bytes(),
+        room_seed.as_ref(),
         &[curve.curve_authority_bump],
     ]];
 
@@ -1049,7 +1057,7 @@ pub struct InitializeThreadCore<'info> {
         init,
         payer = admin,
         space = 8 + Thread::LEN,
-        seeds = [b"thread", thread_id.as_bytes()],
+        seeds = [b"thread", room_seed_bytes(&thread_id).as_ref()],
         bump
     )]
     pub thread: Account<'info, Thread>,
@@ -1057,12 +1065,12 @@ pub struct InitializeThreadCore<'info> {
         init,
         payer = admin,
         space = 8 + Curve::LEN,
-        seeds = [b"curve", thread_id.as_bytes()],
+        seeds = [b"curve", room_seed_bytes(&thread_id).as_ref()],
         bump
     )]
     pub curve: Account<'info, Curve>,
     #[account(
-        seeds = [b"curve_authority", thread_id.as_bytes()],
+        seeds = [b"curve_authority", room_seed_bytes(&thread_id).as_ref()],
         bump
     )]
     /// CHECK: PDA used as mint authority and token vault authority.
@@ -1071,7 +1079,7 @@ pub struct InitializeThreadCore<'info> {
         init,
         payer = admin,
         space = 8 + SpawnPool::LEN,
-        seeds = [b"spawn_pool", thread_id.as_bytes()],
+        seeds = [b"spawn_pool", room_seed_bytes(&thread_id).as_ref()],
         bump
     )]
     pub spawn_pool: Account<'info, SpawnPool>,
@@ -1079,7 +1087,7 @@ pub struct InitializeThreadCore<'info> {
         init,
         payer = admin,
         space = 8 + ThreadEscrow::LEN,
-        seeds = [b"escrow", thread_id.as_bytes()],
+        seeds = [b"escrow", room_seed_bytes(&thread_id).as_ref()],
         bump
     )]
     pub thread_escrow: Account<'info, ThreadEscrow>,
@@ -1093,18 +1101,18 @@ pub struct InitializeThreadAssets<'info> {
     pub admin: Signer<'info>,
     #[account(
         mut,
-        seeds = [b"thread", thread_id.as_bytes()],
+        seeds = [b"thread", room_seed_bytes(&thread_id).as_ref()],
         bump
     )]
     pub thread: Account<'info, Thread>,
     #[account(
         mut,
-        seeds = [b"curve", thread_id.as_bytes()],
+        seeds = [b"curve", room_seed_bytes(&thread_id).as_ref()],
         bump
     )]
     pub curve: Account<'info, Curve>,
     #[account(
-        seeds = [b"curve_authority", thread_id.as_bytes()],
+        seeds = [b"curve_authority", room_seed_bytes(&thread_id).as_ref()],
         bump
     )]
     /// CHECK: PDA used as mint authority and token vault authority.
@@ -1112,7 +1120,7 @@ pub struct InitializeThreadAssets<'info> {
     #[account(
         init_if_needed,
         payer = admin,
-        seeds = [b"mint", thread_id.as_bytes()],
+        seeds = [b"mint", room_seed_bytes(&thread_id).as_ref()],
         bump,
         mint::decimals = TOKEN_DECIMALS,
         mint::authority = curve_authority,
@@ -1122,7 +1130,7 @@ pub struct InitializeThreadAssets<'info> {
     #[account(
         init_if_needed,
         payer = admin,
-        seeds = [b"curve_token_vault", thread_id.as_bytes()],
+        seeds = [b"curve_token_vault", room_seed_bytes(&thread_id).as_ref()],
         bump,
         token::mint = mint,
         token::authority = curve_authority
@@ -1147,7 +1155,7 @@ pub struct PingDeposit<'info> {
     pub user: Signer<'info>,
     #[account(
         mut,
-        seeds = [b"thread", thread_id.as_bytes()],
+        seeds = [b"thread", room_seed_bytes(&thread_id).as_ref()],
         bump
     )]
     pub thread: Account<'info, Thread>,
@@ -1155,13 +1163,13 @@ pub struct PingDeposit<'info> {
         init_if_needed,
         payer = user,
         space = 8 + Deposit::SIZE,
-        seeds = [b"deposit", thread_id.as_bytes(), user.key().as_ref()],
+        seeds = [b"deposit", room_seed_bytes(&thread_id).as_ref(), user.key().as_ref()],
         bump
     )]
     pub deposit: Account<'info, Deposit>,
     #[account(
         mut,
-        seeds = [b"escrow", thread_id.as_bytes()],
+        seeds = [b"escrow", room_seed_bytes(&thread_id).as_ref()],
         bump,
         constraint = thread_escrow.thread_id == thread_id @ PingyError::ThreadMismatch
     )]
@@ -1176,13 +1184,13 @@ pub struct ApproveUser<'info> {
     pub admin: Signer<'info>,
     #[account(
         mut,
-        seeds = [b"thread", thread_id.as_bytes()],
+        seeds = [b"thread", room_seed_bytes(&thread_id).as_ref()],
         bump
     )]
     pub thread: Account<'info, Thread>,
     #[account(
         mut,
-        seeds = [b"deposit", thread_id.as_bytes(), user_pubkey.as_ref()],
+        seeds = [b"deposit", room_seed_bytes(&thread_id).as_ref(), user_pubkey.as_ref()],
         bump
     )]
     pub deposit: Account<'info, Deposit>,
@@ -1195,13 +1203,13 @@ pub struct RevokeApprovedUser<'info> {
     pub admin: Signer<'info>,
     #[account(
         mut,
-        seeds = [b"thread", thread_id.as_bytes()],
+        seeds = [b"thread", room_seed_bytes(&thread_id).as_ref()],
         bump
     )]
     pub thread: Account<'info, Thread>,
     #[account(
         mut,
-        seeds = [b"deposit", thread_id.as_bytes(), user_pubkey.as_ref()],
+        seeds = [b"deposit", room_seed_bytes(&thread_id).as_ref(), user_pubkey.as_ref()],
         bump
     )]
     pub deposit: Account<'info, Deposit>,
@@ -1214,20 +1222,20 @@ pub struct UserWithdraw<'info> {
     pub user: Signer<'info>,
     #[account(
         mut,
-        seeds = [b"thread", thread_id.as_bytes()],
+        seeds = [b"thread", room_seed_bytes(&thread_id).as_ref()],
         bump
     )]
     pub thread: Account<'info, Thread>,
     #[account(
         mut,
-        seeds = [b"deposit", thread_id.as_bytes(), user.key().as_ref()],
+        seeds = [b"deposit", room_seed_bytes(&thread_id).as_ref(), user.key().as_ref()],
         bump,
         close = user
     )]
     pub deposit: Account<'info, Deposit>,
     #[account(
         mut,
-        seeds = [b"escrow", thread_id.as_bytes()],
+        seeds = [b"escrow", room_seed_bytes(&thread_id).as_ref()],
         bump,
         constraint = thread_escrow.thread_id == thread_id @ PingyError::ThreadMismatch
     )]
@@ -1241,19 +1249,19 @@ pub struct ExecuteSpawn<'info> {
     pub admin: Signer<'info>,
     #[account(
         mut,
-        seeds = [b"thread", thread_id.as_bytes()],
+        seeds = [b"thread", room_seed_bytes(&thread_id).as_ref()],
         bump
     )]
     pub thread: Account<'info, Thread>,
     #[account(
         mut,
-        seeds = [b"curve", thread_id.as_bytes()],
+        seeds = [b"curve", room_seed_bytes(&thread_id).as_ref()],
         bump,
         constraint = curve.thread_id == thread_id @ PingyError::ThreadMismatch
     )]
     pub curve: Account<'info, Curve>,
     #[account(
-        seeds = [b"curve_authority", thread_id.as_bytes()],
+        seeds = [b"curve_authority", room_seed_bytes(&thread_id).as_ref()],
         bump = curve.curve_authority_bump
     )]
     /// CHECK: PDA used as mint authority and token vault authority.
@@ -1262,7 +1270,7 @@ pub struct ExecuteSpawn<'info> {
     pub mint: Account<'info, Mint>,
     #[account(
         mut,
-        seeds = [b"curve_token_vault", thread_id.as_bytes()],
+        seeds = [b"curve_token_vault", room_seed_bytes(&thread_id).as_ref()],
         bump,
         address = curve.curve_token_vault,
         token::mint = mint,
@@ -1271,14 +1279,14 @@ pub struct ExecuteSpawn<'info> {
     pub curve_token_vault: Account<'info, TokenAccount>,
     #[account(
         mut,
-        seeds = [b"escrow", thread_id.as_bytes()],
+        seeds = [b"escrow", room_seed_bytes(&thread_id).as_ref()],
         bump,
         constraint = thread_escrow.thread_id == thread_id @ PingyError::ThreadMismatch
     )]
     pub thread_escrow: Account<'info, ThreadEscrow>,
     #[account(
         mut,
-        seeds = [b"spawn_pool", thread_id.as_bytes()],
+        seeds = [b"spawn_pool", room_seed_bytes(&thread_id).as_ref()],
         bump
     )]
     pub spawn_pool: Account<'info, SpawnPool>,
@@ -1298,24 +1306,24 @@ pub struct ClaimSpawnTokens<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
     #[account(
-        seeds = [b"thread", thread_id.as_bytes()],
+        seeds = [b"thread", room_seed_bytes(&thread_id).as_ref()],
         bump
     )]
     pub thread: Account<'info, Thread>,
     #[account(
-        seeds = [b"curve", thread_id.as_bytes()],
+        seeds = [b"curve", room_seed_bytes(&thread_id).as_ref()],
         bump,
         constraint = curve.thread_id == thread_id @ PingyError::ThreadMismatch
     )]
     pub curve: Account<'info, Curve>,
     #[account(
         mut,
-        seeds = [b"deposit", thread_id.as_bytes(), user.key().as_ref()],
+        seeds = [b"deposit", room_seed_bytes(&thread_id).as_ref(), user.key().as_ref()],
         bump
     )]
     pub deposit: Account<'info, Deposit>,
     #[account(
-        seeds = [b"curve_authority", thread_id.as_bytes()],
+        seeds = [b"curve_authority", room_seed_bytes(&thread_id).as_ref()],
         bump = curve.curve_authority_bump
     )]
     /// CHECK: PDA used as mint authority and token vault authority.
@@ -1324,7 +1332,7 @@ pub struct ClaimSpawnTokens<'info> {
     pub mint: Account<'info, Mint>,
     #[account(
         mut,
-        seeds = [b"curve_token_vault", thread_id.as_bytes()],
+        seeds = [b"curve_token_vault", room_seed_bytes(&thread_id).as_ref()],
         bump,
         address = curve.curve_token_vault,
         token::mint = mint,
@@ -1349,19 +1357,19 @@ pub struct Buy<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
     #[account(
-        seeds = [b"thread", thread_id.as_bytes()],
+        seeds = [b"thread", room_seed_bytes(&thread_id).as_ref()],
         bump
     )]
     pub thread: Account<'info, Thread>,
     #[account(
         mut,
-        seeds = [b"curve", thread_id.as_bytes()],
+        seeds = [b"curve", room_seed_bytes(&thread_id).as_ref()],
         bump,
         constraint = curve.thread_id == thread_id @ PingyError::ThreadMismatch
     )]
     pub curve: Account<'info, Curve>,
     #[account(
-        seeds = [b"curve_authority", thread_id.as_bytes()],
+        seeds = [b"curve_authority", room_seed_bytes(&thread_id).as_ref()],
         bump = curve.curve_authority_bump
     )]
     /// CHECK: PDA used as token vault authority.
@@ -1370,7 +1378,7 @@ pub struct Buy<'info> {
     pub mint: Account<'info, Mint>,
     #[account(
         mut,
-        seeds = [b"curve_token_vault", thread_id.as_bytes()],
+        seeds = [b"curve_token_vault", room_seed_bytes(&thread_id).as_ref()],
         bump,
         address = curve.curve_token_vault,
         token::mint = mint,
@@ -1386,7 +1394,7 @@ pub struct Buy<'info> {
     pub user_token_account: Account<'info, TokenAccount>,
     #[account(
         mut,
-        seeds = [b"spawn_pool", thread_id.as_bytes()],
+        seeds = [b"spawn_pool", room_seed_bytes(&thread_id).as_ref()],
         bump,
         constraint = spawn_pool.thread_id == thread_id @ PingyError::ThreadMismatch
     )]
@@ -1408,19 +1416,19 @@ pub struct Sell<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
     #[account(
-        seeds = [b"thread", thread_id.as_bytes()],
+        seeds = [b"thread", room_seed_bytes(&thread_id).as_ref()],
         bump
     )]
     pub thread: Account<'info, Thread>,
     #[account(
         mut,
-        seeds = [b"curve", thread_id.as_bytes()],
+        seeds = [b"curve", room_seed_bytes(&thread_id).as_ref()],
         bump,
         constraint = curve.thread_id == thread_id @ PingyError::ThreadMismatch
     )]
     pub curve: Account<'info, Curve>,
     #[account(
-        seeds = [b"curve_authority", thread_id.as_bytes()],
+        seeds = [b"curve_authority", room_seed_bytes(&thread_id).as_ref()],
         bump = curve.curve_authority_bump
     )]
     /// CHECK: PDA used as token vault authority.
@@ -1429,7 +1437,7 @@ pub struct Sell<'info> {
     pub mint: Account<'info, Mint>,
     #[account(
         mut,
-        seeds = [b"curve_token_vault", thread_id.as_bytes()],
+        seeds = [b"curve_token_vault", room_seed_bytes(&thread_id).as_ref()],
         bump,
         address = curve.curve_token_vault,
         token::mint = mint,
@@ -1444,7 +1452,7 @@ pub struct Sell<'info> {
     pub user_token_account: Account<'info, TokenAccount>,
     #[account(
         mut,
-        seeds = [b"spawn_pool", thread_id.as_bytes()],
+        seeds = [b"spawn_pool", room_seed_bytes(&thread_id).as_ref()],
         bump,
         constraint = spawn_pool.thread_id == thread_id @ PingyError::ThreadMismatch
     )]
