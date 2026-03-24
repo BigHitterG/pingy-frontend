@@ -24,6 +24,9 @@ pub const MAX_WALLET_SHARE_BPS_MIN: u16 = 200;
 pub const MAX_WALLET_SHARE_BPS_MAX: u16 = 2000;
 pub const LAUNCH_MODE_SPAWN: u8 = 0;
 pub const LAUNCH_MODE_INSTANT: u8 = 1;
+pub const V2_ACCOUNT_VERSION: u8 = 1;
+pub const V2_LAUNCH_BACKEND_NATIVE: u8 = 0;
+pub const V2_LAUNCH_BACKEND_EXTERNAL: u8 = 1;
 
 fn room_seed_bytes(thread_id: &str) -> [u8; 32] {
     hashv(&[thread_id.as_bytes()]).to_bytes()
@@ -122,6 +125,7 @@ pub mod pingy_spawn {
 
         if thread.launch_mode == LAUNCH_MODE_INSTANT {
             mint_total_supply_to_curve_vault(
+                b"curve_authority",
                 &thread_id,
                 &ctx.accounts.curve,
                 &ctx.accounts.curve_authority,
@@ -188,7 +192,10 @@ pub mod pingy_spawn {
             0
         };
         let net_contribution_lamports = amount_lamports.saturating_sub(deposit_rent_lamports);
-        require!(net_contribution_lamports > 0, PingyError::PingAmountTooSmall);
+        require!(
+            net_contribution_lamports > 0,
+            PingyError::PingAmountTooSmall
+        );
 
         if deposit_rent_lamports > 0 {
             transfer_from_thread_escrow_to_account(
@@ -378,6 +385,7 @@ pub mod pingy_spawn {
             .ok_or(PingyError::AccountingUnderflow)?;
 
         mint_total_supply_to_curve_vault(
+            b"curve_authority",
             &thread_id,
             &ctx.accounts.curve,
             &ctx.accounts.curve_authority,
@@ -669,6 +677,694 @@ pub mod pingy_spawn {
 
         Ok(())
     }
+
+    pub fn initialize_v2_global_state(
+        ctx: Context<InitializeV2GlobalState>,
+        default_ping_fee_recipient: Pubkey,
+    ) -> Result<()> {
+        let program_state = &mut ctx.accounts.program_state;
+        program_state.version = V2_ACCOUNT_VERSION;
+        program_state.admin_pubkey = ctx.accounts.admin.key();
+        program_state.shared_vault = ctx.accounts.shared_vault.key();
+        program_state.fee_vault = ctx.accounts.fee_vault.key();
+        program_state.default_ping_fee_recipient = default_ping_fee_recipient;
+        program_state.bump = ctx.bumps.program_state;
+
+        let shared_vault = &mut ctx.accounts.shared_vault;
+        shared_vault.version = V2_ACCOUNT_VERSION;
+        shared_vault.bump = ctx.bumps.shared_vault;
+        shared_vault.total_reserved_lamports = 0;
+
+        let fee_vault = &mut ctx.accounts.fee_vault;
+        fee_vault.version = V2_ACCOUNT_VERSION;
+        fee_vault.bump = ctx.bumps.fee_vault;
+        fee_vault.spawn_fee_lamports_accrued = 0;
+        fee_vault.trade_fee_lamports_accrued = 0;
+
+        Ok(())
+    }
+
+    pub fn create_room_ledger(
+        ctx: Context<CreateRoomLedger>,
+        room_id: String,
+        launch_backend: u8,
+        launch_mode: u8,
+        min_approved_wallets: u32,
+        spawn_target_lamports: u64,
+        max_wallet_share_bps: u16,
+    ) -> Result<()> {
+        require!(!room_id.is_empty(), PingyError::InvalidThreadId);
+        require!(
+            launch_backend == V2_LAUNCH_BACKEND_NATIVE
+                || launch_backend == V2_LAUNCH_BACKEND_EXTERNAL,
+            PingyError::InvalidLaunchBackend
+        );
+        require!(
+            launch_mode == LAUNCH_MODE_SPAWN || launch_mode == LAUNCH_MODE_INSTANT,
+            PingyError::InvalidLaunchMode
+        );
+
+        if launch_mode == LAUNCH_MODE_SPAWN {
+            require!(
+                (MIN_APPROVED_WALLETS_MIN..=MIN_APPROVED_WALLETS_MAX)
+                    .contains(&min_approved_wallets),
+                PingyError::MinApprovedWalletsOutOfBounds
+            );
+            require!(
+                (SPAWN_TARGET_MIN_LAMPORTS..=SPAWN_TARGET_MAX_LAMPORTS)
+                    .contains(&spawn_target_lamports),
+                PingyError::SpawnTargetOutOfBounds
+            );
+            require!(
+                (MAX_WALLET_SHARE_BPS_MIN..=MAX_WALLET_SHARE_BPS_MAX)
+                    .contains(&max_wallet_share_bps),
+                PingyError::MaxWalletShareOutOfBounds
+            );
+        }
+
+        let room_ledger = &mut ctx.accounts.room_ledger;
+        room_ledger.version = V2_ACCOUNT_VERSION;
+        room_ledger.bump = ctx.bumps.room_ledger;
+        room_ledger.room_id = room_id;
+        room_ledger.creator_pubkey = ctx.accounts.admin.key();
+        room_ledger.admin_pubkey = ctx.accounts.admin.key();
+        room_ledger.launch_backend = launch_backend;
+        room_ledger.launch_mode = launch_mode;
+        room_ledger.state = V2RoomState::Open;
+        room_ledger.min_approved_wallets = min_approved_wallets;
+        room_ledger.spawn_target_lamports = spawn_target_lamports;
+        room_ledger.max_wallet_share_bps = max_wallet_share_bps;
+        room_ledger.pending_count = 0;
+        room_ledger.approved_count = 0;
+        room_ledger.total_bundle_lamports = 0;
+        room_ledger.total_refundable_lamports = 0;
+        room_ledger.total_allocated_lamports = 0;
+        room_ledger.total_forwarded_lamports = 0;
+        room_ledger.total_refunded_lamports = 0;
+        room_ledger.spawn_finalized = false;
+        room_ledger.mint = Pubkey::default();
+        room_ledger.curve = Pubkey::default();
+        room_ledger.spawn_pool = Pubkey::default();
+        room_ledger.curve_token_vault = Pubkey::default();
+        room_ledger.external_settlement_mode = 0;
+        room_ledger.external_settlement_status = V2ExternalSettlementStatus::Pending;
+        room_ledger.total_external_units_settled = 0;
+
+        validate_room_ledger_accounting(room_ledger)?;
+
+        Ok(())
+    }
+
+    pub fn ping_deposit_shared(
+        ctx: Context<PingDepositShared>,
+        room_id: String,
+        amount_lamports: u64,
+    ) -> Result<()> {
+        require!(amount_lamports > 0, PingyError::InvalidAmount);
+
+        let room_ledger = &mut ctx.accounts.room_ledger;
+        require!(
+            room_ledger.room_id == room_id,
+            PingyError::RoomLedgerMismatch
+        );
+        require!(
+            room_ledger.state == V2RoomState::Open && !room_ledger.spawn_finalized,
+            PingyError::V2RoomNotOpen
+        );
+
+        let mut is_new_receipt = false;
+        {
+            let room_receipt = &mut ctx.accounts.room_receipt;
+            if room_receipt.room_id.is_empty() {
+                is_new_receipt = true;
+                room_receipt.version = V2_ACCOUNT_VERSION;
+                room_receipt.bump = ctx.bumps.room_receipt;
+                room_receipt.room_id = room_id.clone();
+                room_receipt.user_pubkey = ctx.accounts.user.key();
+                room_receipt.status = if ctx.accounts.user.key() == room_ledger.creator_pubkey {
+                    V2ReceiptStatus::Approved
+                } else {
+                    V2ReceiptStatus::Pending
+                };
+                room_receipt.bundle_lamports_total = 0;
+                room_receipt.refundable_lamports = 0;
+                room_receipt.allocated_lamports = 0;
+                room_receipt.forwarded_lamports = 0;
+                room_receipt.refunded_lamports = 0;
+                room_receipt.receipt_backing_lamports = 0;
+                room_receipt.native_token_allocation = 0;
+                room_receipt.native_tokens_claimed = 0;
+                room_receipt.external_allocation_units = 0;
+                room_receipt.external_units_claimed = 0;
+            }
+            require!(
+                room_receipt.user_pubkey == ctx.accounts.user.key(),
+                PingyError::UserMismatch
+            );
+        }
+
+        let transfer_ctx = CpiContext::new(
+            ctx.accounts.system_program.to_account_info(),
+            system_program::Transfer {
+                from: ctx.accounts.user.to_account_info(),
+                to: ctx.accounts.shared_vault.to_account_info(),
+            },
+        );
+        system_program::transfer(transfer_ctx, amount_lamports)?;
+
+        let receipt_rent_lamports = if is_new_receipt {
+            ctx.accounts.room_receipt.to_account_info().lamports()
+        } else {
+            0
+        };
+        let net_contribution_lamports = amount_lamports.saturating_sub(receipt_rent_lamports);
+        require!(
+            net_contribution_lamports > 0,
+            PingyError::PingAmountTooSmall
+        );
+
+        if receipt_rent_lamports > 0 {
+            transfer_from_program_owned_account_to_account(
+                &ctx.accounts.shared_vault.to_account_info(),
+                &ctx.accounts.user.to_account_info(),
+                receipt_rent_lamports,
+            )?;
+        }
+
+        {
+            let shared_vault = &mut ctx.accounts.shared_vault;
+            shared_vault.total_reserved_lamports = shared_vault
+                .total_reserved_lamports
+                .checked_add(net_contribution_lamports)
+                .ok_or(PingyError::AmountOverflow)?;
+        }
+
+        let previous_status;
+        {
+            let room_receipt = &mut ctx.accounts.room_receipt;
+            previous_status = room_receipt.status;
+            room_receipt.bundle_lamports_total = room_receipt
+                .bundle_lamports_total
+                .checked_add(net_contribution_lamports)
+                .ok_or(PingyError::AmountOverflow)?;
+            room_receipt.refundable_lamports = room_receipt
+                .refundable_lamports
+                .checked_add(net_contribution_lamports)
+                .ok_or(PingyError::AmountOverflow)?;
+            room_receipt.receipt_backing_lamports = room_receipt
+                .receipt_backing_lamports
+                .checked_add(receipt_rent_lamports)
+                .ok_or(PingyError::AmountOverflow)?;
+
+            if ctx.accounts.user.key() == room_ledger.creator_pubkey {
+                room_receipt.status = V2ReceiptStatus::Approved;
+            }
+
+            if room_receipt.status == V2ReceiptStatus::Approved {
+                allocate_for_room_receipt(room_ledger, room_receipt)?;
+            }
+        }
+
+        room_ledger.total_bundle_lamports = room_ledger
+            .total_bundle_lamports
+            .checked_add(net_contribution_lamports)
+            .ok_or(PingyError::AmountOverflow)?;
+        room_ledger.total_refundable_lamports = room_ledger
+            .total_refundable_lamports
+            .checked_add(net_contribution_lamports)
+            .ok_or(PingyError::AmountOverflow)?;
+
+        if is_new_receipt {
+            room_ledger.increment_v2_status_count(ctx.accounts.room_receipt.status)?;
+        } else {
+            room_ledger
+                .apply_v2_status_transition(previous_status, ctx.accounts.room_receipt.status)?;
+        }
+
+        validate_room_receipt_accounting(&ctx.accounts.room_receipt)?;
+        validate_room_ledger_accounting(room_ledger)?;
+
+        Ok(())
+    }
+
+    pub fn approve_receipt(
+        ctx: Context<ApproveReceipt>,
+        room_id: String,
+        user_pubkey: Pubkey,
+    ) -> Result<()> {
+        let room_ledger = &mut ctx.accounts.room_ledger;
+        require!(
+            room_ledger.room_id == room_id,
+            PingyError::RoomLedgerMismatch
+        );
+        require!(
+            room_ledger.state == V2RoomState::Open && !room_ledger.spawn_finalized,
+            PingyError::V2RoomNotOpen
+        );
+
+        let room_receipt = &mut ctx.accounts.room_receipt;
+        require!(
+            room_receipt.user_pubkey == user_pubkey,
+            PingyError::UserMismatch
+        );
+
+        let previous_status = room_receipt.status;
+        room_receipt.status = V2ReceiptStatus::Approved;
+        allocate_for_room_receipt(room_ledger, room_receipt)?;
+        room_ledger.apply_v2_status_transition(previous_status, room_receipt.status)?;
+
+        validate_room_receipt_accounting(room_receipt)?;
+        validate_room_ledger_accounting(room_ledger)?;
+
+        Ok(())
+    }
+
+    pub fn revoke_receipt(
+        ctx: Context<RevokeReceipt>,
+        room_id: String,
+        user_pubkey: Pubkey,
+    ) -> Result<()> {
+        let room_ledger = &mut ctx.accounts.room_ledger;
+        require!(
+            room_ledger.room_id == room_id,
+            PingyError::RoomLedgerMismatch
+        );
+        require!(
+            room_ledger.state == V2RoomState::Open && !room_ledger.spawn_finalized,
+            PingyError::V2RoomNotOpen
+        );
+
+        let room_receipt = &mut ctx.accounts.room_receipt;
+        require!(
+            room_receipt.user_pubkey == user_pubkey,
+            PingyError::UserMismatch
+        );
+        require!(
+            room_receipt.status == V2ReceiptStatus::Approved,
+            PingyError::DepositNotApproved
+        );
+
+        let allocated_before = room_receipt.allocated_lamports;
+        let previous_status = room_receipt.status;
+        room_receipt.status = V2ReceiptStatus::Revoked;
+        room_receipt.refundable_lamports = room_receipt
+            .refundable_lamports
+            .checked_add(allocated_before)
+            .ok_or(PingyError::AmountOverflow)?;
+        room_receipt.allocated_lamports = 0;
+
+        room_ledger.total_allocated_lamports = room_ledger
+            .total_allocated_lamports
+            .checked_sub(allocated_before)
+            .ok_or(PingyError::AccountingUnderflow)?;
+        room_ledger.total_refundable_lamports = room_ledger
+            .total_refundable_lamports
+            .checked_add(allocated_before)
+            .ok_or(PingyError::AmountOverflow)?;
+        room_ledger.apply_v2_status_transition(previous_status, room_receipt.status)?;
+
+        validate_room_receipt_accounting(room_receipt)?;
+        validate_room_ledger_accounting(room_ledger)?;
+
+        Ok(())
+    }
+
+    pub fn unping_refund(ctx: Context<UnpingRefund>, room_id: String) -> Result<()> {
+        let room_ledger = &mut ctx.accounts.room_ledger;
+        require!(
+            room_ledger.room_id == room_id,
+            PingyError::RoomLedgerMismatch
+        );
+        require!(
+            room_ledger.state == V2RoomState::Open && !room_ledger.spawn_finalized,
+            PingyError::V2RoomNotOpen
+        );
+
+        let room_receipt = &mut ctx.accounts.room_receipt;
+        require!(
+            room_receipt.user_pubkey == ctx.accounts.user.key(),
+            PingyError::UserMismatch
+        );
+
+        let payout = room_receipt
+            .refundable_lamports
+            .checked_add(room_receipt.allocated_lamports)
+            .ok_or(PingyError::AmountOverflow)?;
+        let allocated_before = room_receipt.allocated_lamports;
+        let previous_status = room_receipt.status;
+
+        transfer_from_program_owned_account_to_account(
+            &ctx.accounts.shared_vault.to_account_info(),
+            &ctx.accounts.user.to_account_info(),
+            payout,
+        )?;
+
+        let shared_vault = &mut ctx.accounts.shared_vault;
+        shared_vault.total_reserved_lamports = shared_vault
+            .total_reserved_lamports
+            .checked_sub(payout)
+            .ok_or(PingyError::AccountingUnderflow)?;
+
+        room_ledger.total_bundle_lamports = room_ledger
+            .total_bundle_lamports
+            .checked_sub(payout)
+            .ok_or(PingyError::AccountingUnderflow)?;
+        room_ledger.total_refundable_lamports = room_ledger
+            .total_refundable_lamports
+            .checked_sub(room_receipt.refundable_lamports)
+            .ok_or(PingyError::AccountingUnderflow)?;
+        room_ledger.total_allocated_lamports = room_ledger
+            .total_allocated_lamports
+            .checked_sub(allocated_before)
+            .ok_or(PingyError::AccountingUnderflow)?;
+        room_ledger.total_refunded_lamports = room_ledger
+            .total_refunded_lamports
+            .checked_add(payout)
+            .ok_or(PingyError::AmountOverflow)?;
+
+        room_receipt.refundable_lamports = 0;
+        room_receipt.allocated_lamports = 0;
+        room_receipt.refunded_lamports = room_receipt
+            .refunded_lamports
+            .checked_add(payout)
+            .ok_or(PingyError::AmountOverflow)?;
+        room_receipt.status = V2ReceiptStatus::Withdrawn;
+        room_ledger.apply_v2_status_transition(previous_status, room_receipt.status)?;
+
+        validate_room_receipt_accounting(room_receipt)?;
+        validate_room_ledger_accounting(room_ledger)?;
+
+        Ok(())
+    }
+
+    pub fn execute_spawn_native<'info>(
+        ctx: Context<'_, '_, 'info, 'info, ExecuteSpawnNative<'info>>,
+        room_id: String,
+    ) -> Result<()> {
+        let room_ledger = &mut ctx.accounts.room_ledger;
+        require!(
+            room_ledger.room_id == room_id,
+            PingyError::RoomLedgerMismatch
+        );
+        require!(
+            room_ledger.launch_backend == V2_LAUNCH_BACKEND_NATIVE,
+            PingyError::InvalidLaunchBackendForRoom
+        );
+        require!(
+            room_ledger.state == V2RoomState::Open && !room_ledger.spawn_finalized,
+            PingyError::V2RoomNotOpen
+        );
+        require!(
+            room_ledger.total_allocated_lamports >= room_ledger.spawn_target_lamports,
+            PingyError::SpawnTargetNotReached
+        );
+        require!(
+            room_ledger.approved_count >= room_ledger.min_approved_wallets,
+            PingyError::MinApprovedWalletsNotReached
+        );
+
+        // V2 forwards exactly the configured spawn target on spawn execution. Any approved
+        // value above the target remains in-room and is not swept by this instruction.
+        let exact_target_forward_lamports = room_ledger.spawn_target_lamports;
+        let fee = exact_target_forward_lamports
+            .checked_mul(SPAWN_FEE_BPS)
+            .ok_or(PingyError::AmountOverflow)?
+            .checked_div(BPS_DENOM)
+            .ok_or(PingyError::AmountOverflow)?;
+        let net = exact_target_forward_lamports
+            .checked_sub(fee)
+            .ok_or(PingyError::AccountingUnderflow)?;
+
+        let curve = &mut ctx.accounts.curve;
+        curve.thread_id = room_id.clone();
+        initialize_curve_state(
+            curve,
+            TOTAL_SUPPLY,
+            POST_SPAWN_TRADING_FEE_BPS,
+            GRADUATION_TARGET_LAMPORTS,
+        );
+        curve.curve_authority_bump = ctx.bumps.curve_authority;
+        initialize_mint_if_needed(curve, &ctx.accounts.mint, &ctx.accounts.curve_authority)?;
+        initialize_curve_token_vault_if_needed(
+            curve,
+            &ctx.accounts.curve_token_vault,
+            &ctx.accounts.curve_authority,
+        )?;
+
+        let spawn_pool = &mut ctx.accounts.spawn_pool;
+        spawn_pool.thread_id = room_id.clone();
+
+        mint_total_supply_to_curve_vault(
+            b"v2_curve_authority",
+            &room_id,
+            &ctx.accounts.curve,
+            &ctx.accounts.curve_authority,
+            &ctx.accounts.mint,
+            &ctx.accounts.curve_token_vault,
+            &ctx.accounts.token_program,
+        )?;
+
+        let tokens_out = {
+            let curve = &mut ctx.accounts.curve;
+            let tokens_out = apply_curve_buy(net, curve)?;
+            curve.opening_buy_lamports = net;
+            curve.opening_buy_tokens = tokens_out;
+            curve.state = CurveLifecycle::Bonding;
+            tokens_out
+        };
+
+        allocate_v2_spawn_tokens_pro_rata(
+            room_ledger,
+            &room_id,
+            exact_target_forward_lamports,
+            tokens_out,
+            ctx.remaining_accounts,
+        )?;
+
+        transfer_from_program_owned_account_to_account(
+            &ctx.accounts.shared_vault.to_account_info(),
+            &ctx.accounts.fee_vault.to_account_info(),
+            fee,
+        )?;
+        transfer_from_program_owned_account_to_account(
+            &ctx.accounts.shared_vault.to_account_info(),
+            &ctx.accounts.spawn_pool.to_account_info(),
+            net,
+        )?;
+
+        ctx.accounts.shared_vault.total_reserved_lamports = ctx
+            .accounts
+            .shared_vault
+            .total_reserved_lamports
+            .checked_sub(exact_target_forward_lamports)
+            .ok_or(PingyError::AccountingUnderflow)?;
+        ctx.accounts.fee_vault.spawn_fee_lamports_accrued = ctx
+            .accounts
+            .fee_vault
+            .spawn_fee_lamports_accrued
+            .checked_add(fee)
+            .ok_or(PingyError::AmountOverflow)?;
+
+        room_ledger.total_allocated_lamports = room_ledger
+            .total_allocated_lamports
+            .checked_sub(exact_target_forward_lamports)
+            .ok_or(PingyError::AccountingUnderflow)?;
+        room_ledger.total_forwarded_lamports = room_ledger
+            .total_forwarded_lamports
+            .checked_add(exact_target_forward_lamports)
+            .ok_or(PingyError::AmountOverflow)?;
+        room_ledger.spawn_finalized = true;
+        room_ledger.state = V2RoomState::NativeBonding;
+        room_ledger.curve = ctx.accounts.curve.key();
+        room_ledger.mint = ctx.accounts.mint.key();
+        room_ledger.spawn_pool = ctx.accounts.spawn_pool.key();
+        room_ledger.curve_token_vault = ctx.accounts.curve_token_vault.key();
+
+        validate_room_ledger_accounting(room_ledger)?;
+
+        Ok(())
+    }
+
+    pub fn execute_spawn_external<'info>(
+        ctx: Context<'_, '_, 'info, 'info, ExecuteSpawnExternal<'info>>,
+        room_id: String,
+    ) -> Result<()> {
+        let room_ledger = &mut ctx.accounts.room_ledger;
+        require!(
+            room_ledger.room_id == room_id,
+            PingyError::RoomLedgerMismatch
+        );
+        require!(
+            room_ledger.launch_backend == V2_LAUNCH_BACKEND_EXTERNAL,
+            PingyError::InvalidLaunchBackendForRoom
+        );
+        require!(
+            room_ledger.state == V2RoomState::Open && !room_ledger.spawn_finalized,
+            PingyError::V2RoomNotOpen
+        );
+        require!(
+            room_ledger.total_allocated_lamports >= room_ledger.spawn_target_lamports,
+            PingyError::SpawnTargetNotReached
+        );
+        require!(
+            room_ledger.approved_count >= room_ledger.min_approved_wallets,
+            PingyError::MinApprovedWalletsNotReached
+        );
+
+        // V2 external spawn is an accounting freeze only: it marks exactly the configured
+        // spawn target as no longer refundable on chain and creates each receipt's external
+        // entitlement basis. The actual external payout/launch happens off-chain later.
+        let exact_target_forward_lamports = room_ledger.spawn_target_lamports;
+        allocate_v2_external_units(
+            room_ledger,
+            &room_id,
+            exact_target_forward_lamports,
+            ctx.remaining_accounts,
+        )?;
+
+        ctx.accounts.shared_vault.total_reserved_lamports = ctx
+            .accounts
+            .shared_vault
+            .total_reserved_lamports
+            .checked_sub(exact_target_forward_lamports)
+            .ok_or(PingyError::AccountingUnderflow)?;
+        room_ledger.total_allocated_lamports = room_ledger
+            .total_allocated_lamports
+            .checked_sub(exact_target_forward_lamports)
+            .ok_or(PingyError::AccountingUnderflow)?;
+        room_ledger.total_forwarded_lamports = room_ledger
+            .total_forwarded_lamports
+            .checked_add(exact_target_forward_lamports)
+            .ok_or(PingyError::AmountOverflow)?;
+        room_ledger.spawn_finalized = true;
+        room_ledger.state = V2RoomState::ExternalFinalized;
+        room_ledger.external_settlement_status = V2ExternalSettlementStatus::Pending;
+
+        validate_room_ledger_accounting(room_ledger)?;
+
+        Ok(())
+    }
+
+    pub fn claim_spawn_tokens_v2(ctx: Context<ClaimSpawnTokensV2>, room_id: String) -> Result<()> {
+        require!(
+            ctx.accounts.room_ledger.room_id == room_id,
+            PingyError::RoomLedgerMismatch
+        );
+        require!(
+            ctx.accounts.room_ledger.launch_backend == V2_LAUNCH_BACKEND_NATIVE,
+            PingyError::InvalidLaunchBackendForRoom
+        );
+        require!(
+            ctx.accounts.room_ledger.state == V2RoomState::NativeBonding
+                || ctx.accounts.room_ledger.state == V2RoomState::NativeBonded,
+            PingyError::V2RoomNotSpawned
+        );
+        require!(
+            ctx.accounts.room_receipt.room_id == room_id,
+            PingyError::ReceiptMismatch
+        );
+        require!(
+            ctx.accounts.room_receipt.user_pubkey == ctx.accounts.user.key(),
+            PingyError::UserMismatch
+        );
+
+        let claimable = ctx
+            .accounts
+            .room_receipt
+            .native_token_allocation
+            .checked_sub(ctx.accounts.room_receipt.native_tokens_claimed)
+            .ok_or(PingyError::AccountingUnderflow)?;
+        require!(claimable > 0, PingyError::NothingToClaim);
+
+        let room_seed = room_seed_bytes(&room_id);
+        let signer_seeds: &[&[&[u8]]] = &[&[
+            b"v2_curve_authority",
+            room_seed.as_ref(),
+            &[ctx.accounts.curve.curve_authority_bump],
+        ]];
+
+        token::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from: ctx.accounts.curve_token_vault.to_account_info(),
+                    to: ctx.accounts.user_token_account.to_account_info(),
+                    authority: ctx.accounts.curve_authority.to_account_info(),
+                },
+                signer_seeds,
+            ),
+            claimable,
+        )?;
+
+        ctx.accounts.room_receipt.native_tokens_claimed = ctx
+            .accounts
+            .room_receipt
+            .native_tokens_claimed
+            .checked_add(claimable)
+            .ok_or(PingyError::AmountOverflow)?;
+
+        validate_room_receipt_accounting(&ctx.accounts.room_receipt)?;
+        validate_room_ledger_accounting(&ctx.accounts.room_ledger)?;
+
+        Ok(())
+    }
+
+    pub fn record_external_distribution(
+        ctx: Context<RecordExternalDistribution>,
+        room_id: String,
+        settled_external_units: u64,
+    ) -> Result<()> {
+        require!(settled_external_units > 0, PingyError::InvalidAmount);
+        require!(
+            ctx.accounts.room_ledger.room_id == room_id,
+            PingyError::RoomLedgerMismatch
+        );
+        require!(
+            ctx.accounts.room_ledger.launch_backend == V2_LAUNCH_BACKEND_EXTERNAL,
+            PingyError::InvalidLaunchBackendForRoom
+        );
+        require!(
+            ctx.accounts.room_ledger.state == V2RoomState::ExternalFinalized,
+            PingyError::V2RoomNotSpawned
+        );
+        require!(
+            ctx.accounts.room_receipt.room_id == room_id,
+            PingyError::ReceiptMismatch
+        );
+        require!(
+            ctx.accounts.room_receipt.status == V2ReceiptStatus::Converted,
+            PingyError::ExternalSettlementNotReady
+        );
+
+        let unsettled_external_units = ctx
+            .accounts
+            .room_receipt
+            .external_allocation_units
+            .checked_sub(ctx.accounts.room_receipt.external_units_claimed)
+            .ok_or(PingyError::AccountingUnderflow)?;
+        require!(
+            settled_external_units <= unsettled_external_units,
+            PingyError::ExternalDistributionExceedsEntitlement
+        );
+        ctx.accounts.room_receipt.external_units_claimed = ctx
+            .accounts
+            .room_receipt
+            .external_units_claimed
+            .checked_add(settled_external_units)
+            .ok_or(PingyError::AmountOverflow)?;
+        ctx.accounts.room_ledger.total_external_units_settled = ctx
+            .accounts
+            .room_ledger
+            .total_external_units_settled
+            .checked_add(settled_external_units)
+            .ok_or(PingyError::AmountOverflow)?;
+        sync_room_external_settlement_status(&mut ctx.accounts.room_ledger)?;
+
+        validate_room_receipt_accounting(&ctx.accounts.room_receipt)?;
+        validate_room_ledger_accounting(&ctx.accounts.room_ledger)?;
+
+        Ok(())
+    }
 }
 
 fn allocate_spawn_tokens_pro_rata<'info>(
@@ -772,6 +1468,263 @@ fn allocate_for_deposit(
     Ok(())
 }
 
+fn allocate_for_room_receipt(
+    room_ledger: &mut Account<RoomLedger>,
+    room_receipt: &mut Account<RoomReceipt>,
+) -> Result<()> {
+    let remaining_needed = room_ledger
+        .spawn_target_lamports
+        .saturating_sub(room_ledger.total_allocated_lamports);
+    let wallet_cap = room_ledger
+        .spawn_target_lamports
+        .checked_mul(room_ledger.max_wallet_share_bps as u64)
+        .ok_or(PingyError::AmountOverflow)?
+        .checked_div(BPS_DENOM)
+        .ok_or(PingyError::AmountOverflow)?;
+    let wallet_remaining = wallet_cap.saturating_sub(room_receipt.allocated_lamports);
+    let movable = room_receipt
+        .refundable_lamports
+        .min(remaining_needed)
+        .min(wallet_remaining);
+
+    if movable == 0 {
+        return Ok(());
+    }
+
+    room_receipt.refundable_lamports = room_receipt
+        .refundable_lamports
+        .checked_sub(movable)
+        .ok_or(PingyError::AccountingUnderflow)?;
+    room_receipt.allocated_lamports = room_receipt
+        .allocated_lamports
+        .checked_add(movable)
+        .ok_or(PingyError::AmountOverflow)?;
+    room_ledger.total_refundable_lamports = room_ledger
+        .total_refundable_lamports
+        .checked_sub(movable)
+        .ok_or(PingyError::AccountingUnderflow)?;
+    room_ledger.total_allocated_lamports = room_ledger
+        .total_allocated_lamports
+        .checked_add(movable)
+        .ok_or(PingyError::AmountOverflow)?;
+
+    Ok(())
+}
+
+fn allocate_v2_spawn_tokens_pro_rata<'info>(
+    room_ledger: &mut Account<RoomLedger>,
+    room_id: &str,
+    use_amt: u64,
+    tokens_out: u64,
+    remaining_accounts: &'info [AccountInfo<'info>],
+) -> Result<()> {
+    let mut remaining_lamports = use_amt;
+    let mut remaining_tokens = tokens_out;
+
+    for account_info in remaining_accounts.iter() {
+        let mut room_receipt: Account<RoomReceipt> = Account::try_from(account_info)?;
+        require!(
+            room_receipt.room_id == room_id,
+            PingyError::InvalidReceiptRemainingAccount
+        );
+        require!(
+            room_receipt.status == V2ReceiptStatus::Approved,
+            PingyError::DepositNotApproved
+        );
+
+        let allocated = room_receipt.allocated_lamports;
+        require!(
+            allocated <= remaining_lamports,
+            PingyError::InvalidReceiptRemainingAccount
+        );
+
+        let wallet_tokens = if allocated == 0 {
+            0
+        } else if allocated == remaining_lamports {
+            remaining_tokens
+        } else {
+            ((allocated as u128)
+                .checked_mul(remaining_tokens as u128)
+                .ok_or(PingyError::AmountOverflow)?
+                .checked_div(remaining_lamports as u128)
+                .ok_or(PingyError::AmountOverflow)?) as u64
+        };
+
+        let previous_status = room_receipt.status;
+        room_receipt.forwarded_lamports = room_receipt
+            .forwarded_lamports
+            .checked_add(allocated)
+            .ok_or(PingyError::AmountOverflow)?;
+        room_receipt.native_token_allocation = room_receipt
+            .native_token_allocation
+            .checked_add(wallet_tokens)
+            .ok_or(PingyError::AmountOverflow)?;
+        room_receipt.allocated_lamports = 0;
+        room_receipt.status = V2ReceiptStatus::Converted;
+        room_ledger.apply_v2_status_transition(previous_status, room_receipt.status)?;
+        validate_room_receipt_accounting(&room_receipt)?;
+
+        remaining_lamports = remaining_lamports
+            .checked_sub(allocated)
+            .ok_or(PingyError::AccountingUnderflow)?;
+        remaining_tokens = remaining_tokens
+            .checked_sub(wallet_tokens)
+            .ok_or(PingyError::AccountingUnderflow)?;
+    }
+
+    require!(
+        remaining_lamports == 0,
+        PingyError::MissingApprovedReceiptAccounts
+    );
+
+    validate_room_ledger_accounting(room_ledger)?;
+
+    Ok(())
+}
+
+fn allocate_v2_external_units<'info>(
+    room_ledger: &mut Account<RoomLedger>,
+    room_id: &str,
+    use_amt: u64,
+    remaining_accounts: &'info [AccountInfo<'info>],
+) -> Result<()> {
+    let mut remaining_lamports = use_amt;
+    for account_info in remaining_accounts.iter() {
+        let mut room_receipt: Account<RoomReceipt> = Account::try_from(account_info)?;
+        require!(
+            room_receipt.room_id == room_id,
+            PingyError::InvalidReceiptRemainingAccount
+        );
+        require!(
+            room_receipt.status == V2ReceiptStatus::Approved,
+            PingyError::DepositNotApproved
+        );
+
+        let allocated = room_receipt.allocated_lamports;
+        require!(
+            allocated <= remaining_lamports,
+            PingyError::InvalidReceiptRemainingAccount
+        );
+
+        let previous_status = room_receipt.status;
+        room_receipt.forwarded_lamports = room_receipt
+            .forwarded_lamports
+            .checked_add(allocated)
+            .ok_or(PingyError::AmountOverflow)?;
+        // External entitlement is created here, at the on-chain freeze step. Later
+        // record_external_distribution only records fulfillment against this basis.
+        room_receipt.external_allocation_units = room_receipt
+            .external_allocation_units
+            .checked_add(allocated)
+            .ok_or(PingyError::AmountOverflow)?;
+        room_receipt.allocated_lamports = 0;
+        room_receipt.status = V2ReceiptStatus::Converted;
+        room_ledger.apply_v2_status_transition(previous_status, room_receipt.status)?;
+        validate_room_receipt_accounting(&room_receipt)?;
+
+        remaining_lamports = remaining_lamports
+            .checked_sub(allocated)
+            .ok_or(PingyError::AccountingUnderflow)?;
+    }
+
+    require!(
+        remaining_lamports == 0,
+        PingyError::MissingApprovedReceiptAccounts
+    );
+
+    validate_room_ledger_accounting(room_ledger)?;
+
+    Ok(())
+}
+
+fn validate_room_receipt_accounting(room_receipt: &RoomReceipt) -> Result<()> {
+    let bucket_total = room_receipt
+        .refundable_lamports
+        .checked_add(room_receipt.allocated_lamports)
+        .ok_or(PingyError::AmountOverflow)?
+        .checked_add(room_receipt.forwarded_lamports)
+        .ok_or(PingyError::AmountOverflow)?
+        .checked_add(room_receipt.refunded_lamports)
+        .ok_or(PingyError::AmountOverflow)?;
+    require!(
+        room_receipt.bundle_lamports_total == bucket_total,
+        PingyError::InvalidV2ReceiptAccounting
+    );
+    require!(
+        room_receipt.native_tokens_claimed <= room_receipt.native_token_allocation,
+        PingyError::InvalidV2ReceiptAccounting
+    );
+    require!(
+        room_receipt.external_units_claimed <= room_receipt.external_allocation_units,
+        PingyError::InvalidV2ReceiptAccounting
+    );
+    Ok(())
+}
+
+fn validate_room_ledger_accounting(room_ledger: &RoomLedger) -> Result<()> {
+    let bucket_total = room_ledger
+        .total_refundable_lamports
+        .checked_add(room_ledger.total_allocated_lamports)
+        .ok_or(PingyError::AmountOverflow)?
+        .checked_add(room_ledger.total_forwarded_lamports)
+        .ok_or(PingyError::AmountOverflow)?
+        .checked_add(room_ledger.total_refunded_lamports)
+        .ok_or(PingyError::AmountOverflow)?;
+    require!(
+        room_ledger.total_bundle_lamports == bucket_total,
+        PingyError::InvalidV2RoomAccounting
+    );
+    require!(
+        room_ledger.total_allocated_lamports <= room_ledger.spawn_target_lamports,
+        PingyError::InvalidV2RoomAccounting
+    );
+
+    if room_ledger.launch_backend == V2_LAUNCH_BACKEND_EXTERNAL {
+        require!(
+            room_ledger.total_external_units_settled <= room_ledger.total_forwarded_lamports,
+            PingyError::InvalidV2RoomAccounting
+        );
+        match room_ledger.external_settlement_status {
+            V2ExternalSettlementStatus::Pending => require!(
+                room_ledger.total_external_units_settled == 0,
+                PingyError::InvalidV2RoomAccounting
+            ),
+            V2ExternalSettlementStatus::InProgress => require!(
+                room_ledger.total_external_units_settled > 0
+                    && room_ledger.total_external_units_settled
+                        < room_ledger.total_forwarded_lamports,
+                PingyError::InvalidV2RoomAccounting
+            ),
+            V2ExternalSettlementStatus::Complete => require!(
+                room_ledger.total_external_units_settled == room_ledger.total_forwarded_lamports,
+                PingyError::InvalidV2RoomAccounting
+            ),
+        }
+    } else {
+        require!(
+            room_ledger.total_external_units_settled == 0,
+            PingyError::InvalidV2RoomAccounting
+        );
+    }
+
+    Ok(())
+}
+
+fn sync_room_external_settlement_status(room_ledger: &mut RoomLedger) -> Result<()> {
+    require!(
+        room_ledger.launch_backend == V2_LAUNCH_BACKEND_EXTERNAL,
+        PingyError::InvalidLaunchBackendForRoom
+    );
+    room_ledger.external_settlement_status = if room_ledger.total_external_units_settled == 0 {
+        V2ExternalSettlementStatus::Pending
+    } else if room_ledger.total_external_units_settled == room_ledger.total_forwarded_lamports {
+        V2ExternalSettlementStatus::Complete
+    } else {
+        V2ExternalSettlementStatus::InProgress
+    };
+    Ok(())
+}
+
 fn initialize_curve_state(
     curve: &mut Curve,
     total_supply: u64,
@@ -833,6 +1786,7 @@ fn initialize_curve_token_vault_if_needed<'info>(
 }
 
 fn mint_total_supply_to_curve_vault<'info>(
+    authority_seed_namespace: &'static [u8],
     thread_id: &str,
     curve: &Curve,
     curve_authority: &UncheckedAccount<'info>,
@@ -846,7 +1800,7 @@ fn mint_total_supply_to_curve_vault<'info>(
 
     let room_seed = room_seed_bytes(thread_id);
     let signer_seeds: &[&[&[u8]]] = &[&[
-        b"curve_authority",
+        authority_seed_namespace,
         room_seed.as_ref(),
         &[curve.curve_authority_bump],
     ]];
@@ -1467,6 +2421,322 @@ pub struct Sell<'info> {
     pub system_program: Program<'info, System>,
 }
 
+#[derive(Accounts)]
+pub struct InitializeV2GlobalState<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(
+        init,
+        payer = admin,
+        space = 8 + ProgramState::LEN,
+        seeds = [b"program_state_v2"],
+        bump
+    )]
+    pub program_state: Account<'info, ProgramState>,
+    #[account(
+        init,
+        payer = admin,
+        space = 8 + SharedVault::LEN,
+        seeds = [b"shared_vault_v2"],
+        bump
+    )]
+    pub shared_vault: Account<'info, SharedVault>,
+    #[account(
+        init,
+        payer = admin,
+        space = 8 + V2FeeVault::LEN,
+        seeds = [b"fee_vault_v2"],
+        bump
+    )]
+    pub fee_vault: Account<'info, V2FeeVault>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(room_id: String)]
+pub struct CreateRoomLedger<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(
+        seeds = [b"program_state_v2"],
+        bump = program_state.bump
+    )]
+    pub program_state: Account<'info, ProgramState>,
+    #[account(
+        init,
+        payer = admin,
+        space = 8 + RoomLedger::LEN,
+        seeds = [b"room_ledger", room_seed_bytes(&room_id).as_ref()],
+        bump
+    )]
+    pub room_ledger: Account<'info, RoomLedger>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(room_id: String)]
+pub struct PingDepositShared<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+    #[account(
+        seeds = [b"program_state_v2"],
+        bump = program_state.bump
+    )]
+    pub program_state: Account<'info, ProgramState>,
+    #[account(
+        mut,
+        seeds = [b"shared_vault_v2"],
+        bump = shared_vault.bump
+    )]
+    pub shared_vault: Account<'info, SharedVault>,
+    #[account(
+        mut,
+        seeds = [b"room_ledger", room_seed_bytes(&room_id).as_ref()],
+        bump = room_ledger.bump
+    )]
+    pub room_ledger: Account<'info, RoomLedger>,
+    #[account(
+        init_if_needed,
+        payer = user,
+        space = 8 + RoomReceipt::LEN,
+        seeds = [b"room_receipt", room_seed_bytes(&room_id).as_ref(), user.key().as_ref()],
+        bump
+    )]
+    pub room_receipt: Account<'info, RoomReceipt>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(room_id: String, user_pubkey: Pubkey)]
+pub struct ApproveReceipt<'info> {
+    #[account(mut, address = room_ledger.admin_pubkey)]
+    pub admin: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [b"room_ledger", room_seed_bytes(&room_id).as_ref()],
+        bump = room_ledger.bump
+    )]
+    pub room_ledger: Account<'info, RoomLedger>,
+    #[account(
+        mut,
+        seeds = [b"room_receipt", room_seed_bytes(&room_id).as_ref(), user_pubkey.as_ref()],
+        bump = room_receipt.bump
+    )]
+    pub room_receipt: Account<'info, RoomReceipt>,
+}
+
+#[derive(Accounts)]
+#[instruction(room_id: String, user_pubkey: Pubkey)]
+pub struct RevokeReceipt<'info> {
+    #[account(mut, address = room_ledger.admin_pubkey)]
+    pub admin: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [b"room_ledger", room_seed_bytes(&room_id).as_ref()],
+        bump = room_ledger.bump
+    )]
+    pub room_ledger: Account<'info, RoomLedger>,
+    #[account(
+        mut,
+        seeds = [b"room_receipt", room_seed_bytes(&room_id).as_ref(), user_pubkey.as_ref()],
+        bump = room_receipt.bump
+    )]
+    pub room_receipt: Account<'info, RoomReceipt>,
+}
+
+#[derive(Accounts)]
+#[instruction(room_id: String)]
+pub struct UnpingRefund<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+    #[account(
+        seeds = [b"program_state_v2"],
+        bump = program_state.bump
+    )]
+    pub program_state: Account<'info, ProgramState>,
+    #[account(
+        mut,
+        seeds = [b"shared_vault_v2"],
+        bump = shared_vault.bump
+    )]
+    pub shared_vault: Account<'info, SharedVault>,
+    #[account(
+        mut,
+        seeds = [b"room_ledger", room_seed_bytes(&room_id).as_ref()],
+        bump = room_ledger.bump
+    )]
+    pub room_ledger: Account<'info, RoomLedger>,
+    #[account(
+        mut,
+        seeds = [b"room_receipt", room_seed_bytes(&room_id).as_ref(), user.key().as_ref()],
+        bump = room_receipt.bump,
+        close = user
+    )]
+    pub room_receipt: Account<'info, RoomReceipt>,
+}
+
+#[derive(Accounts)]
+#[instruction(room_id: String)]
+pub struct ExecuteSpawnNative<'info> {
+    #[account(mut, address = room_ledger.admin_pubkey)]
+    pub admin: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [b"shared_vault_v2"],
+        bump = shared_vault.bump
+    )]
+    pub shared_vault: Account<'info, SharedVault>,
+    #[account(
+        mut,
+        seeds = [b"fee_vault_v2"],
+        bump = fee_vault.bump
+    )]
+    pub fee_vault: Account<'info, V2FeeVault>,
+    #[account(
+        mut,
+        seeds = [b"room_ledger", room_seed_bytes(&room_id).as_ref()],
+        bump = room_ledger.bump
+    )]
+    pub room_ledger: Account<'info, RoomLedger>,
+    #[account(
+        init,
+        payer = admin,
+        space = 8 + Curve::LEN,
+        seeds = [b"v2_curve", room_seed_bytes(&room_id).as_ref()],
+        bump
+    )]
+    pub curve: Account<'info, Curve>,
+    #[account(
+        seeds = [b"v2_curve_authority", room_seed_bytes(&room_id).as_ref()],
+        bump
+    )]
+    /// CHECK: PDA used as mint authority and token vault authority.
+    pub curve_authority: UncheckedAccount<'info>,
+    #[account(
+        init,
+        payer = admin,
+        seeds = [b"v2_mint", room_seed_bytes(&room_id).as_ref()],
+        bump,
+        mint::decimals = TOKEN_DECIMALS,
+        mint::authority = curve_authority,
+        mint::freeze_authority = curve_authority
+    )]
+    pub mint: Account<'info, Mint>,
+    #[account(
+        init,
+        payer = admin,
+        seeds = [b"v2_curve_token_vault", room_seed_bytes(&room_id).as_ref()],
+        bump,
+        token::mint = mint,
+        token::authority = curve_authority
+    )]
+    pub curve_token_vault: Account<'info, TokenAccount>,
+    #[account(
+        init,
+        payer = admin,
+        space = 8 + SpawnPool::LEN,
+        seeds = [b"v2_spawn_pool", room_seed_bytes(&room_id).as_ref()],
+        bump
+    )]
+    pub spawn_pool: Account<'info, SpawnPool>,
+    pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>,
+}
+
+#[derive(Accounts)]
+#[instruction(room_id: String)]
+pub struct ExecuteSpawnExternal<'info> {
+    #[account(mut, address = room_ledger.admin_pubkey)]
+    pub admin: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [b"shared_vault_v2"],
+        bump = shared_vault.bump
+    )]
+    pub shared_vault: Account<'info, SharedVault>,
+    #[account(
+        mut,
+        seeds = [b"fee_vault_v2"],
+        bump = fee_vault.bump
+    )]
+    pub fee_vault: Account<'info, V2FeeVault>,
+    #[account(
+        mut,
+        seeds = [b"room_ledger", room_seed_bytes(&room_id).as_ref()],
+        bump = room_ledger.bump
+    )]
+    pub room_ledger: Account<'info, RoomLedger>,
+}
+
+#[derive(Accounts)]
+#[instruction(room_id: String)]
+pub struct ClaimSpawnTokensV2<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+    #[account(
+        seeds = [b"room_ledger", room_seed_bytes(&room_id).as_ref()],
+        bump = room_ledger.bump
+    )]
+    pub room_ledger: Account<'info, RoomLedger>,
+    #[account(
+        mut,
+        seeds = [b"room_receipt", room_seed_bytes(&room_id).as_ref(), user.key().as_ref()],
+        bump = room_receipt.bump
+    )]
+    pub room_receipt: Account<'info, RoomReceipt>,
+    #[account(
+        mut,
+        seeds = [b"v2_curve", room_seed_bytes(&room_id).as_ref()],
+        bump
+    )]
+    pub curve: Account<'info, Curve>,
+    #[account(
+        seeds = [b"v2_curve_authority", room_seed_bytes(&room_id).as_ref()],
+        bump = curve.curve_authority_bump
+    )]
+    /// CHECK: PDA used as token vault authority.
+    pub curve_authority: UncheckedAccount<'info>,
+    #[account(address = curve.mint)]
+    pub mint: Account<'info, Mint>,
+    #[account(
+        mut,
+        seeds = [b"v2_curve_token_vault", room_seed_bytes(&room_id).as_ref()],
+        bump,
+        address = curve.curve_token_vault,
+        token::mint = mint,
+        token::authority = curve_authority
+    )]
+    pub curve_token_vault: Account<'info, TokenAccount>,
+    #[account(
+        init_if_needed,
+        payer = user,
+        associated_token::mint = mint,
+        associated_token::authority = user
+    )]
+    pub user_token_account: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(room_id: String)]
+pub struct RecordExternalDistribution<'info> {
+    #[account(mut, address = room_ledger.admin_pubkey)]
+    pub admin: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [b"room_ledger", room_seed_bytes(&room_id).as_ref()],
+        bump = room_ledger.bump
+    )]
+    pub room_ledger: Account<'info, RoomLedger>,
+    #[account(
+        mut,
+        constraint = room_receipt.room_id == room_id @ PingyError::ReceiptMismatch
+    )]
+    pub room_receipt: Account<'info, RoomReceipt>,
+}
+
 #[account]
 pub struct Thread {
     pub thread_id: String,
@@ -1587,6 +2857,80 @@ pub struct FeeVault {
     pub initialized: bool,
 }
 
+#[account]
+pub struct ProgramState {
+    pub version: u8,
+    pub admin_pubkey: Pubkey,
+    pub shared_vault: Pubkey,
+    pub fee_vault: Pubkey,
+    pub default_ping_fee_recipient: Pubkey,
+    pub bump: u8,
+}
+
+#[account]
+pub struct SharedVault {
+    pub version: u8,
+    pub bump: u8,
+    pub total_reserved_lamports: u64,
+}
+
+#[account]
+pub struct V2FeeVault {
+    pub version: u8,
+    pub bump: u8,
+    pub spawn_fee_lamports_accrued: u64,
+    pub trade_fee_lamports_accrued: u64,
+}
+
+#[account]
+pub struct RoomLedger {
+    pub version: u8,
+    pub bump: u8,
+    pub room_id: String,
+    pub creator_pubkey: Pubkey,
+    pub admin_pubkey: Pubkey,
+    pub launch_backend: u8,
+    pub launch_mode: u8,
+    pub state: V2RoomState,
+    pub min_approved_wallets: u32,
+    pub spawn_target_lamports: u64,
+    pub max_wallet_share_bps: u16,
+    pub pending_count: u32,
+    pub approved_count: u32,
+    pub total_bundle_lamports: u64,
+    pub total_refundable_lamports: u64,
+    pub total_allocated_lamports: u64,
+    pub total_forwarded_lamports: u64,
+    pub total_refunded_lamports: u64,
+    pub spawn_finalized: bool,
+    pub mint: Pubkey,
+    pub curve: Pubkey,
+    pub spawn_pool: Pubkey,
+    pub curve_token_vault: Pubkey,
+    pub external_settlement_mode: u8,
+    pub external_settlement_status: V2ExternalSettlementStatus,
+    pub total_external_units_settled: u64,
+}
+
+#[account]
+pub struct RoomReceipt {
+    pub version: u8,
+    pub bump: u8,
+    pub room_id: String,
+    pub user_pubkey: Pubkey,
+    pub status: V2ReceiptStatus,
+    pub bundle_lamports_total: u64,
+    pub refundable_lamports: u64,
+    pub allocated_lamports: u64,
+    pub forwarded_lamports: u64,
+    pub refunded_lamports: u64,
+    pub receipt_backing_lamports: u64,
+    pub native_token_allocation: u64,
+    pub native_tokens_claimed: u64,
+    pub external_allocation_units: u64,
+    pub external_units_claimed: u64,
+}
+
 impl ThreadEscrow {
     pub const MAX_THREAD_ID_LEN: usize = 64;
     pub const LEN: usize = 4 + Self::MAX_THREAD_ID_LEN;
@@ -1594,6 +2938,106 @@ impl ThreadEscrow {
 
 impl FeeVault {
     pub const SIZE: usize = 1;
+}
+
+impl ProgramState {
+    pub const LEN: usize = 1 + 32 + 32 + 32 + 32 + 1;
+}
+
+impl SharedVault {
+    pub const LEN: usize = 1 + 1 + 8;
+}
+
+impl V2FeeVault {
+    pub const LEN: usize = 1 + 1 + 8 + 8;
+}
+
+impl RoomLedger {
+    pub const MAX_ROOM_ID_LEN: usize = 64;
+    pub const LEN: usize = 1
+        + 1
+        + 4
+        + Self::MAX_ROOM_ID_LEN
+        + 32
+        + 32
+        + 1
+        + 1
+        + 1
+        + 4
+        + 8
+        + 2
+        + 4
+        + 4
+        + 8
+        + 8
+        + 8
+        + 8
+        + 8
+        + 1
+        + 32
+        + 32
+        + 32
+        + 32
+        + 1
+        + 1
+        + 8;
+
+    fn increment_v2_status_count(&mut self, new_status: V2ReceiptStatus) -> Result<()> {
+        match new_status {
+            V2ReceiptStatus::Pending => {
+                self.pending_count = self
+                    .pending_count
+                    .checked_add(1)
+                    .ok_or(PingyError::AmountOverflow)?;
+            }
+            V2ReceiptStatus::Approved => {
+                self.approved_count = self
+                    .approved_count
+                    .checked_add(1)
+                    .ok_or(PingyError::AmountOverflow)?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn decrement_v2_status_count(&mut self, old_status: V2ReceiptStatus) -> Result<()> {
+        match old_status {
+            V2ReceiptStatus::Pending => {
+                self.pending_count = self
+                    .pending_count
+                    .checked_sub(1)
+                    .ok_or(PingyError::AccountingUnderflow)?;
+            }
+            V2ReceiptStatus::Approved => {
+                self.approved_count = self
+                    .approved_count
+                    .checked_sub(1)
+                    .ok_or(PingyError::AccountingUnderflow)?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn apply_v2_status_transition(
+        &mut self,
+        old: V2ReceiptStatus,
+        new: V2ReceiptStatus,
+    ) -> Result<()> {
+        if old == new {
+            return Ok(());
+        }
+        self.decrement_v2_status_count(old)?;
+        self.increment_v2_status_count(new)?;
+        Ok(())
+    }
+}
+
+impl RoomReceipt {
+    pub const MAX_ROOM_ID_LEN: usize = 64;
+    pub const LEN: usize =
+        1 + 1 + 4 + Self::MAX_ROOM_ID_LEN + 32 + 1 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8;
 }
 
 impl Curve {
@@ -1666,6 +3110,31 @@ pub enum CurveLifecycle {
     Bonded,
 }
 
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
+pub enum V2RoomState {
+    Open,
+    NativeBonding,
+    NativeBonded,
+    ExternalFinalized,
+    Cancelled,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
+pub enum V2ReceiptStatus {
+    Pending,
+    Approved,
+    Revoked,
+    Withdrawn,
+    Converted,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
+pub enum V2ExternalSettlementStatus {
+    Pending,
+    InProgress,
+    Complete,
+}
+
 #[error_code]
 pub enum PingyError {
     #[msg("Invalid thread id")]
@@ -1728,6 +3197,30 @@ pub enum PingyError {
     InvalidUserTokenAccount,
     #[msg("Launch mode is invalid")]
     InvalidLaunchMode,
+    #[msg("Launch backend is invalid")]
+    InvalidLaunchBackend,
+    #[msg("Room ledger does not match the requested room id")]
+    RoomLedgerMismatch,
+    #[msg("V2 room is not open")]
+    V2RoomNotOpen,
+    #[msg("Room receipt does not match the requested room id")]
+    ReceiptMismatch,
+    #[msg("Room launch backend does not allow this operation")]
+    InvalidLaunchBackendForRoom,
+    #[msg("V2 room has not been spawned")]
+    V2RoomNotSpawned,
+    #[msg("Missing approved room receipt accounts required for spawn allocation")]
+    MissingApprovedReceiptAccounts,
+    #[msg("Invalid room receipt passed as a remaining account")]
+    InvalidReceiptRemainingAccount,
+    #[msg("Room receipt accounting buckets are inconsistent")]
+    InvalidV2ReceiptAccounting,
+    #[msg("Room ledger accounting buckets are inconsistent")]
+    InvalidV2RoomAccounting,
+    #[msg("External settlement cannot exceed previously assigned entitlement")]
+    ExternalDistributionExceedsEntitlement,
+    #[msg("External settlement is not ready for this receipt")]
+    ExternalSettlementNotReady,
 }
 
 #[cfg(test)]
