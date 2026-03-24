@@ -557,6 +557,475 @@
           "type": "u64"
         }
       ]
+    },
+    {
+      "name": "initializeV2GlobalState",
+      "discriminator": [
+        76,
+        61,
+        213,
+        126,
+        130,
+        157,
+        18,
+        133
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "programState",
+          "writable": true
+        },
+        {
+          "name": "sharedVault",
+          "writable": true
+        },
+        {
+          "name": "feeVault",
+          "writable": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "defaultPingFeeRecipient",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "createRoomLedger",
+      "discriminator": [
+        20,
+        244,
+        92,
+        97,
+        206,
+        239,
+        1,
+        85
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "programState"
+        },
+        {
+          "name": "roomLedger",
+          "writable": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "roomId",
+          "type": "string"
+        },
+        {
+          "name": "launchBackend",
+          "type": "u8"
+        },
+        {
+          "name": "launchMode",
+          "type": "u8"
+        },
+        {
+          "name": "minApprovedWallets",
+          "type": "u32"
+        },
+        {
+          "name": "spawnTargetLamports",
+          "type": "u64"
+        },
+        {
+          "name": "maxWalletShareBps",
+          "type": "u16"
+        }
+      ]
+    },
+    {
+      "name": "pingDepositShared",
+      "discriminator": [
+        198,
+        121,
+        63,
+        186,
+        79,
+        155,
+        130,
+        3
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "programState"
+        },
+        {
+          "name": "sharedVault",
+          "writable": true
+        },
+        {
+          "name": "roomLedger",
+          "writable": true
+        },
+        {
+          "name": "roomReceipt",
+          "writable": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "roomId",
+          "type": "string"
+        },
+        {
+          "name": "amountLamports",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "approveReceipt",
+      "discriminator": [
+        68,
+        155,
+        105,
+        105,
+        29,
+        190,
+        126,
+        69
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "roomLedger",
+          "writable": true
+        },
+        {
+          "name": "roomReceipt",
+          "writable": true
+        }
+      ],
+      "args": [
+        {
+          "name": "roomId",
+          "type": "string"
+        },
+        {
+          "name": "userPubkey",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "revokeReceipt",
+      "discriminator": [
+        245,
+        11,
+        73,
+        75,
+        81,
+        145,
+        168,
+        220
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "roomLedger",
+          "writable": true
+        },
+        {
+          "name": "roomReceipt",
+          "writable": true
+        }
+      ],
+      "args": [
+        {
+          "name": "roomId",
+          "type": "string"
+        },
+        {
+          "name": "userPubkey",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "unpingRefund",
+      "discriminator": [
+        51,
+        33,
+        58,
+        166,
+        165,
+        11,
+        191,
+        220
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "programState"
+        },
+        {
+          "name": "sharedVault",
+          "writable": true
+        },
+        {
+          "name": "roomLedger",
+          "writable": true
+        },
+        {
+          "name": "roomReceipt",
+          "writable": true
+        }
+      ],
+      "args": [
+        {
+          "name": "roomId",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "executeSpawnNative",
+      "discriminator": [
+        126,
+        201,
+        209,
+        79,
+        25,
+        215,
+        116,
+        98
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "sharedVault",
+          "writable": true
+        },
+        {
+          "name": "feeVault",
+          "writable": true
+        },
+        {
+          "name": "roomLedger",
+          "writable": true
+        },
+        {
+          "name": "curve",
+          "writable": true
+        },
+        {
+          "name": "curveAuthority"
+        },
+        {
+          "name": "mint",
+          "writable": true
+        },
+        {
+          "name": "curveTokenVault",
+          "writable": true
+        },
+        {
+          "name": "spawnPool",
+          "writable": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "tokenProgram",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": [
+        {
+          "name": "roomId",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "executeSpawnExternal",
+      "discriminator": [
+        136,
+        253,
+        78,
+        251,
+        166,
+        119,
+        200,
+        200
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "sharedVault",
+          "writable": true
+        },
+        {
+          "name": "feeVault",
+          "writable": true
+        },
+        {
+          "name": "roomLedger",
+          "writable": true
+        }
+      ],
+      "args": [
+        {
+          "name": "roomId",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "claimSpawnTokensV2",
+      "discriminator": [
+        153,
+        112,
+        222,
+        93,
+        218,
+        136,
+        143,
+        43
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "roomLedger"
+        },
+        {
+          "name": "roomReceipt",
+          "writable": true
+        },
+        {
+          "name": "curve",
+          "writable": true
+        },
+        {
+          "name": "curveAuthority"
+        },
+        {
+          "name": "mint"
+        },
+        {
+          "name": "curveTokenVault",
+          "writable": true
+        },
+        {
+          "name": "userTokenAccount",
+          "writable": true
+        },
+        {
+          "name": "tokenProgram",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "associatedTokenProgram",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "roomId",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "recordExternalDistribution",
+      "discriminator": [
+        227,
+        179,
+        249,
+        194,
+        229,
+        203,
+        77,
+        124
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "roomLedger",
+          "writable": true
+        },
+        {
+          "name": "roomReceipt",
+          "writable": true
+        }
+      ],
+      "args": [
+        {
+          "name": "roomId",
+          "type": "string"
+        },
+        {
+          "name": "settledExternalUnits",
+          "type": "u64"
+        }
+      ]
     }
   ],
   "accounts": [
@@ -636,6 +1105,71 @@
         149,
         157,
         132
+      ]
+    },
+    {
+      "name": "programState",
+      "discriminator": [
+        244,
+        10,
+        119,
+        185,
+        92,
+        29,
+        140,
+        157
+      ]
+    },
+    {
+      "name": "sharedVault",
+      "discriminator": [
+        112,
+        26,
+        250,
+        13,
+        196,
+        52,
+        49,
+        247
+      ]
+    },
+    {
+      "name": "v2FeeVault",
+      "discriminator": [
+        178,
+        200,
+        123,
+        134,
+        127,
+        1,
+        249,
+        86
+      ]
+    },
+    {
+      "name": "roomLedger",
+      "discriminator": [
+        79,
+        130,
+        87,
+        219,
+        162,
+        10,
+        211,
+        2
+      ]
+    },
+    {
+      "name": "roomReceipt",
+      "discriminator": [
+        172,
+        193,
+        5,
+        251,
+        233,
+        38,
+        254,
+        248
       ]
     }
   ],
@@ -908,6 +1442,337 @@
           }
         ]
       }
+    },
+    {
+      "name": "programState",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "version",
+            "type": "u8"
+          },
+          {
+            "name": "adminPubkey",
+            "type": "pubkey"
+          },
+          {
+            "name": "sharedVault",
+            "type": "pubkey"
+          },
+          {
+            "name": "feeVault",
+            "type": "pubkey"
+          },
+          {
+            "name": "defaultPingFeeRecipient",
+            "type": "pubkey"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "sharedVault",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "version",
+            "type": "u8"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "totalReservedLamports",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "v2FeeVault",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "version",
+            "type": "u8"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "spawnFeeLamportsAccrued",
+            "type": "u64"
+          },
+          {
+            "name": "tradeFeeLamportsAccrued",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "v2RoomState",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "open"
+          },
+          {
+            "name": "nativeBonding"
+          },
+          {
+            "name": "nativeBonded"
+          },
+          {
+            "name": "externalFinalized"
+          },
+          {
+            "name": "cancelled"
+          }
+        ]
+      }
+    },
+    {
+      "name": "v2ReceiptStatus",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "pending"
+          },
+          {
+            "name": "approved"
+          },
+          {
+            "name": "revoked"
+          },
+          {
+            "name": "withdrawn"
+          },
+          {
+            "name": "converted"
+          }
+        ]
+      }
+    },
+    {
+      "name": "v2ExternalSettlementStatus",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "pending"
+          },
+          {
+            "name": "inProgress"
+          },
+          {
+            "name": "complete"
+          }
+        ]
+      }
+    },
+    {
+      "name": "roomLedger",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "version",
+            "type": "u8"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "roomId",
+            "type": "string"
+          },
+          {
+            "name": "creatorPubkey",
+            "type": "pubkey"
+          },
+          {
+            "name": "adminPubkey",
+            "type": "pubkey"
+          },
+          {
+            "name": "launchBackend",
+            "type": "u8"
+          },
+          {
+            "name": "launchMode",
+            "type": "u8"
+          },
+          {
+            "name": "state",
+            "type": {
+              "defined": {
+                "name": "v2RoomState"
+              }
+            }
+          },
+          {
+            "name": "minApprovedWallets",
+            "type": "u32"
+          },
+          {
+            "name": "spawnTargetLamports",
+            "type": "u64"
+          },
+          {
+            "name": "maxWalletShareBps",
+            "type": "u16"
+          },
+          {
+            "name": "pendingCount",
+            "type": "u32"
+          },
+          {
+            "name": "approvedCount",
+            "type": "u32"
+          },
+          {
+            "name": "totalBundleLamports",
+            "type": "u64"
+          },
+          {
+            "name": "totalRefundableLamports",
+            "type": "u64"
+          },
+          {
+            "name": "totalAllocatedLamports",
+            "type": "u64"
+          },
+          {
+            "name": "totalForwardedLamports",
+            "type": "u64"
+          },
+          {
+            "name": "totalRefundedLamports",
+            "type": "u64"
+          },
+          {
+            "name": "spawnFinalized",
+            "type": "bool"
+          },
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "curve",
+            "type": "pubkey"
+          },
+          {
+            "name": "spawnPool",
+            "type": "pubkey"
+          },
+          {
+            "name": "curveTokenVault",
+            "type": "pubkey"
+          },
+          {
+            "name": "externalSettlementMode",
+            "type": "u8"
+          },
+          {
+            "name": "externalSettlementStatus",
+            "type": {
+              "defined": {
+                "name": "v2ExternalSettlementStatus"
+              }
+            }
+          },
+          {
+            "name": "totalExternalUnitsSettled",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "roomReceipt",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "version",
+            "type": "u8"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "roomId",
+            "type": "string"
+          },
+          {
+            "name": "userPubkey",
+            "type": "pubkey"
+          },
+          {
+            "name": "status",
+            "type": {
+              "defined": {
+                "name": "v2ReceiptStatus"
+              }
+            }
+          },
+          {
+            "name": "bundleLamportsTotal",
+            "type": "u64"
+          },
+          {
+            "name": "refundableLamports",
+            "type": "u64"
+          },
+          {
+            "name": "allocatedLamports",
+            "type": "u64"
+          },
+          {
+            "name": "forwardedLamports",
+            "type": "u64"
+          },
+          {
+            "name": "refundedLamports",
+            "type": "u64"
+          },
+          {
+            "name": "receiptBackingLamports",
+            "type": "u64"
+          },
+          {
+            "name": "nativeTokenAllocation",
+            "type": "u64"
+          },
+          {
+            "name": "nativeTokensClaimed",
+            "type": "u64"
+          },
+          {
+            "name": "externalAllocationUnits",
+            "type": "u64"
+          },
+          {
+            "name": "externalUnitsClaimed",
+            "type": "u64"
+          }
+        ]
+      }
     }
   ],
   "events": [
@@ -1177,6 +2042,66 @@
       "code": 6028,
       "name": "InvalidLaunchMode",
       "msg": "Launch mode is invalid"
+    },
+    {
+      "code": 6029,
+      "name": "InvalidLaunchBackend",
+      "msg": "Launch backend is invalid"
+    },
+    {
+      "code": 6030,
+      "name": "RoomLedgerMismatch",
+      "msg": "Room ledger does not match the requested room id"
+    },
+    {
+      "code": 6031,
+      "name": "V2RoomNotOpen",
+      "msg": "V2 room is not open"
+    },
+    {
+      "code": 6032,
+      "name": "ReceiptMismatch",
+      "msg": "Room receipt does not match the requested room id"
+    },
+    {
+      "code": 6033,
+      "name": "InvalidLaunchBackendForRoom",
+      "msg": "Room launch backend does not allow this operation"
+    },
+    {
+      "code": 6034,
+      "name": "V2RoomNotSpawned",
+      "msg": "V2 room has not been spawned"
+    },
+    {
+      "code": 6035,
+      "name": "MissingApprovedReceiptAccounts",
+      "msg": "Missing approved room receipt accounts required for spawn allocation"
+    },
+    {
+      "code": 6036,
+      "name": "InvalidReceiptRemainingAccount",
+      "msg": "Invalid room receipt passed as a remaining account"
+    },
+    {
+      "code": 6037,
+      "name": "InvalidV2ReceiptAccounting",
+      "msg": "Room receipt accounting buckets are inconsistent"
+    },
+    {
+      "code": 6038,
+      "name": "InvalidV2RoomAccounting",
+      "msg": "Room ledger accounting buckets are inconsistent"
+    },
+    {
+      "code": 6039,
+      "name": "ExternalDistributionExceedsEntitlement",
+      "msg": "External settlement cannot exceed previously assigned entitlement"
+    },
+    {
+      "code": 6040,
+      "name": "ExternalSettlementNotReady",
+      "msg": "External settlement is not ready for this receipt"
     }
   ]
 }
