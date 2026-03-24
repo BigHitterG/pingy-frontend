@@ -8212,7 +8212,6 @@ if(connectBtn){
       const creatorTotalSpendLamports = Math.floor(commitInputSol * LAMPORTS_PER_SOL);
       if(commitInputSol > 0 && creatorTotalSpendLamports <= 0) return alert("commit must be at least 1 lamport.");
       const creatorWalletBalanceLamports = Math.max(0, Math.floor(Number(state.walletBalances?.[connectedWallet]?.nativeSol || 0) * LAMPORTS_PER_SOL));
-      if(creatorTotalSpendLamports > creatorWalletBalanceLamports) return alert("insufficient wallet balance for total spend.");
 
       const launchConfigResult = validateCreateLaunchConfig(getCreateLaunchConfig());
       if(!launchConfigResult.ok){
@@ -8241,6 +8240,9 @@ if(connectBtn){
             bootstrapCostLamports: 0,
             totalWalletSpendLamports: creatorTotalSpendLamports,
           };
+      if(useV2SpawnCreate && creatorFeeMath.bootstrapCostLamports !== 0){
+        creatorFeeMath.bootstrapCostLamports = 0;
+      }
       const commitLamports = creatorFeeMath.committedTargetLamports;
       const commit = commitLamports / LAMPORTS_PER_SOL;
       if(launchMode === "spawn" && creatorTotalSpendLamports > 0 && commitLamports <= 0){
@@ -8288,6 +8290,16 @@ if(connectBtn){
         creatorEscrowContributionLamports = creatorSplit.escrowContributionLamports;
       }
       const createDepositTotalLamports = commitLamports;
+      const totalRequiredLamports = createDepositTotalLamports + creatorFeeMath.feeLamports;
+      const SAFE_BUFFER = 0.01 * LAMPORTS_PER_SOL;
+      if(totalRequiredLamports > creatorWalletBalanceLamports - SAFE_BUFFER) return alert("insufficient wallet balance for total spend.");
+      console.log("[v2-spend-check]", {
+        commitLamports,
+        createDepositTotalLamports,
+        feeLamports: creatorFeeMath.feeLamports,
+        totalRequiredLamports,
+        walletLamports: creatorWalletBalanceLamports
+      });
       console.log("[ping-debug] ping fee math", {
         roomId: id,
         wallet: connectedWallet,
