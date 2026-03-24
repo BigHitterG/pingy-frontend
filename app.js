@@ -148,6 +148,10 @@ const $ = (id) => document.getElementById(id);
       return getRoomVersionMarker(room) === "v2_shared_vault";
     }
 
+    function isRuntimeV2Room(room){
+      return room?.room_version === "v2_shared_vault";
+    }
+
     function isV2Room(room){
       if(isCanonicalV2Room(room)) return true;
       if(room?.version === "v2" || room?.shared_vault === true) return true;
@@ -355,6 +359,16 @@ const $ = (id) => document.getElementById(id);
 
     function resolveWalletCommittedLamports(room, wallet, row = null){
       const sourceRow = row || {};
+      if(isRuntimeV2Room(room)){
+        const v2CommittedLamports = Math.max(0, Math.round(Number(
+          sourceRow.bundle_lamports_total
+          ?? sourceRow.committed_lamports
+          ?? sourceRow.withdrawable_lamports
+          ?? sourceRow.allocated_lamports
+          ?? ((Number(sourceRow.committed_sol ?? sourceRow.withdrawable_sol ?? sourceRow.escrow_sol ?? sourceRow.allocated_sol ?? 0) || 0) * LAMPORTS_PER_SOL)
+        ) || 0));
+        return v2CommittedLamports;
+      }
       const baseLamports = Math.max(0, Math.round(Number(
         sourceRow.committed_lamports
         ?? sourceRow.withdrawable_lamports
@@ -825,12 +839,7 @@ const $ = (id) => document.getElementById(id);
           const blocked = !!(r.blockedWallets && r.blockedWallets[wallet]);
           const status = blocked ? "denied" : normalizeDepositStatus(row.status);
 
-          const committedLamports = Math.max(0, Math.round(Number(
-            row.committed_lamports
-            ?? row.withdrawable_lamports
-            ?? row.allocated_lamports
-            ?? ((Number(row.committed_sol ?? row.withdrawable_sol ?? row.escrow_sol ?? row.allocated_sol ?? 0) || 0) * LAMPORTS_PER_SOL)
-          ) || 0));
+          const committedLamports = resolveWalletCommittedLamports(r, wallet, row);
           const withdrawableLamports = Math.max(0, Math.round(Number(
             row.withdrawable_lamports
             ?? row.allocated_lamports
@@ -5871,6 +5880,8 @@ function encodeU64Arg(v){
 
     async function fetchRoomOnchainSnapshot(roomId){
       if(!roomId) return null;
+      const room = roomById(roomId);
+      const preferV2Read = isRuntimeV2Room(room) || state.onchain?.[roomId]?.model === "v2_shared_vault";
       const [threadPda] = await deriveThreadPda(roomId);
       const [curvePda] = await deriveCurvePda(roomId);
       const [roomLedgerPda] = await deriveRoomLedgerPda(roomId);
@@ -5878,9 +5889,11 @@ function encodeU64Arg(v){
         connection.getAccountInfo(threadPda, "confirmed"),
         connection.getAccountInfo(roomLedgerPda, "confirmed"),
       ]);
+      const hasThreadAccount = !!(threadInfo?.data?.length >= 8);
+      const hasRoomLedgerAccount = !!(roomLedgerInfo?.data?.length >= 8);
 
       let snapshot = null;
-      if(threadInfo?.data?.length >= 8){
+      if((!preferV2Read && hasThreadAccount) || (preferV2Read && !hasRoomLedgerAccount && hasThreadAccount)){
         const thread = decodeThreadAccount(threadInfo.data);
         if(!thread) return null;
         const byWallet = {};
@@ -5960,7 +5973,7 @@ function encodeU64Arg(v){
           pendingWallets,
           fetchedAtMs: Date.now()
         };
-      } else if(roomLedgerInfo?.data?.length >= 8){
+      } else if(hasRoomLedgerAccount){
         const roomLedger = decodeRoomLedgerAccount(roomLedgerInfo.data);
         if(!roomLedger || roomLedger.roomId !== roomId){
           state.onchain[roomId] = null;
@@ -5981,20 +5994,21 @@ function encodeU64Arg(v){
           const wallet = receipt.user;
           const refundableLamports = Number(receipt.refundable_lamports || 0);
           const allocatedLamports = Number(receipt.allocated_lamports || 0);
-          const committedLamports = refundableLamports + allocatedLamports;
+          const bundleLamportsTotal = Number(receipt.bundle_lamports_total || 0);
+          const committedLamports = Math.max(bundleLamportsTotal, refundableLamports + allocatedLamports);
           byWallet[wallet] = {
             status: receipt.status,
             committed_lamports: committedLamports,
             committed_sol: committedLamports / LAMPORTS_PER_SOL,
-            withdrawable_lamports: committedLamports,
-            withdrawable_sol: committedLamports / LAMPORTS_PER_SOL,
+            withdrawable_lamports: refundableLamports + allocatedLamports,
+            withdrawable_sol: (refundableLamports + allocatedLamports) / LAMPORTS_PER_SOL,
             allocated_lamports: allocatedLamports,
             allocated_sol: allocatedLamports / LAMPORTS_PER_SOL,
             refundable_lamports: refundableLamports,
             refundable_sol: refundableLamports / LAMPORTS_PER_SOL,
             escrow_sol: committedLamports / LAMPORTS_PER_SOL,
             receipt_pda: acct.pubkey.toBase58(),
-            bundle_lamports_total: Number(receipt.bundle_lamports_total || 0),
+            bundle_lamports_total: bundleLamportsTotal,
             forwarded_lamports: Number(receipt.forwarded_lamports || 0),
             refunded_lamports: Number(receipt.refunded_lamports || 0),
             receipt_backing_lamports: Number(receipt.receipt_backing_lamports || 0),
@@ -6040,7 +6054,6 @@ function encodeU64Arg(v){
       }
 
       state.onchain[roomId] = snapshot;
-      const room = roomById(roomId);
       if(room){
         room.onchain = snapshot;
         if(snapshot.model === "v2_shared_vault") markRoomAsV2SharedVault(room);
@@ -6060,13 +6073,13 @@ function encodeU64Arg(v){
     async function fetchConnectedWalletDepositLamports(roomId){
       if(!roomId || !connectedWallet) return 0;
       const room = roomById(roomId);
-      if(isV2Room(room) || state.onchain?.[roomId]?.model === "v2_shared_vault"){
+      if(isRuntimeV2Room(room) || state.onchain?.[roomId]?.model === "v2_shared_vault"){
         const walletPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
         const [roomReceiptPda] = await deriveRoomReceiptPda(roomId, walletPk);
         const receiptInfo = await connection.getAccountInfo(roomReceiptPda, "confirmed");
         if(!receiptInfo?.data?.length || receiptInfo.data.length < 8) return 0;
         const receipt = decodeRoomReceiptAccount(receiptInfo.data);
-        return Number((receipt?.allocated_lamports || 0) + (receipt?.refundable_lamports || 0));
+        return Number(receipt?.bundle_lamports_total || ((receipt?.allocated_lamports || 0) + (receipt?.refundable_lamports || 0)));
       }
       const walletPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
       const [depositPda] = await deriveDepositPda(roomId, walletPk);
@@ -6083,7 +6096,7 @@ function encodeU64Arg(v){
         return null;
       }
       const room = roomById(roomId);
-      if(isV2Room(room) || state.onchain?.[roomId]?.model === "v2_shared_vault"){
+      if(isRuntimeV2Room(room) || state.onchain?.[roomId]?.model === "v2_shared_vault"){
         const walletPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
         const [roomReceiptPda] = await deriveRoomReceiptPda(roomId, walletPk);
         const info = await connection.getAccountInfo(roomReceiptPda, "confirmed");
@@ -6092,12 +6105,15 @@ function encodeU64Arg(v){
           return state.userEscrow;
         }
         const receipt = decodeRoomReceiptAccount(info.data);
+        const bundleLamportsTotal = Number(receipt?.bundle_lamports_total || 0);
         state.userEscrow = {
           exists: true,
           status: receipt?.status || "",
           refundable_lamports: Number(receipt?.refundable_lamports || 0),
           allocated_lamports: Number(receipt?.allocated_lamports || 0),
           withdrawable_lamports: Number((receipt?.refundable_lamports || 0) + (receipt?.allocated_lamports || 0)),
+          bundle_lamports_total: bundleLamportsTotal,
+          committed_lamports: bundleLamportsTotal,
           room_receipt_pda: roomReceiptPda.toBase58(),
         };
         return state.userEscrow;
@@ -6175,9 +6191,45 @@ function encodeU64Arg(v){
             refundable_sol: refundableSol,
             allocated_sol: allocatedSol,
             withdrawable_sol: refundableSol + allocatedSol,
+            committed_lamports: Number((deposit.refundable_lamports || 0) + (deposit.allocated_lamports || 0)),
             spawn_token_allocation: Number(deposit.spawn_token_allocation || 0),
             spawn_tokens_claimed: Number(deposit.spawn_tokens_claimed || 0),
+            native_token_allocation: 0,
+            native_tokens_claimed: 0,
+            room_version: "v1",
             deposit_pda: acct.pubkey.toBase58(),
+          };
+        }
+        const receiptAccounts = await connection.getProgramAccounts(PROGRAM_ID, {
+          commitment: "confirmed",
+          filters: [{ dataSize: ROOM_RECEIPT_ACCOUNT_DATA_SIZE }]
+        });
+        for(const acct of receiptAccounts){
+          if(!acct?.account?.data || acct.account.data.length < 8) continue;
+          const receipt = decodeRoomReceiptAccount(acct.account.data);
+          if(!receipt || receipt.user !== wallet) continue;
+          const roomId = receipt.roomId;
+          const refundableLamports = Number(receipt.refundable_lamports || 0);
+          const allocatedLamports = Number(receipt.allocated_lamports || 0);
+          const committedLamports = Math.max(Number(receipt.bundle_lamports_total || 0), refundableLamports + allocatedLamports);
+          depositsByThread[roomId] = {
+            threadId: roomId,
+            status: normalizeDepositStatus(receipt.status),
+            refundable_sol: refundableLamports / LAMPORTS_PER_SOL,
+            allocated_sol: allocatedLamports / LAMPORTS_PER_SOL,
+            withdrawable_sol: (refundableLamports + allocatedLamports) / LAMPORTS_PER_SOL,
+            committed_lamports: committedLamports,
+            bundle_lamports_total: Number(receipt.bundle_lamports_total || 0),
+            refundable_lamports: refundableLamports,
+            allocated_lamports: allocatedLamports,
+            forwarded_lamports: Number(receipt.forwarded_lamports || 0),
+            refunded_lamports: Number(receipt.refunded_lamports || 0),
+            native_token_allocation: Number(receipt.native_token_allocation || 0),
+            native_tokens_claimed: Number(receipt.native_tokens_claimed || 0),
+            spawn_token_allocation: Number(receipt.native_token_allocation || 0),
+            spawn_tokens_claimed: Number(receipt.native_tokens_claimed || 0),
+            room_version: "v2_shared_vault",
+            receipt_pda: acct.pubkey.toBase58(),
           };
         }
       } catch(e){
@@ -6260,10 +6312,11 @@ function encodeU64Arg(v){
 
       const depositsByThread = snapshot?.depositsByThread || {};
       Object.values(depositsByThread).forEach((deposit) => {
-        const allocation = Number(deposit.spawn_token_allocation || 0);
-        const claimed = Number(deposit.spawn_tokens_claimed || 0);
-        if(allocation <= 0 && claimed <= 0) return;
         const room = roomById(deposit.threadId);
+        const useV2Fields = isRuntimeV2Room(room) || deposit.room_version === "v2_shared_vault";
+        const allocation = Number(useV2Fields ? (deposit.native_token_allocation ?? deposit.spawn_token_allocation) : (deposit.spawn_token_allocation || 0));
+        const claimed = Number(useV2Fields ? (deposit.native_tokens_claimed ?? deposit.spawn_tokens_claimed) : (deposit.spawn_tokens_claimed || 0));
+        if(allocation <= 0 && claimed <= 0) return;
         rowsByRoomId.set(deposit.threadId, {
           roomId: deposit.threadId,
           roomName: room?.name || deposit.threadId,
@@ -6280,8 +6333,9 @@ function encodeU64Arg(v){
         const byWallet = onchain?.byWallet || {};
         const entry = byWallet[wallet] || null;
         if(!entry) return;
-        const allocation = Number(entry.spawn_token_allocation || 0);
-        const claimed = Number(entry.spawn_tokens_claimed || 0);
+        const useV2Fields = isRuntimeV2Room(room) || onchain?.model === "v2_shared_vault";
+        const allocation = Number(useV2Fields ? (entry.native_token_allocation ?? entry.spawn_token_allocation) : (entry.spawn_token_allocation || 0));
+        const claimed = Number(useV2Fields ? (entry.native_tokens_claimed ?? entry.spawn_tokens_claimed) : (entry.spawn_tokens_claimed || 0));
         if(allocation <= 0 && claimed <= 0) return;
         rowsByRoomId.set(room.id, {
           roomId: room.id,
@@ -7859,7 +7913,9 @@ if(connectBtn){
       const onchainRow = room?.onchain?.byWallet?.[wallet] || state.onchain?.[room.id]?.byWallet?.[wallet] || null;
       if(onchainRow){
         if(getWalletGrossCommittedSol(room, wallet, onchainRow) > 0) return true;
-        if(Number(onchainRow.spawn_token_allocation || 0) > 0) return true;
+        if(isRuntimeV2Room(room)){
+          if(Number(onchainRow.native_token_allocation || 0) > 0) return true;
+        } else if(Number(onchainRow.spawn_token_allocation || 0) > 0) return true;
       }
       const msgs = state.chat?.[room.id] || [];
       if(msgs.some((m) => m && m.wallet === wallet)) return true;
