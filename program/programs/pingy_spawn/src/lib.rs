@@ -4,7 +4,7 @@ use anchor_lang::system_program;
 use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token::{self, Mint, MintTo, Token, TokenAccount, Transfer};
 
-declare_id!("5RRdaiZNyBCcB9ohpp4KnYsCbfNeEnPRGKocNvepW5Yk");
+declare_id!("GqZPaDR3Mx3eL75VGeRErRGiDB8cDRtwa66dYRQCt5fY");
 
 pub const SPAWN_FEE_BPS: u64 = 100;
 pub const BPS_DENOM: u64 = 10_000;
