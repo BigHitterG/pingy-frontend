@@ -189,11 +189,20 @@ const $ = (id) => document.getElementById(id);
       return isSharedVaultV2Enabled() && launchMode === "spawn";
     }
 
+    function shouldUseV2CreateFlow(launchMode){
+      return String(launchMode || "").toLowerCase() === "spawn" && isSharedVaultV2Enabled();
+    }
+
     function markRoomAsV2SharedVault(room){
       if(!room || typeof room !== "object") return room;
       room.room_version = "v2_shared_vault";
       room.onchain_model = "v2_shared_vault";
       return room;
+    }
+
+    function isAlreadyInitializedLikeError(err){
+      const message = String(err?.message || err || "").toLowerCase();
+      return message.includes("already in use") || message.includes("already initialized");
     }
 
     let uiRenderHome = null;
@@ -8144,7 +8153,7 @@ if(connectBtn){
       if(!launchConfigResult.ok) return;
       const launchConfig = launchConfigResult.config;
       const launchMode = launchConfig.launchMode || "spawn";
-      const useV2SpawnCreate = shouldUseV2SpawnFlow(launchMode);
+      const useV2SpawnCreate = shouldUseV2CreateFlow(launchMode);
       const walletSnapshot = state.walletBalances[connectedWallet] || {};
       const balanceLamports = Math.max(0, Math.floor(Number(walletSnapshot.nativeSol || 0) * LAMPORTS_PER_SOL));
       const input = $("newCommit");
@@ -8216,7 +8225,7 @@ if(connectBtn){
       }
       const launchConfig = launchConfigResult.config;
       const launchMode = launchConfig.launchMode || "spawn";
-      const useV2SpawnCreate = shouldUseV2SpawnFlow(launchMode);
+      const useV2SpawnCreate = shouldUseV2CreateFlow(launchMode);
       const creatorFeeMath = launchMode === "spawn"
         ? computeCreatorSpawnSpendModel({
             walletBalanceLamports: Number.MAX_SAFE_INTEGER,
@@ -8307,11 +8316,20 @@ if(connectBtn){
         if(launchMode === "spawn"){
           if(useV2SpawnCreate){
             try {
-              const createInstructions = [
-                ...(await buildMaybeInitializeV2GlobalStateIxs()),
-                await buildCreateRoomLedgerV2Ix(id, launchConfig),
-              ];
-              createTxSignature = await sendProgramInstructions(createInstructions);
+              const maybeInitIxs = await buildMaybeInitializeV2GlobalStateIxs();
+              const createRoomIx = await buildCreateRoomLedgerV2Ix(id, launchConfig);
+              try {
+                createTxSignature = await sendProgramInstructions([
+                  ...maybeInitIxs,
+                  createRoomIx,
+                ]);
+              } catch(initErr){
+                if(maybeInitIxs.length > 0 && isAlreadyInitializedLikeError(initErr)){
+                  createTxSignature = await sendProgramInstructions([createRoomIx]);
+                } else {
+                  throw initErr;
+                }
+              }
             } catch(e){
               console.error("[ping-debug] v2 room ledger create failed", { roomId: id, error: String(e?.message || e) });
               await cleanupReservedSupabaseRoom(reservedSupabaseRoom);
