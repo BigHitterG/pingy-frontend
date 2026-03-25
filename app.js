@@ -344,6 +344,19 @@ const $ = (id) => document.getElementById(id);
       return Math.max(0, Math.floor(Number(store[normalizedWallet] || 0)));
     }
 
+    function resolveWalletDepositBackingLamports(room, wallet, row = null){
+      const sourceRow = row || {};
+      const rowBackingLamports = Number(
+        sourceRow.deposit_backing_lamports
+        ?? sourceRow.receipt_backing_lamports
+        ?? sourceRow.account_backing_lamports
+      );
+      if(Number.isFinite(rowBackingLamports) && rowBackingLamports > 0){
+        return Math.max(0, Math.floor(rowBackingLamports));
+      }
+      return getWalletDepositBackingLamports(room, wallet);
+    }
+
     function setWalletDepositBackingLamports(room, wallet, lamports){
       const normalizedWallet = String(wallet || "").trim();
       if(!room || !normalizedWallet) return;
@@ -359,6 +372,7 @@ const $ = (id) => document.getElementById(id);
 
     function resolveWalletCommittedLamports(room, wallet, row = null){
       const sourceRow = row || {};
+      const accountBackingLamports = resolveWalletDepositBackingLamports(room, wallet, sourceRow);
       if(isRuntimeV2Room(room)){
         const v2CommittedLamports = Math.max(0, Math.round(Number(
           sourceRow.bundle_lamports_total
@@ -367,7 +381,7 @@ const $ = (id) => document.getElementById(id);
           ?? sourceRow.allocated_lamports
           ?? ((Number(sourceRow.committed_sol ?? sourceRow.withdrawable_sol ?? sourceRow.escrow_sol ?? sourceRow.allocated_sol ?? 0) || 0) * LAMPORTS_PER_SOL)
         ) || 0));
-        return v2CommittedLamports;
+        return v2CommittedLamports + accountBackingLamports;
       }
       const baseLamports = Math.max(0, Math.round(Number(
         sourceRow.committed_lamports
@@ -375,7 +389,7 @@ const $ = (id) => document.getElementById(id);
         ?? sourceRow.allocated_lamports
         ?? ((Number(sourceRow.committed_sol ?? sourceRow.withdrawable_sol ?? sourceRow.escrow_sol ?? sourceRow.allocated_sol ?? 0) || 0) * LAMPORTS_PER_SOL)
       ) || 0));
-      return baseLamports + getWalletDepositBackingLamports(room, wallet);
+      return baseLamports + accountBackingLamports;
     }
 
     async function estimateWalletDepositBackingLamports(roomId, wallet){
@@ -5924,6 +5938,7 @@ function encodeU64Arg(v){
             withdrawable_lamports: Number((deposit.allocated_lamports || 0) + (deposit.refundable_lamports || 0)),
             allocated_lamports: Number(deposit.allocated_lamports || 0),
             refundable_lamports: Number(deposit.refundable_lamports || 0),
+            deposit_backing_lamports: Number(acct.account?.lamports || 0),
             spawn_token_allocation: Number(deposit.spawn_token_allocation || 0),
             spawn_tokens_claimed: Number(deposit.spawn_tokens_claimed || 0),
             deposit_pda: acct.pubkey.toBase58()
@@ -6114,6 +6129,7 @@ function encodeU64Arg(v){
           withdrawable_lamports: Number((receipt?.refundable_lamports || 0) + (receipt?.allocated_lamports || 0)),
           bundle_lamports_total: bundleLamportsTotal,
           committed_lamports: bundleLamportsTotal,
+          receipt_backing_lamports: Number(receipt?.receipt_backing_lamports || 0),
           room_receipt_pda: roomReceiptPda.toBase58(),
         };
         return state.userEscrow;
@@ -6131,6 +6147,7 @@ function encodeU64Arg(v){
         refundable_lamports: Number(deposit?.refundable_lamports || 0),
         allocated_lamports: Number(deposit?.allocated_lamports || 0),
         withdrawable_lamports: Number((deposit?.refundable_lamports || 0) + (deposit?.allocated_lamports || 0)),
+        deposit_backing_lamports: Number(info?.lamports || 0),
         deposit_pda: depositPda.toBase58(),
       };
       return state.userEscrow;
@@ -6192,6 +6209,7 @@ function encodeU64Arg(v){
             allocated_sol: allocatedSol,
             withdrawable_sol: refundableSol + allocatedSol,
             committed_lamports: Number((deposit.refundable_lamports || 0) + (deposit.allocated_lamports || 0)),
+            deposit_backing_lamports: Number(acct.account?.lamports || 0),
             spawn_token_allocation: Number(deposit.spawn_token_allocation || 0),
             spawn_tokens_claimed: Number(deposit.spawn_tokens_claimed || 0),
             native_token_allocation: 0,
@@ -6224,6 +6242,7 @@ function encodeU64Arg(v){
             allocated_lamports: allocatedLamports,
             forwarded_lamports: Number(receipt.forwarded_lamports || 0),
             refunded_lamports: Number(receipt.refunded_lamports || 0),
+            receipt_backing_lamports: Number(receipt.receipt_backing_lamports || 0),
             native_token_allocation: Number(receipt.native_token_allocation || 0),
             native_tokens_claimed: Number(receipt.native_tokens_claimed || 0),
             spawn_token_allocation: Number(receipt.native_token_allocation || 0),
