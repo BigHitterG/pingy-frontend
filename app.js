@@ -194,7 +194,7 @@ const $ = (id) => document.getElementById(id);
     }
 
     function shouldUseV2CreateFlow(launchMode){
-      return String(launchMode || "").toLowerCase() === "spawn" && isSharedVaultV2Enabled();
+      return String(launchMode || "").toLowerCase() === "spawn";
     }
 
     function markRoomAsV2SharedVault(room){
@@ -4616,6 +4616,9 @@ function encodeU64Arg(v){
         .map((ix) => parseSystemTransferDetails(ix))
         .filter((details) => !!details && details.fromPubkey === feePayer.toBase58())
         .reduce((sum, details) => sum + Math.max(0, Number(details.lamports || 0)), 0);
+      const creatorFundingInstructionNames = Array.isArray(debugMeta?.creatorFundingInstructionNames)
+        ? debugMeta.creatorFundingInstructionNames
+        : [];
       console.log("[ping-debug] final instruction bundle before send", {
         instructionCount: tx.instructions.length,
         instructionProgramIds: tx.instructions.map((ix) => ix.programId?.toBase58?.()),
@@ -4630,6 +4633,7 @@ function encodeU64Arg(v){
         committedLamports,
         depositBackingLamports,
         feeLamports: expectedFeeLamports,
+        creatorFundingInstructionNames,
       });
       console.log("[ping-debug] FINAL TX INSTRUCTIONS", tx.instructions.map((ix, idx) => ({
         idx,
@@ -8298,6 +8302,11 @@ if(connectBtn){
       const launchConfig = launchConfigResult.config;
       const launchMode = launchConfig.launchMode || "spawn";
       const useV2SpawnCreate = shouldUseV2CreateFlow(launchMode);
+      console.log("[ping-debug] create path selection", {
+        launchMode,
+        useV2SpawnCreate,
+        createPathChosen: launchMode === "spawn" ? (useV2SpawnCreate ? "v2_shared_vault" : "legacy") : "non-spawn",
+      });
       const creatorFeeMath = launchMode === "spawn"
         ? computeCreatorSpawnSpendModel({
             walletBalanceLamports: Number.MAX_SAFE_INTEGER,
@@ -8340,25 +8349,8 @@ if(connectBtn){
       const reservedSupabaseRoom = await reserveSupabaseRoomMetadata(roomMetadataPayload);
       const id = reservedSupabaseRoom?.runtimeRoomId || ("r" + Math.random().toString(16).slice(2,6));
       let creatorDepositBackingLamports = 0;
-      let creatorEscrowContributionLamports = commitLamports;
+      let creatorEscrowContributionLamports = 0;
       let creatorInitialCommitLamports = commitLamports;
-      if(launchMode === "spawn" && commitLamports > 0 && !useV2SpawnCreate){
-        try {
-          creatorDepositBackingLamports = await estimateWalletDepositBackingLamports(id, connectedWallet);
-        } catch(backingErr){
-          console.warn("[ping-debug] creator deposit backing estimation failed", {
-            roomId: id,
-            wallet: connectedWallet,
-            error: String(backingErr?.message || backingErr),
-          });
-        }
-        const creatorSplit = splitCommittedLamportsForEscrow({
-          committedLamports: commitLamports,
-          depositBackingLamports: creatorDepositBackingLamports,
-        });
-        creatorDepositBackingLamports = creatorSplit.depositBackingLamports;
-        creatorEscrowContributionLamports = creatorSplit.escrowContributionLamports;
-      }
       const createDepositTotalLamports = commitLamports;
       const totalRequiredLamports = createDepositTotalLamports + creatorFeeMath.feeLamports;
       const SAFE_BUFFER = 0.01 * LAMPORTS_PER_SOL;
@@ -8395,137 +8387,81 @@ if(connectBtn){
         }
 
         if(launchMode === "spawn"){
-          if(useV2SpawnCreate){
-            try {
-              const maybeInitIxs = await buildMaybeInitializeV2GlobalStateIxs();
-              const createRoomIx = await buildCreateRoomLedgerV2Ix(id, launchConfig);
-              try {
-                createTxSignature = await sendProgramInstructions([
-                  ...maybeInitIxs,
-                  createRoomIx,
-                ]);
-              } catch(initErr){
-                if(maybeInitIxs.length > 0 && isAlreadyInitializedLikeError(initErr)){
-                  createTxSignature = await sendProgramInstructions([createRoomIx]);
-                } else {
-                  throw initErr;
-                }
-              }
-            } catch(e){
-              console.error("[ping-debug] v2 room ledger create failed", { roomId: id, error: String(e?.message || e) });
-              await cleanupReservedSupabaseRoom(reservedSupabaseRoom);
-              reportTxError(e, "initialize_v2_global_state + create_room_ledger failed during create");
-              return;
-            }
-            if(commitLamports > 0){
-              try {
-                const creatorFeeIx = buildPingFeeTransferInstruction(creatorFeeMath.feeLamports);
-                const depositIx = await buildPingDepositSharedV2Ix(id, createDepositTotalLamports);
-                const instructions = [
-                  ...(creatorFeeIx ? [creatorFeeIx] : []),
-                  depositIx,
-                ];
-                creatorFeeTransferSignature = await sendProgramInstructions(instructions, {
-                  feeRecipient: PINGY_FEE_RECIPIENT,
-                  expectedWalletOutflowLamports: creatorTotalSpendLamports,
-                  committedLamports: commitLamports,
-                  depositBackingLamports: 0,
-                  expectedDepositInstructionLamports: commitLamports,
-                  feeLamports: creatorFeeMath.feeLamports,
-                  bootstrapCostLamports: 0,
-                });
-              } catch(e){
-                console.error("[ping-debug] v2 creator deposit failed after room create", { roomId: id, commitLamports, error: String(e?.message || e) });
-                creatorInitialCommitLamports = 0;
-                creatorEscrowContributionLamports = 0;
-                showToast("Room created. Creator ping was not submitted.");
-              }
-            }
-          } else {
-          const launchBackend = PINGY_LAUNCH_BACKEND;
-          const usePumpfunMinimalPrespawnPath = isPumpfunLaunchBackend();
-          const includeLegacyNativeAssets = !usePumpfunMinimalPrespawnPath;
-          console.log("[ping-debug] spawn init mode", {
-            roomId: id,
-            launchBackend,
-            launchMode: launchConfig.launchMode,
-            path: usePumpfunMinimalPrespawnPath ? "pumpfun-minimal-prespawn" : "native-legacy-init",
-            included: ["initialize_thread_core", ...(includeLegacyNativeAssets ? ["initialize_thread_assets"] : []), ...(commitLamports > 0 ? ["ping_deposit"] : [])],
-            excluded: includeLegacyNativeAssets ? [] : ["initialize_thread_assets (legacy native curve path retained for future reactivation; inactive for Pump.fun spawn flow)"],
-          });
           try {
-            const createPath = commitLamports > 0 ? "combined-init+deposit" : "init-only";
-            console.log("[ping-debug] spawn funding branch entered", {
+            const maybeInitIxs = await buildMaybeInitializeV2GlobalStateIxs();
+            const createRoomIx = await buildCreateRoomLedgerV2Ix(id, launchConfig);
+            const roomInitInstructionNames = [
+              ...(maybeInitIxs.length > 0 ? ["initialize_v2_global_state"] : []),
+              "create_room_ledger",
+            ];
+            console.log("[ping-debug] spawn create tx path", {
               roomId: id,
-              committedLamports: commitLamports,
-              createDepositTotalLamports,
-              shouldFund: commitLamports > 0,
-              launchBackend: PINGY_LAUNCH_BACKEND,
+              launchMode,
+              useV2SpawnCreate,
+              createPathChosen: "v2_shared_vault",
+              roomInitInstructionNames,
             });
-            console.log("[ping-debug] create flow", {
-              launchMode: launchConfig.launchMode,
-              committedLamports: commitLamports,
-              createDepositTotalLamports,
-              path: createPath,
-            });
-            if(commitLamports > 0){
+            try {
+              createTxSignature = await sendProgramInstructions([
+                ...maybeInitIxs,
+                createRoomIx,
+              ]);
+            } catch(initErr){
+              if(maybeInitIxs.length > 0 && isAlreadyInitializedLikeError(initErr)){
+                createTxSignature = await sendProgramInstructions([createRoomIx]);
+              } else {
+                throw initErr;
+              }
+            }
+          } catch(e){
+            console.error("[ping-debug] v2 room ledger create failed", { roomId: id, error: String(e?.message || e) });
+            await cleanupReservedSupabaseRoom(reservedSupabaseRoom);
+            reportTxError(e, "initialize_v2_global_state + create_room_ledger failed during create");
+            return;
+          }
+          if(commitLamports > 0){
+            try {
               const creatorFeeIx = buildPingFeeTransferInstruction(creatorFeeMath.feeLamports);
-              console.log("[ping-debug] before Phantom funding tx", { roomId: id, commitLamports, createDepositTotalLamports, hasCreatorFeeInstruction: !!creatorFeeIx });
-              const depositBundle = await pingWithOptionalThreadInitTx(id, createDepositTotalLamports, true, launchConfig, {
-                includeLegacyNativeAssets,
-              });
+              const depositIx = await buildPingDepositSharedV2Ix(id, createDepositTotalLamports);
               const instructions = [
                 ...(creatorFeeIx ? [creatorFeeIx] : []),
-                ...(depositBundle.instructions || []),
+                depositIx,
               ];
-              createTxSignature = await sendProgramInstructions(instructions, {
-                feeRecipient: PINGY_FEE_RECIPIENT,
-                expectedWalletOutflowLamports: creatorTotalSpendLamports,
-                committedLamports: commitLamports,
-                depositBackingLamports: creatorDepositBackingLamports,
-                expectedDepositInstructionLamports: commitLamports,
-                feeLamports: creatorFeeMath.feeLamports,
-              });
-              creatorFeeTransferSignature = creatorFeeIx ? createTxSignature : "";
-              if(creatorFeeIx){
-                console.log("[ping-debug] creator fee transfer", {
-                  roomId: id,
-                  wallet: connectedWallet,
-                  creatorTotalSpendLamports,
-                  grossPositionInputLamports: creatorFeeMath.grossPositionInputLamports,
-                  feeLamports: creatorFeeMath.feeLamports,
-                  committedTargetLamports: commitLamports,
-                  depositBackingLamports: creatorDepositBackingLamports,
-                  escrowContributionLamports: creatorEscrowContributionLamports,
-                  expectedWalletOutflowLamports: creatorTotalSpendLamports,
-                  expectedDepositInstructionLamports: commitLamports,
-                  transferSignature: creatorFeeTransferSignature,
-                });
-              }
+              const creatorFundingInstructionNames = [
+                ...(creatorFeeIx ? ["ping_fee_transfer"] : []),
+                "ping_deposit_shared",
+              ];
               console.log("[ping-debug] spawn create all-in accounting", {
                 roomId: id,
+                launchMode,
+                useV2SpawnCreate,
+                createPathChosen: "v2_shared_vault",
                 enteredCommitLamports: creatorTotalSpendLamports,
                 pingyFeeLamports: creatorFeeMath.feeLamports,
                 netCommittedLamports: commitLamports,
-                receiptBackingLamports: 0,
-                depositBackingLamports: creatorDepositBackingLamports,
-                escrowContributionLamports: creatorEscrowContributionLamports,
-                internalSplitTotalLamports: creatorDepositBackingLamports + creatorEscrowContributionLamports,
+                receiptBackingLamports: commitLamports,
+                depositBackingLamports: 0,
+                escrowContributionLamports: 0,
                 expectedWalletOutflowLamports: creatorTotalSpendLamports,
                 assembledTxOutflowLamports: creatorFeeMath.feeLamports + commitLamports,
+                creatorFundingInstructionNames,
               });
-              console.log("[ping-debug] funding tx success", { roomId: id, commitLamports, createDepositTotalLamports, creatorFeeTransferSignature });
-            } else {
-              createTxSignature = await initializeThreadTx(id, launchConfig, { includeLegacyNativeAssets });
+              creatorFeeTransferSignature = await sendProgramInstructions(instructions, {
+                feeRecipient: PINGY_FEE_RECIPIENT,
+                expectedWalletOutflowLamports: creatorTotalSpendLamports,
+                committedLamports: commitLamports,
+                depositBackingLamports: 0,
+                expectedDepositInstructionLamports: commitLamports,
+                feeLamports: creatorFeeMath.feeLamports,
+                bootstrapCostLamports: 0,
+                creatorFundingInstructionNames,
+              });
+            } catch(e){
+              console.error("[ping-debug] v2 creator deposit failed after room create", { roomId: id, commitLamports, error: String(e?.message || e) });
+              creatorInitialCommitLamports = 0;
+              creatorEscrowContributionLamports = 0;
+              showToast("Room created. Creator ping was not submitted.");
             }
-          } catch(e){
-            console.error("[ping-debug] funding tx failed", { roomId: id, commitLamports, error: String(e?.message || e) });
-            await cleanupReservedSupabaseRoom(reservedSupabaseRoom);
-            if(isWalletTxRejected(e)) showToast("Create cancelled — no coin or commit was submitted.");
-            else if(commitLamports > 0) reportTxError(e, includeLegacyNativeAssets ? "initialize_thread_core + initialize_thread_assets + ping_deposit failed during create" : "initialize_thread_core + ping_deposit failed during create");
-            else reportTxError(e, includeLegacyNativeAssets ? "initialize_thread_core + initialize_thread_assets failed during create" : "initialize_thread_core failed during create");
-            return;
-          }
           }
         } else {
           try {
