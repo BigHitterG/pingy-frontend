@@ -10256,11 +10256,8 @@ if(connectBtn){
       if(unpingAmountUnit) unpingAmountUnit.textContent = isSpawning ? "SOL" : "tokens";
 
       if(pingModalHelp){
-        const spawnFeeBps = PING_FEE_BPS;
         pingModalHelp.textContent = isSpawning
-          ? (spawnFeeBps > 0
-            ? "Your entered amount is total spend. Pingy takes a 1% fee. The rest becomes your committed amount."
-            : "Your entered amount is committed to the shared vault receipt + escrow path.")
+          ? "Your entered amount is total spend. Pingy takes a 1% fee. The rest becomes your committed amount."
           : isPumpPostSpawn
             ? "Launched coins trade outside Pingy. Pingy remains the coordination and watch layer."
             : isBonded
@@ -10506,6 +10503,20 @@ if(connectBtn){
 	            const feeIx = buildPingFeeTransferInstruction(pingSpendModel.feeLamports);
 	            let sig = "";
 	            if(useV2RoomFlow){
+                const userFundingInstructionNames = [
+                  ...(feeIx ? ["ping_fee_transfer"] : []),
+                  "ping_deposit_shared",
+                ];
+                console.log("[ping-debug] regular ping funding tx", {
+                  roomId: rid,
+                  wallet: connectedWallet,
+                  grossWalletInputLamports: amountLamports,
+                  feeLamports: pingSpendModel.feeLamports,
+                  committedLamports,
+                  expectedWalletOutflowLamports: amountLamports,
+                  expectedDepositInstructionLamports: committedLamports,
+                  userFundingInstructionNames,
+                });
 	              const instructions = [
 	                ...(feeIx ? [feeIx] : []),
 	                await buildPingDepositSharedV2Ix(rid, committedLamports),
@@ -10552,6 +10563,21 @@ if(connectBtn){
 	                !threadInfo,
 	                null
 	              );
+                const userFundingInstructionNames = [
+                  ...(feeIx ? ["ping_fee_transfer"] : []),
+                  ...(!threadInfo ? ["initialize_thread_core", "initialize_thread_assets"] : []),
+                  "ping_deposit",
+                ];
+                console.log("[ping-debug] regular ping funding tx", {
+                  roomId: rid,
+                  wallet: connectedWallet,
+                  grossWalletInputLamports: amountLamports,
+                  feeLamports: pingSpendModel.feeLamports,
+                  committedLamports,
+                  expectedWalletOutflowLamports: amountLamports,
+                  expectedDepositInstructionLamports: committedLamports,
+                  userFundingInstructionNames,
+                });
 	              const instructions = [
 	                ...(feeIx ? [feeIx] : []),
 	                ...(depositBundle.instructions || []),
