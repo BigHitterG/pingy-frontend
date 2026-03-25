@@ -298,7 +298,7 @@ const $ = (id) => document.getElementById(id);
       const safeNetworkBufferLamports = Math.max(0, Math.floor(Number(networkBufferLamports || 0)));
       if(totalWalletSpendLamports != null){
         const total = Math.max(0, Math.floor(Number(totalWalletSpendLamports || 0)));
-        const grossPositionInputLamports = Math.max(0, total - safeBootstrapCostLamports);
+        const grossPositionInputLamports = total;
         const feeMath = computePingFeeBreakdownLamports(grossPositionInputLamports);
         return {
           committedTargetLamports: feeMath.committedLamports,
@@ -381,7 +381,7 @@ const $ = (id) => document.getElementById(id);
           ?? sourceRow.allocated_lamports
           ?? ((Number(sourceRow.committed_sol ?? sourceRow.withdrawable_sol ?? sourceRow.escrow_sol ?? sourceRow.allocated_sol ?? 0) || 0) * LAMPORTS_PER_SOL)
         ) || 0));
-        return v2CommittedLamports + accountBackingLamports;
+        return v2CommittedLamports > 0 ? v2CommittedLamports : accountBackingLamports;
       }
       const baseLamports = Math.max(0, Math.round(Number(
         sourceRow.committed_lamports
@@ -389,7 +389,7 @@ const $ = (id) => document.getElementById(id);
         ?? sourceRow.allocated_lamports
         ?? ((Number(sourceRow.committed_sol ?? sourceRow.withdrawable_sol ?? sourceRow.escrow_sol ?? sourceRow.allocated_sol ?? 0) || 0) * LAMPORTS_PER_SOL)
       ) || 0));
-      return baseLamports + accountBackingLamports;
+      return baseLamports > 0 ? baseLamports : accountBackingLamports;
     }
 
     async function estimateWalletDepositBackingLamports(roomId, wallet){
