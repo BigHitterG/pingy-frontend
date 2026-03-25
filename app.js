@@ -8472,21 +8472,65 @@ if(connectBtn){
               ...(maybeInitIxs.length > 0 ? ["initialize_v2_global_state"] : []),
               "create_room_ledger",
             ];
-            console.log("[ping-debug] spawn create tx path", {
+            const creatorFeeIx = commitLamports > 0 ? buildPingFeeTransferInstruction(creatorFeeMath.feeLamports) : null;
+            const depositIx = commitLamports > 0 ? await buildPingDepositSharedV2Ix(id, createDepositTotalLamports) : null;
+            const creatorFundingInstructionNames = commitLamports > 0
+              ? [
+                  ...(creatorFeeIx ? ["ping_fee_transfer"] : []),
+                  "ping_deposit_shared",
+                ]
+              : [];
+            const allInInstructionNames = [
+              ...roomInitInstructionNames,
+              ...creatorFundingInstructionNames,
+            ];
+            console.log("[ping-debug] spawn tx sequence (phase3 target)", {
               roomId: id,
               launchMode,
               useV2SpawnCreate,
               createPathChosen: "v2_shared_vault",
-              roomInitInstructionNames,
+              txCount: 1,
+              firstPhantomPromptTx: "spawn_all_in_one",
+              allInInstructionNames,
+              creatorFundingInstructionNames,
+              enteredCommitLamports: creatorTotalSpendLamports,
+              expectedWalletOutflowLamports: creatorTotalSpendLamports,
             });
+            const buildSpawnAllInOneInstructions = (includeInit) => ([
+              ...(includeInit ? maybeInitIxs : []),
+              createRoomIx,
+              ...(creatorFeeIx ? [creatorFeeIx] : []),
+              ...(depositIx ? [depositIx] : []),
+            ]);
+            const spawnAllInOneDebugMeta = commitLamports > 0
+              ? {
+                  feeRecipient: PINGY_FEE_RECIPIENT,
+                  expectedWalletOutflowLamports: creatorTotalSpendLamports,
+                  committedLamports: commitLamports,
+                  depositBackingLamports: 0,
+                  expectedDepositInstructionLamports: commitLamports,
+                  feeLamports: creatorFeeMath.feeLamports,
+                  bootstrapCostLamports: 0,
+                  creatorFundingInstructionNames,
+                }
+              : null;
             try {
-              createTxSignature = await sendProgramInstructions([
-                ...maybeInitIxs,
-                createRoomIx,
-              ]);
+              createTxSignature = await sendProgramInstructions(
+                buildSpawnAllInOneInstructions(true),
+                spawnAllInOneDebugMeta
+              );
+              if(commitLamports > 0){
+                creatorFeeTransferSignature = createTxSignature;
+              }
             } catch(initErr){
               if(maybeInitIxs.length > 0 && isAlreadyInitializedLikeError(initErr)){
-                createTxSignature = await sendProgramInstructions([createRoomIx]);
+                createTxSignature = await sendProgramInstructions(
+                  buildSpawnAllInOneInstructions(false),
+                  spawnAllInOneDebugMeta
+                );
+                if(commitLamports > 0){
+                  creatorFeeTransferSignature = createTxSignature;
+                }
               } else {
                 throw initErr;
               }
@@ -8494,54 +8538,32 @@ if(connectBtn){
           } catch(e){
             console.error("[ping-debug] v2 room ledger create failed", { roomId: id, error: String(e?.message || e) });
             await cleanupReservedSupabaseRoom(reservedSupabaseRoom);
-            reportTxError(e, "initialize_v2_global_state + create_room_ledger failed during create");
+            reportTxError(e, commitLamports > 0
+              ? "spawn all-in transaction failed during create + creator funding"
+              : "initialize_v2_global_state + create_room_ledger failed during create");
             return;
           }
           if(commitLamports > 0){
-            try {
-              await ensureCreatorRoomReceiptBeforeDeposit(id);
-              const creatorFeeIx = buildPingFeeTransferInstruction(creatorFeeMath.feeLamports);
-              const depositIx = await buildPingDepositSharedV2Ix(id, createDepositTotalLamports);
-              const instructions = [
-                ...(creatorFeeIx ? [creatorFeeIx] : []),
-                depositIx,
-              ];
-              const creatorFundingInstructionNames = [
-                ...(creatorFeeIx ? ["ping_fee_transfer"] : []),
+            console.log("[ping-debug] spawn create all-in accounting", {
+              roomId: id,
+              launchMode,
+              useV2SpawnCreate,
+              createPathChosen: "v2_shared_vault",
+              enteredCommitLamports: creatorTotalSpendLamports,
+              pingyFeeLamports: creatorFeeMath.feeLamports,
+              netCommittedLamports: commitLamports,
+              receiptBackingLamports: commitLamports,
+              depositBackingLamports: 0,
+              escrowContributionLamports: 0,
+              expectedWalletOutflowLamports: creatorTotalSpendLamports,
+              assembledTxOutflowLamports: creatorFeeMath.feeLamports + commitLamports,
+              creatorFundingInstructionNames: [
+                ...(creatorFeeMath.feeLamports > 0 ? ["ping_fee_transfer"] : []),
                 "ping_deposit_shared",
-              ];
-              console.log("[ping-debug] spawn create all-in accounting", {
-                roomId: id,
-                launchMode,
-                useV2SpawnCreate,
-                createPathChosen: "v2_shared_vault",
-                enteredCommitLamports: creatorTotalSpendLamports,
-                pingyFeeLamports: creatorFeeMath.feeLamports,
-                netCommittedLamports: commitLamports,
-                receiptBackingLamports: commitLamports,
-                depositBackingLamports: 0,
-                escrowContributionLamports: 0,
-                expectedWalletOutflowLamports: creatorTotalSpendLamports,
-                assembledTxOutflowLamports: creatorFeeMath.feeLamports + commitLamports,
-                creatorFundingInstructionNames,
-                depositUsesExistingReceiptOnly: true,
-              });
-              creatorFeeTransferSignature = await sendProgramInstructions(instructions, {
-                feeRecipient: PINGY_FEE_RECIPIENT,
-                expectedWalletOutflowLamports: creatorTotalSpendLamports,
-                committedLamports: commitLamports,
-                depositBackingLamports: 0,
-                expectedDepositInstructionLamports: commitLamports,
-                feeLamports: creatorFeeMath.feeLamports,
-                bootstrapCostLamports: 0,
-                creatorFundingInstructionNames,
-              });
-            } catch(e){
-              console.error("[ping-debug] v2 creator deposit failed after room create", { roomId: id, commitLamports, error: String(e?.message || e) });
-              creatorInitialCommitLamports = 0;
-              creatorEscrowContributionLamports = 0;
-              showToast("Room created. Creator ping was not submitted.");
-            }
+              ],
+              depositUsesExistingReceiptOnly: true,
+              creatorReceiptEstablishedViaCreateRoomLedger: true,
+            });
           }
         } else {
           try {
