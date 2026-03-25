@@ -263,9 +263,10 @@ const $ = (id) => document.getElementById(id);
     }
 
 
-    function computePingFeeBreakdownLamports(grossPositionInputLamports){
+    function computePingFeeBreakdownLamports(grossPositionInputLamports, feeBps = PING_FEE_BPS){
       const safeInputLamports = Math.max(0, Math.floor(Number(grossPositionInputLamports || 0)));
-      const feeLamports = Math.ceil((safeInputLamports * PING_FEE_BPS) / BPS_DENOM);
+      const safeFeeBps = Math.max(0, Math.floor(Number(feeBps || 0)));
+      const feeLamports = Math.ceil((safeInputLamports * safeFeeBps) / BPS_DENOM);
       const committedLamports = Math.max(0, safeInputLamports - feeLamports);
       return {
         grossPositionInputLamports: safeInputLamports,
@@ -274,15 +275,18 @@ const $ = (id) => document.getElementById(id);
       };
     }
 
-    function computeGrossPositionInputForCommittedLamports(targetCommittedLamports){
+    function computeGrossPositionInputForCommittedLamports(targetCommittedLamports, feeBps = PING_FEE_BPS){
       const safeTargetLamports = Math.max(0, Math.floor(Number(targetCommittedLamports || 0)));
       if(safeTargetLamports <= 0) return 0;
-      return Math.ceil((safeTargetLamports * BPS_DENOM) / (BPS_DENOM - PING_FEE_BPS));
+      const safeFeeBps = Math.max(0, Math.floor(Number(feeBps || 0)));
+      if(safeFeeBps <= 0) return safeTargetLamports;
+      if(safeFeeBps >= BPS_DENOM) return 0;
+      return Math.ceil((safeTargetLamports * BPS_DENOM) / (BPS_DENOM - safeFeeBps));
     }
 
-    function computeRegularPingSpendModel({ grossWalletInputLamports }){
+    function computeRegularPingSpendModel({ grossWalletInputLamports, feeBps = PING_FEE_BPS }){
       const safeGrossWalletInputLamports = Math.max(0, Math.floor(Number(grossWalletInputLamports || 0)));
-      const feeMath = computePingFeeBreakdownLamports(safeGrossWalletInputLamports);
+      const feeMath = computePingFeeBreakdownLamports(safeGrossWalletInputLamports, feeBps);
       return {
         grossWalletInputLamports: safeGrossWalletInputLamports,
         grossPositionInputLamports: safeGrossWalletInputLamports,
@@ -291,7 +295,7 @@ const $ = (id) => document.getElementById(id);
       };
     }
 
-    function computeCreatorSpawnSpendModel({ walletBalanceLamports, committedCapLamports, bootstrapCostLamports, networkBufferLamports, totalWalletSpendLamports = null }){
+    function computeCreatorSpawnSpendModel({ walletBalanceLamports, committedCapLamports, bootstrapCostLamports, networkBufferLamports, totalWalletSpendLamports = null, feeBps = PING_FEE_BPS }){
       const safeWalletBalanceLamports = Math.max(0, Math.floor(Number(walletBalanceLamports || 0)));
       const safeCommittedCapLamports = Math.max(0, Math.floor(Number(committedCapLamports || 0)));
       const safeBootstrapCostLamports = Math.max(0, Math.floor(Number(bootstrapCostLamports || 0)));
@@ -299,7 +303,7 @@ const $ = (id) => document.getElementById(id);
       if(totalWalletSpendLamports != null){
         const total = Math.max(0, Math.floor(Number(totalWalletSpendLamports || 0)));
         const grossPositionInputLamports = total;
-        const feeMath = computePingFeeBreakdownLamports(grossPositionInputLamports);
+        const feeMath = computePingFeeBreakdownLamports(grossPositionInputLamports, feeBps);
         return {
           committedTargetLamports: feeMath.committedLamports,
           grossPositionInputLamports,
@@ -310,13 +314,13 @@ const $ = (id) => document.getElementById(id);
       }
       const maxSpend = Math.max(0, safeWalletBalanceLamports - safeNetworkBufferLamports);
       const maxGrossPositionInputLamports = Math.max(0, maxSpend - safeBootstrapCostLamports);
-      const maxCommittedByBalanceLamports = computePingFeeBreakdownLamports(maxGrossPositionInputLamports).committedLamports;
+      const maxCommittedByBalanceLamports = computePingFeeBreakdownLamports(maxGrossPositionInputLamports, feeBps).committedLamports;
       const targetCommittedLamports = Math.min(safeCommittedCapLamports, maxCommittedByBalanceLamports);
-      let grossPositionInputLamports = Math.min(maxGrossPositionInputLamports, computeGrossPositionInputForCommittedLamports(targetCommittedLamports));
-      let feeMath = computePingFeeBreakdownLamports(grossPositionInputLamports);
+      let grossPositionInputLamports = Math.min(maxGrossPositionInputLamports, computeGrossPositionInputForCommittedLamports(targetCommittedLamports, feeBps));
+      let feeMath = computePingFeeBreakdownLamports(grossPositionInputLamports, feeBps);
       while(grossPositionInputLamports > 0 && feeMath.committedLamports > targetCommittedLamports){
         grossPositionInputLamports -= 1;
-        feeMath = computePingFeeBreakdownLamports(grossPositionInputLamports);
+        feeMath = computePingFeeBreakdownLamports(grossPositionInputLamports, feeBps);
       }
       return {
         committedTargetLamports: feeMath.committedLamports,
@@ -8246,6 +8250,7 @@ if(connectBtn){
         committedCapLamports: configWalletCapLamports(launchConfig),
         bootstrapCostLamports: 0,
         networkBufferLamports: CREATOR_MAX_TX_FEE_RESERVE_LAMPORTS,
+        feeBps: PING_FEE_BPS,
       });
       console.log("[ping-debug] max ping calculation", {
         roomId: null,
@@ -8316,6 +8321,7 @@ if(connectBtn){
             bootstrapCostLamports: 0,
             networkBufferLamports: 0,
             totalWalletSpendLamports: creatorTotalSpendLamports,
+            feeBps: PING_FEE_BPS,
           })
         : {
             committedTargetLamports: creatorTotalSpendLamports,
@@ -10184,7 +10190,8 @@ if(connectBtn){
       if(!preview) return;
       const inputSol = Number(($("pingAmount")?.value || "").trim()) || 0;
       const inputLamports = Math.floor(Math.max(0, inputSol) * LAMPORTS_PER_SOL);
-      const model = computeRegularPingSpendModel({ grossWalletInputLamports: inputLamports });
+      const feeBps = PING_FEE_BPS;
+      const model = computeRegularPingSpendModel({ grossWalletInputLamports: inputLamports, feeBps });
       preview.textContent = formatRegularPingPreview(model.grossWalletInputLamports, model.feeLamports, model.committedLamports);
     }
 
@@ -10215,6 +10222,7 @@ if(connectBtn){
 	        bootstrapCostLamports: 0,
 	        networkBufferLamports: 0,
 	        totalWalletSpendLamports: inputLamports,
+          feeBps: PING_FEE_BPS,
 	      });
       preview.textContent = `${formatCreatorSpawnPreview(
         creatorModel.totalWalletSpendLamports,
@@ -10248,8 +10256,11 @@ if(connectBtn){
       if(unpingAmountUnit) unpingAmountUnit.textContent = isSpawning ? "SOL" : "tokens";
 
       if(pingModalHelp){
+        const spawnFeeBps = PING_FEE_BPS;
         pingModalHelp.textContent = isSpawning
-          ? "Your entered amount is total spend. Pingy takes a 1% fee. The rest becomes your committed amount."
+          ? (spawnFeeBps > 0
+            ? "Your entered amount is total spend. Pingy takes a 1% fee. The rest becomes your committed amount."
+            : "Your entered amount is committed to the shared vault receipt + escrow path.")
           : isPumpPostSpawn
             ? "Launched coins trade outside Pingy. Pingy remains the coordination and watch layer."
             : isBonded
@@ -10315,9 +10326,10 @@ if(connectBtn){
       const userDeposit = state.userEscrow || {};
       const capRemainingCommittedLamports = computeMaxPingLamports(r, userDeposit);
       const walletBalanceLamports = Math.max(0, Math.floor(Number(state.walletBalances[connectedWallet]?.nativeSol || 0) * LAMPORTS_PER_SOL));
-      const maxCommittedByBalanceLamports = computeRegularPingSpendModel({ grossWalletInputLamports: walletBalanceLamports }).committedLamports;
+      const spawnFeeBps = PING_FEE_BPS;
+      const maxCommittedByBalanceLamports = computeRegularPingSpendModel({ grossWalletInputLamports: walletBalanceLamports, feeBps: spawnFeeBps }).committedLamports;
       const targetCommittedLamports = Math.max(0, Math.min(capRemainingCommittedLamports, maxCommittedByBalanceLamports));
-      const maxGrossLamports = computeGrossPositionInputForCommittedLamports(targetCommittedLamports);
+      const maxGrossLamports = computeGrossPositionInputForCommittedLamports(targetCommittedLamports, spawnFeeBps);
       state.maxPingLamports = maxGrossLamports;
       state.maxPingCommittedLamports = targetCommittedLamports;
       const maxSol = maxGrossLamports / LAMPORTS_PER_SOL;
@@ -10465,7 +10477,8 @@ if(connectBtn){
 	        const useV2RoomFlow = isV2Room(r);
         const mockPos = onchainMode ? null : ensurePos(r, connectedWallet);
         const userDeposit = onchainMode ? (state.userEscrow || {}) : { exists: !!mockPos?.deposit_exists };
-        const pingSpendModel = computeRegularPingSpendModel({ grossWalletInputLamports: amountLamports });
+        const spawnFeeBps = PING_FEE_BPS;
+        const pingSpendModel = computeRegularPingSpendModel({ grossWalletInputLamports: amountLamports, feeBps: spawnFeeBps });
         const committedLamports = pingSpendModel.committedLamports;
         let depositBackingLamports = 0;
         let escrowContributionLamports = committedLamports;
