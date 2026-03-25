@@ -5044,6 +5044,7 @@ function encodeU64Arg(v){
       const adminPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
       const [programStatePda] = await deriveV2ProgramStatePda();
       const [roomLedgerPda] = await deriveRoomLedgerPda(rid);
+      const [roomReceiptPda] = await deriveRoomReceiptPda(rid, adminPk);
       const config = createConfig || getCreateLaunchConfig();
       const launchBackendByte = isPumpfunLaunchBackend() ? 1 : 0;
       return new TransactionInstruction({
@@ -5052,6 +5053,7 @@ function encodeU64Arg(v){
           { pubkey: adminPk, isSigner: true, isWritable: true },
           { pubkey: programStatePda, isSigner: false, isWritable: false },
           { pubkey: roomLedgerPda, isSigner: false, isWritable: true },
+          { pubkey: roomReceiptPda, isSigner: false, isWritable: true },
           { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
         ],
         data: concatBytes(
