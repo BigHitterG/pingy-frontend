@@ -2961,7 +2961,14 @@ const $ = (id) => document.getElementById(id);
       console.error(logs);
       if(contextLabel) console.error(`[pingy] ${contextLabel}`);
       const lastProgramLine = extractProgramLogLine(err);
-      const details = [String(err?.message || summarizeTxError(err)), lastProgramLine, ...logs].filter(Boolean).join(" | ").slice(0, 700);
+      const combined = [String(err?.message || ""), lastProgramLine, ...logs].join(" ");
+      const missingReceiptError =
+        /accountnotinitialized|does not exist|could not find account/i.test(combined)
+        && /room_receipt|receipt/i.test(combined);
+      const prefix = missingReceiptError
+        ? "Room receipt is missing. Run create_room_receipt_for_user before ping_deposit_shared."
+        : "";
+      const details = [prefix, String(err?.message || summarizeTxError(err)), lastProgramLine, ...logs].filter(Boolean).join(" | ").slice(0, 700);
       showToast(details);
     }
 
@@ -5076,6 +5083,66 @@ function encodeU64Arg(v){
       return sendProgramInstruction(await buildCreateRoomLedgerV2Ix(roomId, createConfig));
     }
 
+    async function buildCreateRoomReceiptForUserV2Ix(roomId, userWallet = connectedWallet){
+      const rid = String(roomId || "");
+      const adminPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
+      const userPk = parsePublicKeyStrict(userWallet, "receipt user wallet");
+      const [roomLedgerPda] = await deriveRoomLedgerPda(rid);
+      const [roomReceiptPda] = await deriveRoomReceiptPda(rid, userPk);
+      return new TransactionInstruction({
+        programId: PROGRAM_ID,
+        keys: [
+          { pubkey: adminPk, isSigner: true, isWritable: true },
+          { pubkey: roomLedgerPda, isSigner: false, isWritable: true },
+          { pubkey: roomReceiptPda, isSigner: false, isWritable: true },
+          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        ],
+        data: concatBytes(
+          await anchorDiscriminator("create_room_receipt_for_user"),
+          encodeStringArg(rid),
+          userPk.toBytes(),
+        ),
+      });
+    }
+
+    async function roomReceiptExists(roomId, userWallet = connectedWallet){
+      const rid = String(roomId || "");
+      const userPk = parsePublicKeyStrict(userWallet, "receipt user wallet");
+      const [roomReceiptPda] = await deriveRoomReceiptPda(rid, userPk);
+      const existing = await connection.getAccountInfo(roomReceiptPda, "confirmed");
+      const exists = !!(existing?.data?.length && existing.data.length >= 8);
+      return { roomReceiptPda, exists, userPk, rid };
+    }
+
+    async function ensureRoomReceiptBeforeDeposit(roomId, userWallet = connectedWallet, actorLabel = "creator"){
+      const { roomReceiptPda, exists, userPk, rid } = await roomReceiptExists(roomId, userWallet);
+      console.log("[ping-debug] receipt ensure check", {
+        actor: actorLabel,
+        roomId: rid,
+        wallet: userPk.toBase58(),
+        roomReceiptPda: roomReceiptPda.toBase58(),
+        exists,
+      });
+      if(exists){
+        console.log("[ping-debug] receipt ensure step skipped", { actor: actorLabel, roomId: rid, ensureStepRan: false });
+        return { roomReceiptPda, created: false };
+      }
+      console.log("[ping-debug] receipt ensure step start", {
+        actor: actorLabel,
+        roomId: rid,
+        roomReceiptPda: roomReceiptPda.toBase58(),
+        ensureStepRan: true,
+        instructionName: "create_room_receipt_for_user",
+      });
+      await sendProgramInstruction(await buildCreateRoomReceiptForUserV2Ix(rid, userPk));
+      console.log("[ping-debug] receipt ensure step complete", { actor: actorLabel, roomId: rid, ensureStepRan: true });
+      return { roomReceiptPda, created: true };
+    }
+
+    async function ensureCreatorRoomReceiptBeforeDeposit(roomId){
+      return ensureRoomReceiptBeforeDeposit(roomId, connectedWallet, "creator");
+    }
+
     async function buildPingDepositSharedV2Ix(roomId, amountLamports){
       const rid = String(roomId || "");
       const lamports = Number(amountLamports);
@@ -5302,6 +5369,9 @@ function encodeU64Arg(v){
       enabled: isSharedVaultV2Enabled,
       initializeV2GlobalStateTx,
       createRoomLedgerV2Tx,
+      buildCreateRoomReceiptForUserV2Ix,
+      ensureRoomReceiptBeforeDeposit,
+      roomReceiptExists,
       pingDepositSharedV2Tx,
       approveReceiptV2Tx,
       revokeReceiptV2Tx,
@@ -8429,6 +8499,7 @@ if(connectBtn){
           }
           if(commitLamports > 0){
             try {
+              await ensureCreatorRoomReceiptBeforeDeposit(id);
               const creatorFeeIx = buildPingFeeTransferInstruction(creatorFeeMath.feeLamports);
               const depositIx = await buildPingDepositSharedV2Ix(id, createDepositTotalLamports);
               const instructions = [
@@ -8453,6 +8524,7 @@ if(connectBtn){
                 expectedWalletOutflowLamports: creatorTotalSpendLamports,
                 assembledTxOutflowLamports: creatorFeeMath.feeLamports + commitLamports,
                 creatorFundingInstructionNames,
+                depositUsesExistingReceiptOnly: true,
               });
               creatorFeeTransferSignature = await sendProgramInstructions(instructions, {
                 feeRecipient: PINGY_FEE_RECIPIENT,
@@ -9429,7 +9501,10 @@ if(connectBtn){
 	      if(!isApprover(r, connectedWallet)) return;
 	      if(!isPending(r, wallet)) return;
 	      try{
-	        if(isV2Room(r)) await approveReceiptV2Tx(roomId, wallet);
+	        if(isV2Room(r)){
+            await ensureRoomReceiptBeforeDeposit(roomId, wallet, "admin");
+            await approveReceiptV2Tx(roomId, wallet);
+          }
 	        else await approveUserTx(roomId, wallet);
 	      } catch(e){
 	        reportTxError(e, "approve transaction failed");
@@ -10503,6 +10578,17 @@ if(connectBtn){
 	            const feeIx = buildPingFeeTransferInstruction(pingSpendModel.feeLamports);
 	            let sig = "";
 	            if(useV2RoomFlow){
+                const receiptState = await roomReceiptExists(rid, connectedWallet);
+                console.log("[ping-debug] user receipt pre-deposit check", {
+                  roomId: rid,
+                  wallet: connectedWallet,
+                  roomReceiptPda: receiptState.roomReceiptPda.toBase58(),
+                  exists: receiptState.exists,
+                  ensureStepRan: false,
+                });
+                if(!receiptState.exists){
+                  throw new Error("Room receipt missing. Room admin must run create_room_receipt_for_user before first user ping.");
+                }
                 const userFundingInstructionNames = [
                   ...(feeIx ? ["ping_fee_transfer"] : []),
                   "ping_deposit_shared",
@@ -10516,6 +10602,7 @@ if(connectBtn){
                   expectedWalletOutflowLamports: amountLamports,
                   expectedDepositInstructionLamports: committedLamports,
                   userFundingInstructionNames,
+                  depositUsesExistingReceiptOnly: true,
                 });
 	              const instructions = [
 	                ...(feeIx ? [feeIx] : []),
