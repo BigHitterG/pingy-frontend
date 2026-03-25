@@ -745,7 +745,7 @@ pub mod pingy_spawn {
         let room_ledger = &mut ctx.accounts.room_ledger;
         room_ledger.version = V2_ACCOUNT_VERSION;
         room_ledger.bump = ctx.bumps.room_ledger;
-        room_ledger.room_id = room_id;
+        room_ledger.room_id = room_id.clone();
         room_ledger.creator_pubkey = ctx.accounts.admin.key();
         room_ledger.admin_pubkey = ctx.accounts.admin.key();
         room_ledger.launch_backend = launch_backend;
@@ -770,6 +770,26 @@ pub mod pingy_spawn {
         room_ledger.external_settlement_status = V2ExternalSettlementStatus::Pending;
         room_ledger.total_external_units_settled = 0;
 
+        let room_receipt = &mut ctx.accounts.room_receipt;
+        room_receipt.version = V2_ACCOUNT_VERSION;
+        room_receipt.bump = ctx.bumps.room_receipt;
+        room_receipt.room_id = room_id.clone();
+        room_receipt.user_pubkey = ctx.accounts.admin.key();
+        room_receipt.status = V2ReceiptStatus::Approved;
+        room_receipt.bundle_lamports_total = 0;
+        room_receipt.refundable_lamports = 0;
+        room_receipt.allocated_lamports = 0;
+        room_receipt.forwarded_lamports = 0;
+        room_receipt.refunded_lamports = 0;
+        room_receipt.receipt_backing_lamports = 0;
+        room_receipt.native_token_allocation = 0;
+        room_receipt.native_tokens_claimed = 0;
+        room_receipt.external_allocation_units = 0;
+        room_receipt.external_units_claimed = 0;
+
+        room_ledger.approved_count = 1;
+
+        validate_room_receipt_accounting(room_receipt)?;
         validate_room_ledger_accounting(room_ledger)?;
 
         Ok(())
@@ -2470,6 +2490,14 @@ pub struct CreateRoomLedger<'info> {
         bump
     )]
     pub room_ledger: Account<'info, RoomLedger>,
+    #[account(
+        init,
+        payer = admin,
+        space = 8 + RoomReceipt::LEN,
+        seeds = [b"room_receipt", room_seed_bytes(&room_id).as_ref(), admin.key().as_ref()],
+        bump
+    )]
+    pub room_receipt: Account<'info, RoomReceipt>,
     pub system_program: Program<'info, System>,
 }
 
