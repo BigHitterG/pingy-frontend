@@ -7356,7 +7356,6 @@ if(connectBtn){
     }
 
     let exploreQuery = "";
-    let exploreHasSearched = false;
 
     function getWalletEscrowInRoom(room, wallet){
       if(!room || !wallet) return 0;
@@ -7603,8 +7602,19 @@ if(connectBtn){
 
     function runExploreSearch(){
       exploreQuery = ($("searchInput").value || "").trim();
-      exploreHasSearched = true;
+      const searchClearBtn = $("searchClearBtn");
+      if(searchClearBtn) searchClearBtn.style.display = exploreQuery ? "block" : "none";
       renderHome();
+    }
+
+    function clearExploreSearch({ focusInput = false } = {}){
+      const searchInput = $("searchInput");
+      if(searchInput) searchInput.value = "";
+      exploreQuery = "";
+      const searchClearBtn = $("searchClearBtn");
+      if(searchClearBtn) searchClearBtn.style.display = "none";
+      renderHome();
+      if(focusInput && searchInput) searchInput.focus();
     }
 
     function renderHome(){
@@ -7623,15 +7633,7 @@ if(connectBtn){
         if(!liveIds.has(id) && el.parentElement === cardsRow) cardsRow.removeChild(el);
       }
 
-
-      // EXPLORE: show nothing until a search is submitted
-      if(!exploreHasSearched || !exploreQuery){
-        const d = document.createElement("div");
-        d.className = "muted";
-        d.textContent = "search to explore";
-        exploreList.appendChild(d);
-        return;
-      }
+      if(!exploreQuery) return;
 
       const results = state.rooms
         .filter(r => matchesSearch(r, exploreQuery))
@@ -7653,10 +7655,16 @@ if(connectBtn){
       results.forEach(r => renderExploreCard(r, exploreList));
     }
 
-    $("searchBtn").addEventListener("click", runExploreSearch);
+    $("searchInput").addEventListener("input", runExploreSearch);
     $("searchInput").addEventListener("keydown", (e) => {
+      if(e.key === "Escape"){
+        e.preventDefault();
+        clearExploreSearch({ focusInput: true });
+        return;
+      }
       if(e.key === "Enter"){ e.preventDefault(); runExploreSearch(); }
     });
+    $("searchClearBtn")?.addEventListener("click", () => clearExploreSearch({ focusInput: true }));
     $("pingsTabBtn")?.addEventListener("click", () => setHomeTab("pings"));
     $("spawnCoinTabBtn")?.addEventListener("click", () => setHomeTab("spawn"));
     $("exploreTabBtn")?.addEventListener("click", () => setHomeTab("explore"));

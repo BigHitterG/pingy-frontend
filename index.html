@@ -156,13 +156,11 @@
 
       <div id="exploreTabPanel">
         <div class="panel">
-          <div class="row" style="justify-content:space-between;">
-            <div class="h" style="margin:0;">explore</div>
-            <div class="muted">sorted by state then progress</div>
-          </div>
           <div class="row" style="margin-top:8px;">
-            <input id="searchInput" placeholder="search" style="flex:1; min-width:220px;" />
-            <button class="btn subtle" id="searchBtn">search</button>
+            <div class="searchInputWrap" style="flex:1; min-width:220px;">
+              <input id="searchInput" placeholder="search" style="padding-right:24px;" />
+              <button class="searchClearBtn" id="searchClearBtn" type="button" aria-label="clear search" style="display:none;">x</button>
+            </div>
           </div>
           <div id="exploreList" style="margin-top:10px;"></div>
         </div>
