@@ -87,7 +87,7 @@
               </div>
               <div class="muted tiny" id="instantLaunchHint" style="margin-top:6px; display:none;">Launches directly to market routing. No spawn phase.</div>
               <div class="row" style="margin-top:8px; justify-content:space-between;">
-                <div class="muted">coin image</div>
+                <div class="muted">coin image <span aria-hidden="true">*</span></div>
                 <button class="infoIconBtn" id="coinImageInfoBtn" type="button" aria-expanded="false" title="image requirements">i</button>
               </div>
               <div class="panel muted tiny" id="coinImageInfo" style="display:none; margin-bottom:6px;">
@@ -98,8 +98,9 @@
                 <div>• Image - min. 1000x1000px, 1:1 square recommended</div>
                 <div>• Video - 16:9 or 9:16, 1080p+ recommended</div>
               </div>
-              <input id="newImg" type="file" accept=".jpg,.jpeg,.gif,.png,image/*" />
-              <div class="imgPrev" id="newImgPreview" style="margin-top:6px;"><span class="muted">no image</span></div>
+              <input id="newImg" type="file" accept=".jpg,.jpeg,.gif,.png,image/*" required aria-describedby="newImgError" />
+              <div class="fieldError tiny" id="newImgError" style="display:none; margin-top:6px;"></div>
+              <div class="imgPrev" id="newImgPreview" style="margin-top:6px;"><span class="muted">no coin image</span></div>
 
               <details style="margin-top:8px;">
                 <summary class="muted" style="cursor:pointer;">add banner (optional)</summary>
