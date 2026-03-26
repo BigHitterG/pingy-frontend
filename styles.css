@@ -1,5 +1,7 @@
  :root{
       --bg:#fff; --fg:#111; --muted:#666; --line:#e6e6e6; --focus:#111;
+      --surface:#fff; --surface-muted:#fcfcfc; --surface-soft:#f7f7f7;
+      --accent-pink:#ff6eb1; --accent-cyan:#84d4ff; --accent-purple:#b891ff;
       --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
       --up:#0b7a4b;
       --down:#b00020;
@@ -25,7 +27,7 @@
       top:calc(100% + 4px);
       min-width:140px;
       border:1px solid var(--line);
-      background:#fff;
+      background:var(--surface);
       display:none;
       z-index:20;
     }
@@ -34,7 +36,7 @@
       width:100%;
       border:0;
       border-top:1px solid var(--line);
-      background:#fff;
+      background:var(--surface);
       color:var(--fg);
       text-align:left;
       font:inherit;
@@ -42,13 +44,14 @@
       cursor:pointer;
     }
     .walletItem:first-child{border-top:0}
-    .walletItem:hover{background:#f7f7f7}
+    .walletItem:hover{background:var(--surface-soft)}
     .walletItem:focus{outline:2px solid var(--focus);outline-offset:-2px}
     .btn{border:1px solid var(--fg);background:transparent;color:var(--fg);padding:4px 7px;font:inherit;cursor:pointer}
     .btn:focus{outline:2px solid var(--focus);outline-offset:1px}
     .btn.subtle{border-color:var(--line);color:var(--muted)}
     .btn.small{padding:2px 6px;font-size:12px}
     .btn[disabled]{opacity:.5;cursor:not-allowed}
+    .themeToggleBtn[aria-pressed="true"]{border-color:var(--accent-pink);color:var(--accent-pink)}
 
     .panel{border:1px solid var(--line);padding:10px}
     .h{font-weight:700;margin:0 0 8px 0}
@@ -75,7 +78,7 @@
       border:1px solid var(--line);
       padding:10px;
       scroll-snap-align:start;
-      background:#fff;
+      background:var(--surface);
       transform: translateY(0);
       box-shadow:none;
       transition: transform 140ms ease, box-shadow 140ms ease;
@@ -832,4 +835,80 @@
     height:48px;
   }
   .msgBubble{max-width:100%}
+}
+
+body.dark-mode{
+  --bg:#0f1118;
+  --fg:#e8ecf6;
+  --muted:#9aa4ba;
+  --line:#2a3142;
+  --focus:#84d4ff;
+  --surface:#151b27;
+  --surface-muted:#121826;
+  --surface-soft:#1a2231;
+  --up:#52d97e;
+  --down:#ff7b95;
+}
+
+body.dark-mode .panel,
+body.dark-mode .roomHeader,
+body.dark-mode .chat,
+body.dark-mode .composer,
+body.dark-mode .modal,
+body.dark-mode .toast,
+body.dark-mode .launchConfigPanel,
+body.dark-mode .launchConfigSummary,
+body.dark-mode .roomBanner,
+body.dark-mode .imgPrev,
+body.dark-mode .walletDropdown,
+body.dark-mode .walletItem,
+body.dark-mode .copyBtn,
+body.dark-mode .pingRow,
+body.dark-mode .pingAvatar,
+body.dark-mode .profileAvatar,
+body.dark-mode .card,
+body.dark-mode .mosaic.img,
+body.dark-mode .msgAvatar{
+  background:var(--surface);
+}
+
+body.dark-mode .walletItem:hover,
+body.dark-mode .pingRow:hover{background:var(--surface-soft)}
+body.dark-mode input,
+body.dark-mode textarea,
+body.dark-mode select{
+  background:var(--surface-muted);
+  color:var(--fg);
+}
+body.dark-mode .btn.subtle{border-color:var(--line);color:var(--muted)}
+body.dark-mode .themeToggleBtn[aria-pressed="true"]{
+  border-color:var(--accent-cyan);
+  color:var(--accent-cyan);
+}
+body.dark-mode .k,
+body.dark-mode .linkBtn{border-color:var(--accent-purple);color:var(--accent-cyan)}
+body.dark-mode .pinkCountBadge{background:var(--accent-pink)}
+body.dark-mode .bar{border-color:var(--accent-purple)}
+body.dark-mode .bar > i{background:var(--accent-cyan)}
+body.dark-mode .bar.barSpawn > i{background:var(--accent-pink)}
+body.dark-mode .bar.barBonding > i{background:var(--accent-cyan)}
+body.dark-mode .bar.green > i,
+body.dark-mode .bar.barHot > i{background:#52d97e}
+body.dark-mode .roomActionDockBtn.subtle{background:var(--surface);color:var(--fg);border-color:var(--line)}
+body.dark-mode .roomChartShell{border-color:#2a3142;background:#0b111d}
+body.dark-mode .roomChartTopStat{border-color:#2f364a;background:#121a2a}
+body.dark-mode .roomChartStatMain,
+body.dark-mode .roomChartTopStat .value{color:#ecf2ff}
+body.dark-mode .chartDisplayMode,
+body.dark-mode .chartToolRail{border-color:#35405a;background:#131b2a;color:#aeb9d4}
+body.dark-mode .chartToggle,
+body.dark-mode .chartTfBtn{
+  border-color:#39445e !important;
+  color:#b9c5e0 !important;
+  background:#182236 !important;
+}
+body.dark-mode .chatRoomTelegram{
+  background:
+    radial-gradient(circle at top right, rgba(255,110,177,0.13), transparent 38%),
+    linear-gradient(180deg, #0f1118 0%, #111625 100%);
 }
