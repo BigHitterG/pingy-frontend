@@ -88,13 +88,16 @@
     }
     .cardsRow{
       display:grid;
-      grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
       gap:10px;
       overflow:visible;
       padding-bottom:0;
+      align-items:stretch;
     }
     .card{
-      min-width:300px; max-width:360px;
+      width:100%;
+      min-width:0;
+      max-width:none;
       border:1px solid var(--line);
       padding:10px;
       scroll-snap-align:start;
