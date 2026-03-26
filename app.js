@@ -2800,7 +2800,7 @@ const $ = (id) => document.getElementById(id);
     let walletDisconnectItem;
     let connectBtn;
     let themeToggleBtn;
-    let currentTheme = "light";
+    let currentTheme = "dark";
 
     let activeProfileTab = "balances";
 
@@ -2840,7 +2840,7 @@ const $ = (id) => document.getElementById(id);
       } catch (err){
         savedTheme = null;
       }
-      applyTheme(savedTheme === "dark" ? "dark" : "light");
+      applyTheme(savedTheme === "light" ? "light" : "dark");
     }
 
     function toggleTheme(){
@@ -6120,15 +6120,59 @@ function encodeU64Arg(v){
       prev.appendChild(im);
     }
 
-    function handleImageInput({ inputId, maxBytes, assignData, previewId, emptyText, overLimitMsg }){
+    function setCoinImageValidationMessage(message){
+      const errorEl = $("newImgError");
+      if(!errorEl) return;
+      errorEl.textContent = message || "";
+      errorEl.style.display = message ? "block" : "none";
+    }
+
+    function hasRequiredCoinImage(){
+      return !!String(newImgData || "").trim();
+    }
+
+    function updateCreateCoinSubmitState({ showValidation = false } = {}){
+      const createBtn = $("createCoinBtn");
+      const hasImage = hasRequiredCoinImage();
+      if(createBtn) createBtn.disabled = !hasImage;
+      if(!hasImage){
+        setCoinImageValidationMessage("coin image is required to spawn.");
+      } else if(showValidation || hasImage){
+        setCoinImageValidationMessage("");
+      }
+      return hasImage;
+    }
+
+    function handleImageInput({ inputId, maxBytes, assignData, previewId, emptyText, overLimitMsg, onAfterChange = null }){
       $(inputId).addEventListener("change", (e) => {
         const f = e.target.files && e.target.files[0];
-        if(!f){ assignData(null); setImagePreview(previewId, null, emptyText); return; }
+        if(!f){
+          assignData(null);
+          setImagePreview(previewId, null, emptyText);
+          if(typeof onAfterChange === "function") onAfterChange();
+          return;
+        }
         const okType = String(f.type || "").startsWith("image/") || /\.(jpg|jpeg|gif|png)$/i.test(String(f.name || ""));
-        if(!okType){ alert("please choose a .jpg, .gif, or .png image file."); e.target.value=""; return; }
-        if(f.size > maxBytes){ alert(overLimitMsg); e.target.value=""; return; }
+        if(!okType){
+          alert("please choose a .jpg, .gif, or .png image file.");
+          assignData(null);
+          e.target.value="";
+          if(typeof onAfterChange === "function") onAfterChange();
+          return;
+        }
+        if(f.size > maxBytes){
+          alert(overLimitMsg);
+          assignData(null);
+          e.target.value="";
+          if(typeof onAfterChange === "function") onAfterChange();
+          return;
+        }
         const reader = new FileReader();
-        reader.onload = () => { assignData(String(reader.result||"")); setImagePreview(previewId, String(reader.result||""), emptyText); };
+        reader.onload = () => {
+          assignData(String(reader.result||""));
+          setImagePreview(previewId, String(reader.result||""), emptyText);
+          if(typeof onAfterChange === "function") onAfterChange();
+        };
         reader.readAsDataURL(f);
       });
     }
@@ -6141,8 +6185,9 @@ function encodeU64Arg(v){
       maxBytes: 15000000,
       assignData: (v) => { newImgData = v; },
       previewId: "newImgPreview",
-      emptyText: "no image",
-      overLimitMsg: "image too large (max 15mb)."
+      emptyText: "no coin image",
+      overLimitMsg: "coin image too large (max 15mb).",
+      onAfterChange: () => updateCreateCoinSubmitState()
     });
 
     handleImageInput({
@@ -6206,6 +6251,7 @@ function encodeU64Arg(v){
       connectBtn = $("connectBtn");
       themeToggleBtn = $("themeToggleBtn");
       loadThemeFromStorage();
+      updateCreateCoinSubmitState();
 
       toast = $("toast");
       toastText = $("toastText");
@@ -7716,6 +7762,7 @@ if(connectBtn){
       if(!connectedWallet) return showToast("connect wallet first.");
       await refreshWalletBalances(connectedWallet, { force: true });
       console.log("[ping-debug] spawn button handler start", { connectedWallet, launchBackend: PINGY_LAUNCH_BACKEND });
+      if(!updateCreateCoinSubmitState({ showValidation: true })) return;
       const name = ($("newName").value||"").trim();
       const ticker = ($("newTicker").value||"").trim().toUpperCase();
       const desc = ($("newDesc").value||"").trim();
@@ -8078,7 +8125,8 @@ if(connectBtn){
       }
       $("newImg").value = "";
       newImgData = null;
-      setImagePreview("newImgPreview", null, "no image");
+      setImagePreview("newImgPreview", null, "no coin image");
+      updateCreateCoinSubmitState();
       if($("newBanner")) $("newBanner").value = "";
       newBannerData = null;
       setImagePreview("newBannerPreview", null, "no banner");
