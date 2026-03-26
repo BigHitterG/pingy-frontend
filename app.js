@@ -2682,6 +2682,7 @@ const $ = (id) => document.getElementById(id);
     const DEBUG_WALLET_SMOKE_BEFORE_SPAWN_TX = false;
     const DEV_SIM_DEFAULT_SEED = 1337;
     const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
+    const THEME_STORAGE_KEY = "pingy_theme";
 
 
     let homeView;
@@ -2700,6 +2701,8 @@ const $ = (id) => document.getElementById(id);
     let walletCopyItem;
     let walletDisconnectItem;
     let connectBtn;
+    let themeToggleBtn;
+    let currentTheme = "light";
 
     let activeProfileTab = "balances";
 
@@ -2718,6 +2721,38 @@ const $ = (id) => document.getElementById(id);
       toast.classList.add("on");
       clearTimeout(toastTimer);
       toastTimer = setTimeout(() => toast.classList.remove("on"), 2400);
+    }
+
+    function applyTheme(theme){
+      const normalizedTheme = theme === "dark" ? "dark" : "light";
+      currentTheme = normalizedTheme;
+      document.body.classList.toggle("dark-mode", normalizedTheme === "dark");
+      if(themeToggleBtn){
+        const isDark = normalizedTheme === "dark";
+        themeToggleBtn.textContent = isDark ? "light" : "dark";
+        themeToggleBtn.setAttribute("aria-pressed", isDark ? "true" : "false");
+        themeToggleBtn.setAttribute("aria-label", isDark ? "switch to light mode" : "switch to dark mode");
+      }
+    }
+
+    function loadThemeFromStorage(){
+      let savedTheme = null;
+      try {
+        savedTheme = localStorage.getItem(THEME_STORAGE_KEY);
+      } catch (err){
+        savedTheme = null;
+      }
+      applyTheme(savedTheme === "dark" ? "dark" : "light");
+    }
+
+    function toggleTheme(){
+      const nextTheme = currentTheme === "dark" ? "light" : "dark";
+      applyTheme(nextTheme);
+      try {
+        localStorage.setItem(THEME_STORAGE_KEY, nextTheme);
+      } catch (err){
+        // ignore localStorage write failures
+      }
     }
 
     function traceStep(label, details, toastMsg){
@@ -6044,6 +6079,8 @@ function encodeU64Arg(v){
       walletCopyItem = $("walletCopyItem");
       walletDisconnectItem = $("walletDisconnectItem");
       connectBtn = $("connectBtn");
+      themeToggleBtn = $("themeToggleBtn");
+      loadThemeFromStorage();
 
       toast = $("toast");
       toastText = $("toastText");
@@ -6306,6 +6343,7 @@ if(connectBtn){
     connectMock();
   });
 }
+    themeToggleBtn?.addEventListener("click", toggleTheme);
     $("toastConnect").addEventListener("click", connectMock);
     $("toastClose").addEventListener("click", () => toast.classList.remove("on"));
     homeBtn.addEventListener("click", () => navigateHash("home"));
