@@ -812,16 +812,20 @@ pub mod pingy_spawn {
             PingyError::V2RoomNotOpen
         );
 
-        require!(
-            ctx.accounts.room_receipt.user_pubkey == ctx.accounts.user.key(),
-            PingyError::UserMismatch
-        );
-        msg!(
-            "ping_deposit_shared existing receipt only room={} user={} receipt={}",
-            room_id,
-            ctx.accounts.user.key(),
-            ctx.accounts.room_receipt.key()
-        );
+        let receipt_backing_lamports = Rent::get()?.minimum_balance(8 + RoomReceipt::LEN) as u64;
+        let is_new_receipt = ctx.accounts.room_receipt.version != V2_ACCOUNT_VERSION;
+        let bundled_commit_lamports = if is_new_receipt {
+            require!(
+                amount_lamports >= receipt_backing_lamports,
+                PingyError::InvalidAmount
+            );
+            receipt_backing_lamports
+        } else {
+            0
+        };
+        let escrow_contribution_lamports = amount_lamports
+            .checked_sub(bundled_commit_lamports)
+            .ok_or(PingyError::AccountingUnderflow)?;
 
         let transfer_ctx = CpiContext::new(
             ctx.accounts.system_program.to_account_info(),
@@ -830,29 +834,60 @@ pub mod pingy_spawn {
                 to: ctx.accounts.shared_vault.to_account_info(),
             },
         );
-        system_program::transfer(transfer_ctx, amount_lamports)?;
-
-        let net_contribution_lamports = amount_lamports;
+        system_program::transfer(transfer_ctx, escrow_contribution_lamports)?;
 
         {
             let shared_vault = &mut ctx.accounts.shared_vault;
             shared_vault.total_reserved_lamports = shared_vault
                 .total_reserved_lamports
-                .checked_add(net_contribution_lamports)
+                .checked_add(escrow_contribution_lamports)
                 .ok_or(PingyError::AmountOverflow)?;
         }
 
         let previous_status;
         {
             let room_receipt = &mut ctx.accounts.room_receipt;
+            if is_new_receipt {
+                room_receipt.version = V2_ACCOUNT_VERSION;
+                room_receipt.bump = ctx.bumps.room_receipt;
+                room_receipt.room_id = room_id.clone();
+                room_receipt.user_pubkey = ctx.accounts.user.key();
+                room_receipt.status = if ctx.accounts.user.key() == room_ledger.creator_pubkey {
+                    V2ReceiptStatus::Approved
+                } else {
+                    V2ReceiptStatus::Pending
+                };
+                room_receipt.bundle_lamports_total = 0;
+                room_receipt.refundable_lamports = 0;
+                room_receipt.allocated_lamports = 0;
+                room_receipt.forwarded_lamports = 0;
+                room_receipt.refunded_lamports = 0;
+                room_receipt.receipt_backing_lamports = 0;
+                room_receipt.native_token_allocation = 0;
+                room_receipt.native_tokens_claimed = 0;
+                room_receipt.external_allocation_units = 0;
+                room_receipt.external_units_claimed = 0;
+                room_ledger.increment_v2_status_count(room_receipt.status)?;
+            } else {
+                require!(room_receipt.room_id == room_id, PingyError::ReceiptMismatch);
+                require!(
+                    room_receipt.user_pubkey == ctx.accounts.user.key(),
+                    PingyError::UserMismatch
+                );
+            }
+
             previous_status = room_receipt.status;
             room_receipt.bundle_lamports_total = room_receipt
                 .bundle_lamports_total
-                .checked_add(net_contribution_lamports)
+                .checked_add(amount_lamports)
+                .ok_or(PingyError::AmountOverflow)?;
+            room_receipt.receipt_backing_lamports = room_receipt
+                .receipt_backing_lamports
+                .checked_add(bundled_commit_lamports)
                 .ok_or(PingyError::AmountOverflow)?;
             room_receipt.refundable_lamports = room_receipt
                 .refundable_lamports
-                .checked_add(net_contribution_lamports)
+                .checked_add(escrow_contribution_lamports)
                 .ok_or(PingyError::AmountOverflow)?;
 
             if ctx.accounts.user.key() == room_ledger.creator_pubkey {
@@ -866,11 +901,11 @@ pub mod pingy_spawn {
 
         room_ledger.total_bundle_lamports = room_ledger
             .total_bundle_lamports
-            .checked_add(net_contribution_lamports)
+            .checked_add(amount_lamports)
             .ok_or(PingyError::AmountOverflow)?;
         room_ledger.total_refundable_lamports = room_ledger
             .total_refundable_lamports
-            .checked_add(net_contribution_lamports)
+            .checked_add(escrow_contribution_lamports)
             .ok_or(PingyError::AmountOverflow)?;
 
         room_ledger
@@ -1040,6 +1075,9 @@ pub mod pingy_spawn {
             .refundable_lamports
             .checked_add(room_receipt.allocated_lamports)
             .ok_or(PingyError::AmountOverflow)?;
+        let bundled_refund_lamports = payout
+            .checked_add(room_receipt.receipt_backing_lamports)
+            .ok_or(PingyError::AmountOverflow)?;
         let allocated_before = room_receipt.allocated_lamports;
         let previous_status = room_receipt.status;
 
@@ -1057,7 +1095,7 @@ pub mod pingy_spawn {
 
         room_ledger.total_bundle_lamports = room_ledger
             .total_bundle_lamports
-            .checked_sub(payout)
+            .checked_sub(bundled_refund_lamports)
             .ok_or(PingyError::AccountingUnderflow)?;
         room_ledger.total_refundable_lamports = room_ledger
             .total_refundable_lamports
@@ -1069,14 +1107,14 @@ pub mod pingy_spawn {
             .ok_or(PingyError::AccountingUnderflow)?;
         room_ledger.total_refunded_lamports = room_ledger
             .total_refunded_lamports
-            .checked_add(payout)
+            .checked_add(bundled_refund_lamports)
             .ok_or(PingyError::AmountOverflow)?;
 
         room_receipt.refundable_lamports = 0;
         room_receipt.allocated_lamports = 0;
         room_receipt.refunded_lamports = room_receipt
             .refunded_lamports
-            .checked_add(payout)
+            .checked_add(bundled_refund_lamports)
             .ok_or(PingyError::AmountOverflow)?;
         room_receipt.status = V2ReceiptStatus::Withdrawn;
         room_ledger.apply_v2_status_transition(previous_status, room_receipt.status)?;
@@ -2534,10 +2572,11 @@ pub struct PingDepositShared<'info> {
     )]
     pub room_ledger: Account<'info, RoomLedger>,
     #[account(
-        mut,
+        init_if_needed,
+        payer = user,
+        space = 8 + RoomReceipt::LEN,
         seeds = [b"room_receipt", room_seed_bytes(&room_id).as_ref(), user.key().as_ref()],
-        bump = room_receipt.bump,
-        constraint = room_receipt.room_id == room_id @ PingyError::ReceiptMismatch
+        bump
     )]
     pub room_receipt: Account<'info, RoomReceipt>,
     pub system_program: Program<'info, System>,

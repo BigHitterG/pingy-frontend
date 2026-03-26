@@ -2966,7 +2966,7 @@ const $ = (id) => document.getElementById(id);
         /accountnotinitialized|does not exist|could not find account/i.test(combined)
         && /room_receipt|receipt/i.test(combined);
       const prefix = missingReceiptError
-        ? "Room receipt is missing. Run create_room_receipt_for_user before ping_deposit_shared."
+        ? "Room receipt is created inside ping_deposit_shared. Retry if this was a transient account lookup issue."
         : "";
       const details = [prefix, String(err?.message || summarizeTxError(err)), lastProgramLine, ...logs].filter(Boolean).join(" | ").slice(0, 700);
       showToast(details);
@@ -8561,7 +8561,7 @@ if(connectBtn){
                 ...(creatorFeeMath.feeLamports > 0 ? ["ping_fee_transfer"] : []),
                 "ping_deposit_shared",
               ],
-              depositUsesExistingReceiptOnly: true,
+              depositCreatesOrUpdatesReceiptInBundle: true,
               creatorReceiptEstablishedViaCreateRoomLedger: true,
             });
           }
@@ -10600,17 +10600,6 @@ if(connectBtn){
 	            const feeIx = buildPingFeeTransferInstruction(pingSpendModel.feeLamports);
 	            let sig = "";
 	            if(useV2RoomFlow){
-                const receiptState = await roomReceiptExists(rid, connectedWallet);
-                console.log("[ping-debug] user receipt pre-deposit check", {
-                  roomId: rid,
-                  wallet: connectedWallet,
-                  roomReceiptPda: receiptState.roomReceiptPda.toBase58(),
-                  exists: receiptState.exists,
-                  ensureStepRan: false,
-                });
-                if(!receiptState.exists){
-                  throw new Error("Room receipt missing. Room admin must run create_room_receipt_for_user before first user ping.");
-                }
                 const userFundingInstructionNames = [
                   ...(feeIx ? ["ping_fee_transfer"] : []),
                   "ping_deposit_shared",
@@ -10624,7 +10613,7 @@ if(connectBtn){
                   expectedWalletOutflowLamports: amountLamports,
                   expectedDepositInstructionLamports: committedLamports,
                   userFundingInstructionNames,
-                  depositUsesExistingReceiptOnly: true,
+                  depositCreatesOrUpdatesReceiptInBundle: true,
                 });
 	              const instructions = [
 	                ...(feeIx ? [feeIx] : []),
