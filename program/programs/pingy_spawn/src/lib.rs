@@ -884,20 +884,19 @@ pub mod pingy_spawn {
                 .refundable_lamports
                 .checked_add(escrow_contribution_lamports)
                 .ok_or(PingyError::AmountOverflow)?;
+            room_ledger.total_bundle_lamports = room_ledger
+                .total_bundle_lamports
+                .checked_add(amount_lamports)
+                .ok_or(PingyError::AmountOverflow)?;
+            room_ledger.total_refundable_lamports = room_ledger
+                .total_refundable_lamports
+                .checked_add(escrow_contribution_lamports)
+                .ok_or(PingyError::AmountOverflow)?;
 
             if room_receipt.status == V2ReceiptStatus::Approved {
                 allocate_for_room_receipt(room_ledger, room_receipt)?;
             }
         }
-
-        room_ledger.total_bundle_lamports = room_ledger
-            .total_bundle_lamports
-            .checked_add(amount_lamports)
-            .ok_or(PingyError::AmountOverflow)?;
-        room_ledger.total_refundable_lamports = room_ledger
-            .total_refundable_lamports
-            .checked_add(escrow_contribution_lamports)
-            .ok_or(PingyError::AmountOverflow)?;
 
         if !is_new_receipt {
             room_ledger
