@@ -110,10 +110,17 @@ const $ = (id) => document.getElementById(id);
     const PING_FEE_BPS = 100;
     const BPS_DENOM = 10_000;
     const CREATOR_MAX_TX_FEE_RESERVE_LAMPORTS = 20_000;
-    const DEFAULT_CREATOR_BOOTSTRAP_RESERVE_LAMPORTS = 5_000_000;
-    const PINGY_FEE_RECIPIENT = "4HCfrCG3V26adHQa3yRmkmBNG5btREJxhTVmNTDAb9Ep";
-    const PINGY_LAUNCH_BACKEND = "pumpfun";
-    const ROOM_RECEIPT_ACCOUNT_DATA_SIZE = 8 + 183;
+	    const DEFAULT_CREATOR_BOOTSTRAP_RESERVE_LAMPORTS = 5_000_000;
+	    const PINGY_FEE_RECIPIENT = "4HCfrCG3V26adHQa3yRmkmBNG5btREJxhTVmNTDAb9Ep";
+	    const PINGY_LAUNCH_BACKEND = "pumpfun";
+	    const ROOM_RECEIPT_ACCOUNT_DATA_SIZE = 8 + 183;
+	    const ROOM_LEDGER_ACCOUNT_DATA_SIZE = 8 + 338;
+	    const V2_PROGRAM_STATE_ACCOUNT_DATA_SIZE = 8 + 130;
+	    const V2_SHARED_VAULT_ACCOUNT_DATA_SIZE = 8 + 10;
+	    const V2_FEE_VAULT_ACCOUNT_DATA_SIZE = 8 + 18;
+	    const RENT_ACCOUNT_STORAGE_OVERHEAD_BYTES = 128;
+	    const RENT_LAMPORTS_PER_BYTE_YEAR = 3_480;
+	    const RENT_EXEMPTION_THRESHOLD = 2;
     const PINGY_SHARED_VAULT_V2_ENABLED = typeof window?.PINGY_SHARED_VAULT_V2_ENABLED === "boolean"
       ? window.PINGY_SHARED_VAULT_V2_ENABLED
       : false;
@@ -123,9 +130,32 @@ const $ = (id) => document.getElementById(id);
     const EXTERNAL_LAUNCH_RECORDS_STORAGE_KEY = "pingy_external_launch_records";
     const DEBUG_ACCOUNTING = false;
 
-    function isPumpfunLaunchBackend(){
-      return PINGY_LAUNCH_BACKEND === "pumpfun";
-    }
+	    function isPumpfunLaunchBackend(){
+	      return PINGY_LAUNCH_BACKEND === "pumpfun";
+	    }
+	    function estimateRentExemptLamports(accountDataSize){
+	      const safeDataSize = Math.max(0, Math.floor(Number(accountDataSize || 0)));
+	      return Math.ceil((safeDataSize + RENT_ACCOUNT_STORAGE_OVERHEAD_BYTES) * RENT_LAMPORTS_PER_BYTE_YEAR * RENT_EXEMPTION_THRESHOLD);
+	    }
+	    function estimateRoomLedgerCreationLamports(){
+	      return estimateRentExemptLamports(ROOM_LEDGER_ACCOUNT_DATA_SIZE);
+	    }
+	    function estimateV2GlobalInitLamports(){
+	      return (
+	        estimateRentExemptLamports(V2_PROGRAM_STATE_ACCOUNT_DATA_SIZE)
+	        + estimateRentExemptLamports(V2_SHARED_VAULT_ACCOUNT_DATA_SIZE)
+	        + estimateRentExemptLamports(V2_FEE_VAULT_ACCOUNT_DATA_SIZE)
+	      );
+	    }
+	    async function estimatePendingGlobalInitCostLamports(){
+	      try{
+	        const [programStatePda] = await deriveV2ProgramStatePda();
+	        const existing = await connection.getAccountInfo(programStatePda, "confirmed");
+	        return existing?.data?.length >= 8 ? 0 : estimateV2GlobalInitLamports();
+	      } catch(_err){
+	        return estimateV2GlobalInitLamports();
+	      }
+	    }
     function isNativeLaunchBackend(){
       return PINGY_LAUNCH_BACKEND === "native";
     }
@@ -295,17 +325,17 @@ const $ = (id) => document.getElementById(id);
       };
     }
 
-    function computeCreatorSpawnSpendModel({ walletBalanceLamports, committedCapLamports, bootstrapCostLamports, networkBufferLamports, totalWalletSpendLamports = null, feeBps = PING_FEE_BPS }){
+	    function computeCreatorSpawnSpendModel({ walletBalanceLamports, committedCapLamports, bootstrapCostLamports, networkBufferLamports, totalWalletSpendLamports = null, feeBps = PING_FEE_BPS }){
       const safeWalletBalanceLamports = Math.max(0, Math.floor(Number(walletBalanceLamports || 0)));
       const safeCommittedCapLamports = Math.max(0, Math.floor(Number(committedCapLamports || 0)));
       const safeBootstrapCostLamports = Math.max(0, Math.floor(Number(bootstrapCostLamports || 0)));
       const safeNetworkBufferLamports = Math.max(0, Math.floor(Number(networkBufferLamports || 0)));
-      if(totalWalletSpendLamports != null){
-        const total = Math.max(0, Math.floor(Number(totalWalletSpendLamports || 0)));
-        const grossPositionInputLamports = total;
-        const feeMath = computePingFeeBreakdownLamports(grossPositionInputLamports, feeBps);
-        return {
-          committedTargetLamports: feeMath.committedLamports,
+	      if(totalWalletSpendLamports != null){
+	        const total = Math.max(0, Math.floor(Number(totalWalletSpendLamports || 0)));
+	        const grossPositionInputLamports = Math.max(0, total - safeBootstrapCostLamports);
+	        const feeMath = computePingFeeBreakdownLamports(grossPositionInputLamports, feeBps);
+	        return {
+	          committedTargetLamports: feeMath.committedLamports,
           grossPositionInputLamports,
           feeLamports: feeMath.feeLamports,
           bootstrapCostLamports: safeBootstrapCostLamports,
@@ -2966,7 +2996,7 @@ const $ = (id) => document.getElementById(id);
         /accountnotinitialized|does not exist|could not find account/i.test(combined)
         && /room_receipt|receipt/i.test(combined);
       const prefix = missingReceiptError
-        ? "Room receipt is created inside ping_deposit_shared. Retry if this was a transient account lookup issue."
+        ? "Room receipt creation/reload failed inside ping_deposit_shared. Retry if this was a transient lookup issue."
         : "";
       const details = [prefix, String(err?.message || summarizeTxError(err)), lastProgramLine, ...logs].filter(Boolean).join(" | ").slice(0, 700);
       showToast(details);
@@ -5055,7 +5085,6 @@ function encodeU64Arg(v){
       const adminPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
       const [programStatePda] = await deriveV2ProgramStatePda();
       const [roomLedgerPda] = await deriveRoomLedgerPda(rid);
-      const [roomReceiptPda] = await deriveRoomReceiptPda(rid, adminPk);
       const config = createConfig || getCreateLaunchConfig();
       const launchBackendByte = isPumpfunLaunchBackend() ? 1 : 0;
       return new TransactionInstruction({
@@ -5064,7 +5093,6 @@ function encodeU64Arg(v){
           { pubkey: adminPk, isSigner: true, isWritable: true },
           { pubkey: programStatePda, isSigner: false, isWritable: false },
           { pubkey: roomLedgerPda, isSigner: false, isWritable: true },
-          { pubkey: roomReceiptPda, isSigner: false, isWritable: true },
           { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
         ],
         data: concatBytes(
@@ -5085,14 +5113,17 @@ function encodeU64Arg(v){
 
     async function buildCreateRoomReceiptForUserV2Ix(roomId, userWallet = connectedWallet){
       const rid = String(roomId || "");
-      const adminPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
       const userPk = parsePublicKeyStrict(userWallet, "receipt user wallet");
+      const actorPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
       const [roomLedgerPda] = await deriveRoomLedgerPda(rid);
       const [roomReceiptPda] = await deriveRoomReceiptPda(rid, userPk);
+      if(toBase58String(actorPk) !== toBase58String(userPk)){
+        throw new Error("room receipt creation requires signer to match receipt wallet");
+      }
       return new TransactionInstruction({
         programId: PROGRAM_ID,
         keys: [
-          { pubkey: adminPk, isSigner: true, isWritable: true },
+          { pubkey: actorPk, isSigner: true, isWritable: true },
           { pubkey: roomLedgerPda, isSigner: false, isWritable: true },
           { pubkey: roomReceiptPda, isSigner: false, isWritable: true },
           { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
@@ -5100,7 +5131,6 @@ function encodeU64Arg(v){
         data: concatBytes(
           await anchorDiscriminator("create_room_receipt_for_user"),
           encodeStringArg(rid),
-          userPk.toBytes(),
         ),
       });
     }
@@ -8379,16 +8409,21 @@ if(connectBtn){
       const launchConfig = launchConfigResult.config;
       const launchMode = launchConfig.launchMode || "spawn";
       const useV2SpawnCreate = shouldUseV2CreateFlow(launchMode);
+      const estimatedGlobalInitLamports = launchMode === "spawn" ? await estimatePendingGlobalInitCostLamports() : 0;
+      const estimatedRoomCreationLamports = launchMode === "spawn" ? estimateRoomLedgerCreationLamports() : 0;
+      const estimatedSpawnSetupLamports = estimatedRoomCreationLamports + estimatedGlobalInitLamports;
       console.log("[ping-debug] create path selection", {
         launchMode,
         useV2SpawnCreate,
         createPathChosen: launchMode === "spawn" ? (useV2SpawnCreate ? "v2_shared_vault" : "legacy") : "non-spawn",
+        estimatedGlobalInitLamports,
+        estimatedRoomCreationLamports,
       });
       const creatorFeeMath = launchMode === "spawn"
         ? computeCreatorSpawnSpendModel({
             walletBalanceLamports: Number.MAX_SAFE_INTEGER,
             committedCapLamports: Number.MAX_SAFE_INTEGER,
-            bootstrapCostLamports: 0,
+            bootstrapCostLamports: estimatedSpawnSetupLamports,
             networkBufferLamports: 0,
             totalWalletSpendLamports: creatorTotalSpendLamports,
             feeBps: PING_FEE_BPS,
@@ -8403,7 +8438,7 @@ if(connectBtn){
       const commitLamports = creatorFeeMath.committedTargetLamports;
       const commit = commitLamports / LAMPORTS_PER_SOL;
       if(launchMode === "spawn" && creatorTotalSpendLamports > 0 && commitLamports <= 0){
-        return alert("Total spend must exceed the Pingy fee to create a committed amount.");
+        return alert("Total spend must exceed setup cost (room creation + possible global init) + Pingy fee to create a committed amount.");
       }
       let createTxSignature = "";
       let creatorFeeTransferSignature = "";
@@ -8430,13 +8465,14 @@ if(connectBtn){
       let creatorEscrowContributionLamports = 0;
       let creatorInitialCommitLamports = commitLamports;
       const createDepositTotalLamports = commitLamports;
-      const totalRequiredLamports = createDepositTotalLamports + creatorFeeMath.feeLamports;
+      const totalRequiredLamports = createDepositTotalLamports + creatorFeeMath.feeLamports + creatorFeeMath.bootstrapCostLamports;
       const SAFE_BUFFER = 0.01 * LAMPORTS_PER_SOL;
       if(totalRequiredLamports > creatorWalletBalanceLamports - SAFE_BUFFER) return alert("insufficient wallet balance for total spend.");
       console.log("[v2-spend-check]", {
         commitLamports,
         createDepositTotalLamports,
         feeLamports: creatorFeeMath.feeLamports,
+        roomCreationLamports: creatorFeeMath.bootstrapCostLamports,
         totalRequiredLamports,
         walletLamports: creatorWalletBalanceLamports
       });
@@ -8447,6 +8483,9 @@ if(connectBtn){
         grossPositionInputLamports: creatorFeeMath.grossPositionInputLamports,
         feeLamports: creatorFeeMath.feeLamports,
         committedTargetLamports: creatorFeeMath.committedTargetLamports,
+        roomCreationLamports: estimatedRoomCreationLamports,
+        globalInitLamports: estimatedGlobalInitLamports,
+        setupLamports: creatorFeeMath.bootstrapCostLamports,
         depositBackingLamports: creatorDepositBackingLamports,
         escrowContributionLamports: creatorEscrowContributionLamports,
         expectedWalletOutflowLamports: creatorTotalSpendLamports,
@@ -8510,7 +8549,9 @@ if(connectBtn){
                   depositBackingLamports: 0,
                   expectedDepositInstructionLamports: commitLamports,
                   feeLamports: creatorFeeMath.feeLamports,
-                  bootstrapCostLamports: 0,
+                  bootstrapCostLamports: creatorFeeMath.bootstrapCostLamports,
+                  roomCreationLamports: estimatedRoomCreationLamports,
+                  globalInitLamports: estimatedGlobalInitLamports,
                   creatorFundingInstructionNames,
                 }
               : null;
@@ -8552,17 +8593,19 @@ if(connectBtn){
               enteredCommitLamports: creatorTotalSpendLamports,
               pingyFeeLamports: creatorFeeMath.feeLamports,
               netCommittedLamports: commitLamports,
-              receiptBackingLamports: commitLamports,
+              receiptBackingLamports: "tracked on-chain in first receipt deposit bucket",
               depositBackingLamports: 0,
               escrowContributionLamports: 0,
               expectedWalletOutflowLamports: creatorTotalSpendLamports,
-              assembledTxOutflowLamports: creatorFeeMath.feeLamports + commitLamports,
+              roomCreationLamports: estimatedRoomCreationLamports,
+              globalInitLamports: estimatedGlobalInitLamports,
+              assembledTxOutflowLamports: creatorFeeMath.bootstrapCostLamports + creatorFeeMath.feeLamports + commitLamports,
               creatorFundingInstructionNames: [
                 ...(creatorFeeMath.feeLamports > 0 ? ["ping_fee_transfer"] : []),
                 "ping_deposit_shared",
               ],
               depositCreatesOrUpdatesReceiptInBundle: true,
-              creatorReceiptEstablishedViaCreateRoomLedger: true,
+              creatorReceiptEstablishedViaCreateRoomLedger: false,
             });
           }
         } else {
@@ -8656,13 +8699,13 @@ if(connectBtn){
       let bootstrapMeta = buildRoomBootstrapCostMeta(0, {
         known: true,
         note: launchMode === "spawn"
-          ? "creator optional commit is all-in; no extra bootstrap spend is charged"
+          ? "creator all-in total includes room creation cost + Pingy fee + committed amount"
           : "non-spawn create path has no bootstrap setup cost tracking",
       });
       if(launchMode === "spawn" && useV2SpawnCreate){
-        bootstrapMeta = buildRoomBootstrapCostMeta(0, {
+        bootstrapMeta = buildRoomBootstrapCostMeta(estimatedRoomCreationLamports, {
           known: true,
-          note: "v2 shared-vault create path skips legacy bootstrap reserve assumptions",
+          note: "estimated one-time room ledger creation rent for shared-vault create path",
         });
       }
       applyRoomBootstrapCostMeta(r, bootstrapMeta.bootstrap_cost_lamports, {
@@ -9524,9 +9567,8 @@ if(connectBtn){
 	      if(!isPending(r, wallet)) return;
 	      try{
 	        if(isV2Room(r)){
-            await ensureRoomReceiptBeforeDeposit(roomId, wallet, "admin");
-            await approveReceiptV2Tx(roomId, wallet);
-          }
+	            await approveReceiptV2Tx(roomId, wallet);
+	          }
 	        else await approveUserTx(roomId, wallet);
 	      } catch(e){
 	        reportTxError(e, "approve transaction failed");
@@ -10293,16 +10335,18 @@ if(connectBtn){
     }
 
 
-    function formatCreatorSpawnPreview(totalLamports, feeLamports, committedLamports){
-      return (
-        `Total spend: ${formatLamportsAsSol(totalLamports)} SOL • ` +
-        `Pingy fee: ${formatLamportsAsSol(feeLamports)} SOL • ` +
-        `Committed: ${formatLamportsAsSol(committedLamports)} SOL`
-      );
-    }
-    function updateCreateCommitFeePreview(){
-      const preview = $("newCommitFeePreview");
-      if(!preview) return;
+	    function formatCreatorSpawnPreview(totalLamports, roomCreationCostLamports, globalInitCostLamports, feeLamports, committedLamports){
+	      return (
+	        `Total spend: ${formatLamportsAsSol(totalLamports)} SOL • ` +
+	        `Room creation: ${formatLamportsAsSol(roomCreationCostLamports)} SOL • ` +
+	        `Global init: ${formatLamportsAsSol(globalInitCostLamports)} SOL • ` +
+	        `Pingy fee: ${formatLamportsAsSol(feeLamports)} SOL • ` +
+	        `Committed: ${formatLamportsAsSol(committedLamports)} SOL`
+	      );
+	    }
+	    async function updateCreateCommitFeePreview(){
+	      const preview = $("newCommitFeePreview");
+	      if(!preview) return;
 
       const inputEl = $("newCommit");
       const inputSol = Number((inputEl?.value || "").trim()) || 0;
@@ -10313,19 +10357,22 @@ if(connectBtn){
 	        preview.textContent = formatRegularPingPreview(inputLamports, 0, inputLamports);
 	        return;
 	      }
+	      const globalInitCostLamports = await estimatePendingGlobalInitCostLamports();
 	      const creatorModel = computeCreatorSpawnSpendModel({
 	        walletBalanceLamports: Number.MAX_SAFE_INTEGER,
 	        committedCapLamports: Number.MAX_SAFE_INTEGER,
-	        bootstrapCostLamports: 0,
+	        bootstrapCostLamports: estimateRoomLedgerCreationLamports() + globalInitCostLamports,
 	        networkBufferLamports: 0,
 	        totalWalletSpendLamports: inputLamports,
-          feeBps: PING_FEE_BPS,
+	          feeBps: PING_FEE_BPS,
 	      });
-      preview.textContent = `${formatCreatorSpawnPreview(
-        creatorModel.totalWalletSpendLamports,
-	        creatorModel.feeLamports,
-	        creatorModel.committedTargetLamports
-	      )}`;
+	      preview.textContent = `${formatCreatorSpawnPreview(
+	        creatorModel.totalWalletSpendLamports,
+	        estimateRoomLedgerCreationLamports(),
+	        globalInitCostLamports,
+		        creatorModel.feeLamports,
+		        creatorModel.committedTargetLamports
+		      )}`;
 	    }
 
     function updateActionModalCopy(room){
@@ -10576,7 +10623,6 @@ if(connectBtn){
         const committedLamports = pingSpendModel.committedLamports;
         let depositBackingLamports = 0;
         let escrowContributionLamports = committedLamports;
-        let stagedDepositBacking = false;
 
         if(onchainMode){
           const netCapacityLamports = computeMaxPingLamports(r, userDeposit);
@@ -10596,14 +10642,17 @@ if(connectBtn){
             expectedDepositInstructionLamports: committedLamports,
           });
           console.log("[ping-debug] all-in ping amount conversion", { solAmount, grossEnteredLamports: amountLamports, escrowContributionLamports });
-	          try {
+          try {
 	            const feeIx = buildPingFeeTransferInstruction(pingSpendModel.feeLamports);
 	            let sig = "";
-	            if(useV2RoomFlow){
-                const userFundingInstructionNames = [
-                  ...(feeIx ? ["ping_fee_transfer"] : []),
-                  "ping_deposit_shared",
-                ];
+              if(!useV2RoomFlow){
+                reportTxError(new Error("Legacy per-room escrow path is disabled. Room must use shared-vault architecture."), "legacy ping path disabled");
+                return;
+              }
+              const userFundingInstructionNames = [
+                ...(feeIx ? ["ping_fee_transfer"] : []),
+                "ping_deposit_shared",
+              ];
                 console.log("[ping-debug] regular ping funding tx", {
                   roomId: rid,
                   wallet: connectedWallet,
@@ -10615,104 +10664,19 @@ if(connectBtn){
                   userFundingInstructionNames,
                   depositCreatesOrUpdatesReceiptInBundle: true,
                 });
-	              const instructions = [
-	                ...(feeIx ? [feeIx] : []),
-	                await buildPingDepositSharedV2Ix(rid, committedLamports),
-	              ];
-	              sig = await sendProgramInstructions(instructions, {
-	                feeRecipient: PINGY_FEE_RECIPIENT,
-	                expectedWalletOutflowLamports: amountLamports,
-	                committedLamports,
-	                depositBackingLamports: 0,
-	                expectedDepositInstructionLamports: committedLamports,
-	                feeLamports: pingSpendModel.feeLamports,
-	                bootstrapCostLamports: 0,
-	              });
-	            } else {
-	              const walletPk = new PublicKey(connectedWallet);
-	              const [threadPda] = await deriveThreadPda(rid);
-	              const [depositPda] = await deriveDepositPda(rid, walletPk);
-	              const existingDepositInfo = await connection.getAccountInfo(depositPda, "confirmed");
-	              if(!existingDepositInfo?.data?.length || existingDepositInfo.data.length < 8){
-	                depositBackingLamports = await estimateWalletDepositBackingLamports(rid, connectedWallet);
-	                const split = splitCommittedLamportsForEscrow({ committedLamports, depositBackingLamports });
-	                depositBackingLamports = split.depositBackingLamports;
-	                escrowContributionLamports = split.escrowContributionLamports;
-	                setWalletDepositBackingLamports(r, connectedWallet, depositBackingLamports);
-	                stagedDepositBacking = true;
-	              }
-	              const [threadEscrowPda] = await deriveThreadEscrowPda(rid);
-	              const [spawnPoolPda] = await deriveSpawnPoolPda(rid);
-	              const threadInfo = await connection.getAccountInfo(threadPda, "confirmed");
-
-	              if(DEBUG_WALLET_SMOKE_BEFORE_SPAWN_TX){
-	                const smokeRes = await runWalletSmokeTest();
-	                if(!smokeRes?.ok && isInvalidWalletArgumentsError(smokeRes?.error)){
-	                  showToast("Wallet transport failed before spawn tx.");
-	                  return;
-	                }
-	              }
-
-	              const escrowInfoBefore = await connection.getAccountInfo(threadEscrowPda, "confirmed");
-	              const balBefore = escrowInfoBefore ? await connection.getBalance(threadEscrowPda, "confirmed") : 0;
-	              const depositBundle = await pingWithOptionalThreadInitTx(
-	                rid,
-	                committedLamports,
-	                !threadInfo,
-	                null
-	              );
-                const userFundingInstructionNames = [
-                  ...(feeIx ? ["ping_fee_transfer"] : []),
-                  ...(!threadInfo ? ["initialize_thread_core", "initialize_thread_assets"] : []),
-                  "ping_deposit",
-                ];
-                console.log("[ping-debug] regular ping funding tx", {
-                  roomId: rid,
-                  wallet: connectedWallet,
-                  grossWalletInputLamports: amountLamports,
-                  feeLamports: pingSpendModel.feeLamports,
-                  committedLamports,
-                  expectedWalletOutflowLamports: amountLamports,
-                  expectedDepositInstructionLamports: committedLamports,
-                  userFundingInstructionNames,
-                });
-	              const instructions = [
-	                ...(feeIx ? [feeIx] : []),
-	                ...(depositBundle.instructions || []),
-	              ];
-	              sig = await sendProgramInstructions(instructions, {
-	                feeRecipient: PINGY_FEE_RECIPIENT,
-	                expectedWalletOutflowLamports: amountLamports,
-	                committedLamports,
-	                depositBackingLamports,
-	                expectedDepositInstructionLamports: committedLamports,
-	                feeLamports: pingSpendModel.feeLamports,
-	                bootstrapCostLamports: 0,
-	              });
-	              const escrowInfoAfter = await connection.getAccountInfo(threadEscrowPda, "confirmed");
-	              const balAfter = escrowInfoAfter ? await connection.getBalance(threadEscrowPda, "confirmed") : 0;
-	              const deltaLamports = Number(balAfter || 0) - Number(balBefore || 0);
-	              const deltaSol = deltaLamports / 1_000_000_000;
-	              console.log("[ping-debug] deposit balance delta", {
-	                depositPda: depositPda.toBase58(),
-	                threadEscrowPda: threadEscrowPda.toBase58(),
-	                balBefore,
-	                balAfter,
-	                deltaLamports,
-	                deltaSol,
-	                grossEnteredLamports: amountLamports,
-	                expectedCommittedLamports: committedLamports,
-	                expectedEscrowContributionLamports: escrowContributionLamports,
-	                feeTransferSignature: feeIx ? sig : "",
-	                txExplorer: explorerTxUrl(sig),
-	                escrowExplorer: explorerAddressUrl(threadEscrowPda.toBase58()),
-	              });
-	              showToast(`Thread escrow deposit +${deltaSol.toFixed(9)} SOL (all-in ping ${solAmount} SOL)`);
-	              console.log("[ping-debug] explorer links", {
-	                tx: explorerTxUrl(sig),
-	                threadEscrow: explorerAddressUrl(threadEscrowPda.toBase58()),
-	              });
-	            }
+              const instructions = [
+                ...(feeIx ? [feeIx] : []),
+                await buildPingDepositSharedV2Ix(rid, committedLamports),
+              ];
+              sig = await sendProgramInstructions(instructions, {
+                feeRecipient: PINGY_FEE_RECIPIENT,
+                expectedWalletOutflowLamports: amountLamports,
+                committedLamports,
+                depositBackingLamports: 0,
+                expectedDepositInstructionLamports: committedLamports,
+                feeLamports: pingSpendModel.feeLamports,
+                bootstrapCostLamports: 0,
+              });
 	            const feeTransferSignature = feeIx ? sig : "";
 	            if(feeIx){
               console.log("[ping-debug] ping fee transfer", {
@@ -10727,7 +10691,6 @@ if(connectBtn){
             }
 	            if(useV2RoomFlow) showToast("Ping committed.");
 	          } catch(e){
-	            if(stagedDepositBacking) clearWalletDepositBackingLamports(r, connectedWallet);
 	            reportTxError(e, useV2RoomFlow ? "v2 ping deposit transaction failed" : "ping deposit transaction failed");
 	            return;
 	          }
@@ -11157,7 +11120,7 @@ if(connectBtn){
       }
     })();
     handleHash();
-    setInterval(tick, 900);
+    setInterval(tick, 3000);
 
     await validateOnchainConfig();
     window.__PINGY_READY__ = true;
