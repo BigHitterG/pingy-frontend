@@ -12,7 +12,6 @@ import {
   deriveFeeVaultPda,
   deriveDepositPda,
   deriveThreadEscrowPda,
-  deriveBanPda,
   fetchProgramAccounts,
   PublicKey,
   SystemProgram,
@@ -257,7 +256,7 @@ const $ = (id) => document.getElementById(id);
       return rentLamports;
     }
 
-    async function computeExactSpawnSetupCostForInstructionBundle({ roomId = "", wallet = "", includeThreadInit = true, includeLegacyNativeAssets = false, includeDepositInstruction = true } = {}){
+    async function computeExactSpawnSetupCostForInstructionBundle({ roomId = "", wallet = "", includeThreadInit = true, includeLegacyNativeAssets = false, includeDepositInstruction = true, assumeFreshDeposit = false } = {}){
       if(!includeThreadInit && !includeDepositInstruction){
         return { setupCostLamports: 0, breakdown: { threadCoreLamports: 0, legacyAssetsLamports: 0, depositRentLamports: 0 } };
       }
@@ -294,7 +293,9 @@ const $ = (id) => document.getElementById(id);
 
       let depositRentLamports = 0;
       if(includeDepositInstruction){
-        if(rid && walletStr){
+        if(assumeFreshDeposit){
+          depositRentLamports = await getRentExemptionLamportsCached(DEPOSIT_ACCOUNT_DATA_SIZE);
+        } else if(rid && walletStr){
           depositRentLamports = await estimateWalletDepositBackingLamports(rid, walletStr);
         } else {
           depositRentLamports = await getRentExemptionLamportsCached(DEPOSIT_ACCOUNT_DATA_SIZE);
@@ -4562,7 +4563,7 @@ function encodeU64Arg(v){
       const instructions = Array.isArray(ixs) ? ixs.flat().filter(Boolean) : [ixs].filter(Boolean);
       if(!instructions.length) throw new Error("No instructions provided");
 
-      console.log("[ping-debug] sendProgramInstructions pre-assert", instructions.map((ix, idx) => ({
+      if(DEBUG_ACCOUNTING) console.log("[ping-debug] sendProgramInstructions pre-assert", instructions.map((ix, idx) => ({
         idx,
         programId: ix?.programId?.toBase58?.() || String(ix?.programId),
         keyCount: Array.isArray(ix?.keys) ? ix.keys.length : -1,
@@ -4574,8 +4575,10 @@ function encodeU64Arg(v){
         }))
       })));
 
-      try { instructions.forEach(assertIxPubkeys); }
-      catch(e){ showToast(String(e?.message || e)); throw e; }
+      if(DEBUG_ACCOUNTING){
+        try { instructions.forEach(assertIxPubkeys); }
+        catch(e){ showToast(String(e?.message || e)); throw e; }
+      }
 
       let feePayer;
       try {
@@ -4609,7 +4612,7 @@ function encodeU64Arg(v){
         .find((details) => !!details && (expectedDepositInstructionLamports <= 0 || details.lamports === expectedDepositInstructionLamports));
       const parsedBundleOutflowLamports = expectedFeeLamports + expectedDepositInstructionLamports;
       const inferredRemainderLamports = Math.max(0, expectedWalletOutflowLamports - parsedBundleOutflowLamports);
-      console.log("[ping-debug] final instruction bundle before send", {
+      if(DEBUG_ACCOUNTING) console.log("[ping-debug] final instruction bundle before send", {
         instructionCount: tx.instructions.length,
         instructionProgramIds: tx.instructions.map((ix) => ix.programId?.toBase58?.()),
         hasFeeInstruction: !!feeInstruction,
@@ -4625,7 +4628,7 @@ function encodeU64Arg(v){
         feeLamports: expectedFeeLamports,
         setupCostLamports,
       });
-      console.log("[ping-debug] FINAL TX INSTRUCTIONS", tx.instructions.map((ix, idx) => ({
+      if(DEBUG_ACCOUNTING) console.log("[ping-debug] FINAL TX INSTRUCTIONS", tx.instructions.map((ix, idx) => ({
         idx,
         programId: ix.programId?.toBase58?.(),
         keys: (ix.keys || []).map((k) => ({
@@ -4652,19 +4655,19 @@ function encodeU64Arg(v){
         });
       }
 
-      console.log("[ping-debug] sendProgramInstruction program checks", {
+      if(DEBUG_ACCOUNTING) console.log("[ping-debug] sendProgramInstruction program checks", {
         PROGRAM_ID: PROGRAM_ID.toBase58(),
         ixProgramIds: instructions.map((ix) => ix.programId?.toBase58?.()),
         txInstructionProgramIds: tx.instructions.map((i) => i.programId?.toBase58?.()),
       });
 
-      console.log("[pingy] about to sign tx", {
+      if(DEBUG_ACCOUNTING) console.log("[pingy] about to sign tx", {
         feePayer: tx.feePayer?.toBase58?.(),
         recentBlockhash: tx.recentBlockhash,
         ixCount: tx.instructions?.length,
         programId: instructions[0]?.programId?.toBase58?.(),
       });
-      console.log("[pingy] provider methods", {
+      if(DEBUG_ACCOUNTING) console.log("[pingy] provider methods", {
         hasSignTransaction: typeof provider.signTransaction,
       });
 
@@ -4676,8 +4679,8 @@ function encodeU64Arg(v){
       traceStep("tx:signTransaction", { via: "provider.signTransaction + sendRawTransaction" }, "tx step: opening phantom with signer...");
       let signedTx;
       try {
-        console.log("[ping-debug] skipping manual simulation; going straight to Phantom");
-        console.log("[ping-debug] wallet call args", {
+        if(DEBUG_ACCOUNTING) console.log("[ping-debug] skipping manual simulation; going straight to Phantom");
+        if(DEBUG_ACCOUNTING) console.log("[ping-debug] wallet call args", {
           method: "signTransaction",
           argCount: 1,
           txShape: {
@@ -4786,12 +4789,6 @@ function encodeU64Arg(v){
         { pubkey: threadEscrowPda, isSigner: false, isWritable: true },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       ];
-      console.log("[ping-debug] deriveBanPda typeof", typeof deriveBanPda);
-      const [banPda] = await deriveBanPda(rid, walletPk);
-      const banInfo = await connection.getAccountInfo(banPda, "confirmed");
-      if (banInfo) {
-        keys.push({ pubkey: banPda, isSigner: false, isWritable: false });
-      }
       console.log("[ping-create-debug]", {
         roomId: rid,
         launchConfig,
@@ -4839,6 +4836,7 @@ function encodeU64Arg(v){
       const includeLegacyNativeAssets = opts.includeLegacyNativeAssets !== false;
       const includeDepositInstruction = opts.includeDepositInstruction !== false;
       const buildSkeletonOnly = opts.buildSkeletonOnly === true;
+      const assumeFreshDeposit = opts.assumeFreshDeposit === true;
       const walletPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
       const [threadPda] = await deriveThreadPda(rid);
       const [spawnPoolPda] = await deriveSpawnPoolPda(rid);
@@ -4927,6 +4925,7 @@ function encodeU64Arg(v){
         includeThreadInit,
         includeLegacyNativeAssets,
         includeDepositInstruction,
+        assumeFreshDeposit,
       });
       console.log("[ping-debug] pingWithOptionalThreadInitTx instruction bundle", {
         includeThreadInit,
@@ -7734,7 +7733,7 @@ if(connectBtn){
         void updateCreateCommitFeePreview();
         return;
       }
-      const includeLegacyNativeAssets = !isPumpfunLaunchBackend();
+      const includeLegacyNativeAssets = false; // active spawn-create path is Pump.fun prespawn only
       const setupModel = await estimateSpawnCreatePreviewSetupCostLamports({
         includeLegacyNativeAssets,
         includeDepositInstruction: true,
@@ -7824,11 +7823,12 @@ if(connectBtn){
       const id = reservedSupabaseRoom?.runtimeRoomId || ("r" + Math.random().toString(16).slice(2,6));
       let spawnCreateBundle = null;
       if(launchMode === "spawn"){
-        const includeLegacyNativeAssets = !isPumpfunLaunchBackend();
+        const includeLegacyNativeAssets = false; // keep legacy-native assets dormant for active Pump.fun spawn path
         spawnCreateBundle = await pingWithOptionalThreadInitTx(id, 1, true, launchConfig, {
           includeLegacyNativeAssets,
           includeDepositInstruction: true,
           buildSkeletonOnly: true,
+          assumeFreshDeposit: true,
         });
         spawnSetupBreakdown = spawnCreateBundle.setupCostBreakdown || null;
         actualSetupCostLamports = Math.max(0, Math.floor(Number(spawnCreateBundle.setupCostLamports || 0)));
@@ -7904,15 +7904,30 @@ if(connectBtn){
 
         if(launchMode === "spawn"){
           const launchBackend = PINGY_LAUNCH_BACKEND;
-          const usePumpfunMinimalPrespawnPath = isPumpfunLaunchBackend();
-          const includeLegacyNativeAssets = !usePumpfunMinimalPrespawnPath;
+          const usePumpfunMinimalPrespawnPath = true;
+          const includeLegacyNativeAssets = false; // active spawn-create path is Pump.fun prespawn only
           console.log("[ping-debug] spawn init mode", {
             roomId: id,
             launchBackend,
             launchMode: launchConfig.launchMode,
             path: usePumpfunMinimalPrespawnPath ? "pumpfun-minimal-prespawn" : "native-legacy-init",
-            included: ["initialize_thread_core", ...(includeLegacyNativeAssets ? ["initialize_thread_assets"] : []), ...(commitLamports > 0 ? ["ping_deposit"] : [])],
-            excluded: includeLegacyNativeAssets ? [] : ["initialize_thread_assets (legacy native curve path retained for future reactivation; inactive for Pump.fun spawn flow)"],
+            included: ["initialize_thread_core", ...(commitLamports > 0 ? ["ping_deposit"] : [])],
+          });
+          console.log("[ping-proof] spawn create threshold config before tx", {
+            roomId: id,
+            chosenLaunchConfig: {
+              minApprovedWallets: Number(launchConfig.minApprovedWallets || 0),
+              spawnTargetLamports: Number(launchConfig.spawnTargetLamports || 0),
+              maxWalletShareBps: Number(launchConfig.maxWalletShareBps || 0),
+              launchMode: launchConfig.launchMode,
+            },
+            initializeThreadCoreArgs: {
+              threadId: id,
+              minApprovedWallets: Number(launchConfig.minApprovedWallets || 0),
+              spawnTargetLamports: Number(launchConfig.spawnTargetLamports || 0),
+              maxWalletShareBps: Number(launchConfig.maxWalletShareBps || 0),
+              launchModeByte: launchModeByte(launchConfig.launchMode),
+            },
           });
           try {
             const createPath = commitLamports > 0 ? "combined-init+deposit" : "init-only";
@@ -8136,11 +8151,19 @@ if(connectBtn){
       openRoom(id);
 
       if(shouldUseOnchain() && launchMode === "spawn"){
-        await fetchRoomOnchainSnapshot(id);
-        await refreshConnectedWalletEscrowLine(id);
-        await fetchConnectedWalletDepositSnapshot();
+        await refreshRoomOnchainSnapshot(id, { force: true });
+        const refreshedThread = state.onchain?.[id] || {};
+        console.log("[ping-proof] spawn create threshold config after refresh", {
+          roomId: id,
+          onchainThread: {
+            minApprovedWallets: Number(refreshedThread.min_approved_wallets || 0),
+            spawnTargetLamports: Number(refreshedThread.spawn_target_lamports || 0),
+            maxWalletShareBps: Number(refreshedThread.max_wallet_share_bps || 0),
+            launchMode: Number(refreshedThread.launch_mode || 0),
+          },
+        });
         const createdRoom = roomById(id);
-        if(createdRoom){
+        if(createdRoom && DEBUG_ACCOUNTING){
           console.log("[ping-debug] room escrow snapshot after spawn funding", {
             roomId: id,
             snapshot: readRoomEscrowSnapshot(createdRoom),
@@ -9726,7 +9749,7 @@ if(connectBtn){
         preview.textContent = formatRegularPingPreview(inputLamports, 0, inputLamports);
         return;
       }
-      const includeLegacyNativeAssets = !isPumpfunLaunchBackend();
+      const includeLegacyNativeAssets = false; // active spawn-create path is Pump.fun prespawn only
       const setupModel = await estimateSpawnCreatePreviewSetupCostLamports({
         includeLegacyNativeAssets,
         includeDepositInstruction: inputLamports > 0,

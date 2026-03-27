@@ -1068,12 +1068,15 @@ pub struct InitializeThreadCore<'info> {
         seeds = [b"curve", room_seed_bytes(&thread_id).as_ref()],
         bump
     )]
+    // Pump.fun prespawn create still initializes curve state so post-spawn
+    // settlement/claim instructions have canonical reserves and lifecycle state.
     pub curve: Account<'info, Curve>,
     #[account(
         seeds = [b"curve_authority", room_seed_bytes(&thread_id).as_ref()],
         bump
     )]
-    /// CHECK: PDA used as mint authority and token vault authority.
+    /// CHECK: PDA kept in core init so curve_authority_bump is locked to the
+    /// canonical authority used by later settlement/claim/token flows.
     pub curve_authority: UncheckedAccount<'info>,
     #[account(
         init,
@@ -1082,6 +1085,8 @@ pub struct InitializeThreadCore<'info> {
         seeds = [b"spawn_pool", room_seed_bytes(&thread_id).as_ref()],
         bump
     )]
+    // Spawn pool is still required by sweep/settlement logic; keeping it in
+    // core init avoids later lifecycle instructions failing on missing account.
     pub spawn_pool: Account<'info, SpawnPool>,
     #[account(
         init,
