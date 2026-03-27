@@ -8,16 +8,81 @@
   },
   "instructions": [
     {
-      "name": "initializeThread",
+      "name": "initializeThreadCore",
       "discriminator": [
-        207,
-        78,
+        82,
+        213,
         91,
-        185,
-        87,
+        162,
+        188,
+        116,
         244,
-        142,
-        11
+        183
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "thread",
+          "writable": true
+        },
+        {
+          "name": "curve",
+          "writable": true
+        },
+        {
+          "name": "curveAuthority"
+        },
+        {
+          "name": "spawnPool",
+          "writable": true
+        },
+        {
+          "name": "threadEscrow",
+          "writable": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "threadId",
+          "type": "string"
+        },
+        {
+          "name": "minApprovedWallets",
+          "type": "u32"
+        },
+        {
+          "name": "spawnTargetLamports",
+          "type": "u64"
+        },
+        {
+          "name": "maxWalletShareBps",
+          "type": "u16"
+        },
+        {
+          "name": "launchMode",
+          "type": "u8"
+        }
+      ]
+    },
+    {
+      "name": "initializeThreadAssets",
+      "discriminator": [
+        80,
+        185,
+        4,
+        100,
+        45,
+        247,
+        39,
+        79
       ],
       "accounts": [
         {
@@ -45,14 +110,6 @@
           "writable": true
         },
         {
-          "name": "spawnPool",
-          "writable": true
-        },
-        {
-          "name": "threadEscrow",
-          "writable": true
-        },
-        {
           "name": "feeVault",
           "writable": true
         },
@@ -69,22 +126,6 @@
         {
           "name": "threadId",
           "type": "string"
-        },
-        {
-          "name": "minApprovedWallets",
-          "type": "u32"
-        },
-        {
-          "name": "spawnTargetLamports",
-          "type": "u64"
-        },
-        {
-          "name": "maxWalletShareBps",
-          "type": "u16"
-        },
-        {
-          "name": "launchMode",
-          "type": "u8"
         }
       ]
     },
