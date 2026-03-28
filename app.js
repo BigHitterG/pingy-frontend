@@ -247,11 +247,17 @@ const $ = (id) => document.getElementById(id);
     }
 
     const rentExemptionLamportsCache = new Map();
+    const RENT_LAMPORTS_PER_BYTE_YEAR = 3480;
+    const RENT_EXEMPTION_THRESHOLD_YEARS = 2;
+    const ACCOUNT_STORAGE_OVERHEAD_BYTES = 128;
 
     async function getRentExemptionLamportsCached(size){
       const safeSize = Math.max(0, Math.floor(Number(size || 0)));
       if(rentExemptionLamportsCache.has(safeSize)) return rentExemptionLamportsCache.get(safeSize);
-      const rentLamports = Math.max(0, Math.floor(Number(await connection.getMinimumBalanceForRentExemption(safeSize, "confirmed") || 0)));
+      const rentLamports = Math.max(
+        0,
+        Math.floor((safeSize + ACCOUNT_STORAGE_OVERHEAD_BYTES) * RENT_LAMPORTS_PER_BYTE_YEAR * RENT_EXEMPTION_THRESHOLD_YEARS)
+      );
       rentExemptionLamportsCache.set(safeSize, rentLamports);
       return rentLamports;
     }
@@ -262,6 +268,8 @@ const $ = (id) => document.getElementById(id);
       }
       const rid = String(roomId || "").trim();
       const walletStr = String(wallet || "").trim();
+      void rid;
+      void walletStr;
       let threadCoreLamports = 0;
       if(includeThreadInit){
         const [threadRent, curveRent, spawnPoolRent, threadEscrowRent] = await Promise.all([
@@ -275,31 +283,17 @@ const $ = (id) => document.getElementById(id);
 
       let legacyAssetsLamports = 0;
       if(includeThreadInit && includeLegacyNativeAssets){
-        const [mintPda, curveTokenVaultPda, feeVaultPda] = await Promise.all([
-          deriveMintPda(rid).then((res) => res[0]),
-          deriveCurveTokenVaultPda(rid).then((res) => res[0]),
-          deriveFeeVaultPda().then((res) => res[0]),
-        ]);
-        const legacyInfos = await connection.getMultipleAccountsInfo([mintPda, curveTokenVaultPda, feeVaultPda], "confirmed");
         const [mintRent, tokenRent, feeVaultRent] = await Promise.all([
           getRentExemptionLamportsCached(TOKEN_MINT_ACCOUNT_DATA_SIZE),
           getRentExemptionLamportsCached(TOKEN_ACCOUNT_DATA_SIZE),
           getRentExemptionLamportsCached(FEE_VAULT_ACCOUNT_DATA_SIZE),
         ]);
-        if(!legacyInfos?.[0]) legacyAssetsLamports += mintRent;
-        if(!legacyInfos?.[1]) legacyAssetsLamports += tokenRent;
-        if(!legacyInfos?.[2]) legacyAssetsLamports += feeVaultRent;
+        legacyAssetsLamports += mintRent + tokenRent + feeVaultRent;
       }
 
       let depositRentLamports = 0;
       if(includeDepositInstruction){
-        if(assumeFreshDeposit){
-          depositRentLamports = await getRentExemptionLamportsCached(DEPOSIT_ACCOUNT_DATA_SIZE);
-        } else if(rid && walletStr){
-          depositRentLamports = await estimateWalletDepositBackingLamports(rid, walletStr);
-        } else {
-          depositRentLamports = await getRentExemptionLamportsCached(DEPOSIT_ACCOUNT_DATA_SIZE);
-        }
+        depositRentLamports = await getRentExemptionLamportsCached(DEPOSIT_ACCOUNT_DATA_SIZE);
       }
 
       const setupCostLamports = Math.max(0, threadCoreLamports + legacyAssetsLamports + depositRentLamports);
@@ -4668,6 +4662,7 @@ function encodeU64Arg(v){
         programId: instructions[0]?.programId?.toBase58?.(),
       });
       if(DEBUG_ACCOUNTING) console.log("[pingy] provider methods", {
+        hasSignAndSendTransaction: typeof provider.signAndSendTransaction,
         hasSignTransaction: typeof provider.signTransaction,
       });
 
@@ -4676,12 +4671,14 @@ function encodeU64Arg(v){
       }
 
       let sig;
-      traceStep("tx:signTransaction", { via: "provider.signTransaction + sendRawTransaction" }, "tx step: opening phantom with signer...");
-      let signedTx;
+      traceStep("tx:walletSend", { via: "provider.signAndSendTransaction" }, "tx step: opening phantom...");
       try {
+        if(typeof provider.signAndSendTransaction !== "function"){
+          throw new Error("Wallet provider does not support signAndSendTransaction");
+        }
         if(DEBUG_ACCOUNTING) console.log("[ping-debug] skipping manual simulation; going straight to Phantom");
         if(DEBUG_ACCOUNTING) console.log("[ping-debug] wallet call args", {
-          method: "signTransaction",
+          method: "signAndSendTransaction",
           argCount: 1,
           txShape: {
             feePayer: tx.feePayer?.toBase58?.() || null,
@@ -4689,9 +4686,10 @@ function encodeU64Arg(v){
             instructionCount: tx.instructions.length,
           },
         });
-        signedTx = await provider.signTransaction(tx);
+        const sendResult = await provider.signAndSendTransaction(tx);
+        sig = typeof sendResult === "string" ? sendResult : (sendResult?.signature || "");
       } catch(e){
-        console.error("[ping-debug] signTransaction throw context", {
+        console.error("[ping-debug] signAndSendTransaction throw context", {
           connectedWallet,
           providerPublicKey: provider.publicKey?.toBase58?.(),
           txFeePayer: tx.feePayer?.toBase58?.(),
@@ -4699,14 +4697,9 @@ function encodeU64Arg(v){
           txInstructionCount: tx.instructions.length,
           ixProgramIds: tx.instructions.map((ix) => ix.programId?.toBase58?.()),
         });
-        showToast("signTransaction: " + String(e?.message || e));
+        showToast("signAndSendTransaction: " + String(e?.message || e));
         throw e;
       }
-      if(!signedTx) throw new Error("Missing signed transaction");
-
-      try {
-        sig = await connection.sendRawTransaction(signedTx.serialize(), { skipPreflight:false });
-      } catch(e){ showToast("sendRawTransaction: " + (e?.message||e)); throw e; }
 
       if(!sig) throw new Error("Missing transaction signature");
       traceStep("tx:submitted", { signature: sig }, "tx submitted; waiting for confirmation...");
@@ -4837,6 +4830,8 @@ function encodeU64Arg(v){
       const includeDepositInstruction = opts.includeDepositInstruction !== false;
       const buildSkeletonOnly = opts.buildSkeletonOnly === true;
       const assumeFreshDeposit = opts.assumeFreshDeposit === true;
+      const precomputedSetupCostLamports = Number(opts.precomputedSetupCostLamports);
+      const precomputedSetupCostBreakdown = opts.precomputedSetupCostBreakdown || null;
       const walletPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
       const [threadPda] = await deriveThreadPda(rid);
       const [spawnPoolPda] = await deriveSpawnPoolPda(rid);
@@ -4919,14 +4914,19 @@ function encodeU64Arg(v){
           ? ["initialize_thread_core", ...(includeLegacyNativeAssets ? ["initialize_thread_assets"] : []), ...(includeDepositInstruction ? ["ping_deposit"] : [])]
           : (includeDepositInstruction ? ["ping_deposit"] : [])),
       ];
-      const setupCostBreakdown = await computeExactSpawnSetupCostForInstructionBundle({
-        roomId: rid,
-        wallet: connectedWallet,
-        includeThreadInit,
-        includeLegacyNativeAssets,
-        includeDepositInstruction,
-        assumeFreshDeposit,
-      });
+      const setupCostBreakdown = Number.isFinite(precomputedSetupCostLamports)
+        ? {
+            setupCostLamports: Math.max(0, Math.floor(precomputedSetupCostLamports)),
+            breakdown: precomputedSetupCostBreakdown || null,
+          }
+        : await computeExactSpawnSetupCostForInstructionBundle({
+            roomId: rid,
+            wallet: connectedWallet,
+            includeThreadInit,
+            includeLegacyNativeAssets,
+            includeDepositInstruction,
+            assumeFreshDeposit,
+          });
       console.log("[ping-debug] pingWithOptionalThreadInitTx instruction bundle", {
         includeThreadInit,
         includeLegacyNativeAssets,
@@ -7821,17 +7821,17 @@ if(connectBtn){
       };
       const reservedSupabaseRoom = await reserveSupabaseRoomMetadata(roomMetadataPayload);
       const id = reservedSupabaseRoom?.runtimeRoomId || ("r" + Math.random().toString(16).slice(2,6));
-      let spawnCreateBundle = null;
       if(launchMode === "spawn"){
-        const includeLegacyNativeAssets = false; // keep legacy-native assets dormant for active Pump.fun spawn path
-        spawnCreateBundle = await pingWithOptionalThreadInitTx(id, 1, true, launchConfig, {
-          includeLegacyNativeAssets,
+        const setupCostBundle = await computeExactSpawnSetupCostForInstructionBundle({
+          roomId: id,
+          wallet: connectedWallet,
+          includeThreadInit: true,
+          includeLegacyNativeAssets: false,
           includeDepositInstruction: true,
-          buildSkeletonOnly: true,
           assumeFreshDeposit: true,
         });
-        spawnSetupBreakdown = spawnCreateBundle.setupCostBreakdown || null;
-        actualSetupCostLamports = Math.max(0, Math.floor(Number(spawnCreateBundle.setupCostLamports || 0)));
+        spawnSetupBreakdown = setupCostBundle.breakdown || null;
+        actualSetupCostLamports = Math.max(0, Math.floor(Number(setupCostBundle.setupCostLamports || 0)));
         const exactFunding = computeExactCreatorSpawnFundingFromTotalSpend({
           totalWalletSpendLamports: creatorTotalSpendLamports,
           actualSetupCostLamports,
@@ -7946,6 +7946,13 @@ if(connectBtn){
             });
             if(commitLamports > 0){
               const creatorFeeIx = buildPingFeeTransferInstruction(creatorFeeLamports);
+              const spawnCreateBundle = await pingWithOptionalThreadInitTx(id, createDepositTotalLamports, true, launchConfig, {
+                includeLegacyNativeAssets,
+                includeDepositInstruction: true,
+                assumeFreshDeposit: true,
+                precomputedSetupCostLamports: actualSetupCostLamports,
+                precomputedSetupCostBreakdown: spawnSetupBreakdown,
+              });
               console.log("[ping-debug] before Phantom funding tx", {
                 roomId: id,
                 creatorTotalSpendLamports,
@@ -7956,15 +7963,8 @@ if(connectBtn){
                 expectedPhantomOutflowLamports: creatorTotalSpendLamports,
                 hasCreatorFeeInstruction: !!creatorFeeIx,
               });
-              if(!spawnCreateBundle || typeof spawnCreateBundle.buildInstructionsWithDepositLamports !== "function"){
-                throw new Error("Missing spawn create instruction bundle builder.");
-              }
-              const depositBundle = {
-                ...spawnCreateBundle,
-                instructions: spawnCreateBundle.buildInstructionsWithDepositLamports(createDepositTotalLamports),
-              };
               console.log("[ping-debug] spawn create instruction composition", {
-                instructionCount: (depositBundle.instructions || []).length + (creatorFeeIx ? 1 : 0),
+                instructionCount: (spawnCreateBundle.instructions || []).length + (creatorFeeIx ? 1 : 0),
                 lamportsByComponent: {
                   setupCostLamports: actualSetupCostLamports,
                   feeLamports: creatorFeeLamports,
@@ -7976,7 +7976,7 @@ if(connectBtn){
               });
               const instructions = [
                 ...(creatorFeeIx ? [creatorFeeIx] : []),
-                ...(depositBundle.instructions || []),
+                ...(spawnCreateBundle.instructions || []),
               ];
               createTxSignature = await sendProgramInstructions(instructions, {
                 feeRecipient: PINGY_FEE_RECIPIENT,
