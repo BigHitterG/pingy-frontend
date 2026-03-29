@@ -7726,10 +7726,6 @@ if(connectBtn){
       }
       const launchConfig = launchConfigResult.config;
       const launchMode = launchConfig.launchMode || "spawn";
-      if(launchMode === "spawn" && !shouldUseOnchain()){
-        showToast("Spawn requires on-chain mode. Fix wallet/program setup and try again.");
-        return;
-      }
       let actualSetupCostLamports = 0;
       let creatorFeeLamports = launchMode === "spawn" ? 0 : 0;
       let commitLamports = creatorTotalSpendLamports;
