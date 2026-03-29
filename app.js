@@ -4519,21 +4519,6 @@ function encodeU64Arg(v){
       }
     }
 
-    function parseSystemTransferDetails(ix){
-      if(!ix || ix.programId?.toBase58?.() !== SystemProgram.programId.toBase58()) return null;
-      const data = ix.data;
-      if(!(data instanceof Uint8Array) || data.length < 12) return null;
-      const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
-      const instructionType = view.getUint32(0, true);
-      if(instructionType !== 2) return null;
-      const lamports = Number(view.getBigUint64(4, true));
-      return {
-        fromPubkey: ix.keys?.[0]?.pubkey?.toBase58?.() || "",
-        toPubkey: ix.keys?.[1]?.pubkey?.toBase58?.() || "",
-        lamports,
-      };
-    }
-
     function parsePingDepositDetails(ix){
       if(!ix || ix.programId?.toBase58?.() !== PROGRAM_ID.toBase58()) return null;
       const keys = Array.isArray(ix.keys) ? ix.keys : [];
@@ -4549,7 +4534,7 @@ function encodeU64Arg(v){
       };
     }
 
-    async function sendProgramInstructions(ixs, debugMeta = null){
+    async function sendProgramInstructions(ixs){
       const provider = getProvider();
       if(!provider) throw new Error("Phantom not found");
       if(!connectedWallet) throw new Error("Wallet not connected");
@@ -4590,64 +4575,6 @@ function encodeU64Arg(v){
         recentBlockhash: blockhash,
       });
       instructions.forEach((ix) => tx.add(ix));
-
-      const expectedFeeLamports = Math.max(0, Math.floor(Number(debugMeta?.feeLamports || 0)));
-      const feeRecipient = String(debugMeta?.feeRecipient || "");
-      const feeInstruction = tx.instructions
-        .map((ix) => parseSystemTransferDetails(ix))
-        .find((details) => !!details && details.toPubkey === feeRecipient && details.lamports === expectedFeeLamports);
-      const expectedWalletOutflowLamports = Math.max(0, Math.floor(Number(debugMeta?.expectedWalletOutflowLamports || 0)));
-      const committedLamports = Math.max(0, Math.floor(Number(debugMeta?.committedLamports || 0)));
-      const depositBackingLamports = Math.max(0, Math.floor(Number(debugMeta?.depositBackingLamports || 0)));
-      const expectedDepositInstructionLamports = Math.max(0, Math.floor(Number(debugMeta?.expectedDepositInstructionLamports || 0)));
-      const setupCostLamports = Math.max(0, Math.floor(Number(debugMeta?.setupCostLamports || 0)));
-      const depositInstruction = tx.instructions
-        .map((ix) => parsePingDepositDetails(ix))
-        .find((details) => !!details && (expectedDepositInstructionLamports <= 0 || details.lamports === expectedDepositInstructionLamports));
-      const parsedBundleOutflowLamports = expectedFeeLamports + expectedDepositInstructionLamports;
-      const inferredRemainderLamports = Math.max(0, expectedWalletOutflowLamports - parsedBundleOutflowLamports);
-      if(DEBUG_ACCOUNTING) console.log("[ping-debug] final instruction bundle before send", {
-        instructionCount: tx.instructions.length,
-        instructionProgramIds: tx.instructions.map((ix) => ix.programId?.toBase58?.()),
-        hasFeeInstruction: !!feeInstruction,
-        feeInstruction,
-        hasDepositInstruction: !!depositInstruction,
-        depositInstruction,
-        expectedWalletOutflowLamports,
-        expectedDepositInstructionLamports,
-        parsedBundleOutflowLamports,
-        inferredRemainderLamports,
-        committedLamports,
-        depositBackingLamports,
-        feeLamports: expectedFeeLamports,
-        setupCostLamports,
-      });
-      if(DEBUG_ACCOUNTING) console.log("[ping-debug] FINAL TX INSTRUCTIONS", tx.instructions.map((ix, idx) => ({
-        idx,
-        programId: ix.programId?.toBase58?.(),
-        keys: (ix.keys || []).map((k) => ({
-          pubkey: k.pubkey?.toBase58?.(),
-          isSigner: !!k.isSigner,
-          isWritable: !!k.isWritable,
-        })),
-        transferDetails: parseSystemTransferDetails(ix),
-      })));
-      if(expectedFeeLamports > 0 && !feeInstruction){
-        throw new Error("Missing Pingy fee transfer instruction in transaction bundle");
-      }
-      if(expectedDepositInstructionLamports > 0 && !depositInstruction){
-        throw new Error("Missing Pingy deposit instruction in transaction bundle");
-      }
-      if(expectedWalletOutflowLamports > 0 && parsedBundleOutflowLamports > expectedWalletOutflowLamports){
-        throw new Error(`Transaction bundle outflow mismatch (expected <= ${expectedWalletOutflowLamports}, parsed ${parsedBundleOutflowLamports})`);
-      }
-      if(setupCostLamports > 0){
-        console.log("[ping-debug] inferred remainder after fee+deposit (diagnostic only)", {
-          setupCostLamports,
-          inferredRemainderLamports,
-          deltaLamports: inferredRemainderLamports - setupCostLamports,
-        });
-      }
 
       if(DEBUG_ACCOUNTING) console.log("[ping-debug] sendProgramInstruction program checks", {
         PROGRAM_ID: PROGRAM_ID.toBase58(),
@@ -7759,7 +7686,6 @@ if(connectBtn){
 
     async function createCoinFromForm(){
       if(!connectedWallet) return showToast("connect wallet first.");
-      await refreshWalletBalances(connectedWallet, { force: true });
       console.log("[ping-debug] spawn button handler start", { connectedWallet, launchBackend: PINGY_LAUNCH_BACKEND });
       if(!updateCreateCoinSubmitState({ showValidation: true })) return;
       const name = ($("newName").value||"").trim();
@@ -7788,8 +7714,6 @@ if(connectBtn){
       if(commitStr && (!Number.isFinite(commitInputSol) || Number.isNaN(commitInputSol) || commitInputSol <= 0)) return alert("commit must be a valid SOL amount.");
       const creatorTotalSpendLamports = Math.floor(commitInputSol * LAMPORTS_PER_SOL);
       if(commitInputSol > 0 && creatorTotalSpendLamports <= 0) return alert("commit must be at least 1 lamport.");
-      const creatorWalletBalanceLamports = Math.max(0, Math.floor(Number(state.walletBalances?.[connectedWallet]?.nativeSol || 0) * LAMPORTS_PER_SOL));
-      if(creatorTotalSpendLamports > creatorWalletBalanceLamports) return alert("insufficient wallet balance for total spend.");
 
       const launchConfigResult = validateCreateLaunchConfig(getCreateLaunchConfig());
       if(!launchConfigResult.ok){
@@ -7821,17 +7745,15 @@ if(connectBtn){
       };
       const reservedSupabaseRoom = await reserveSupabaseRoomMetadata(roomMetadataPayload);
       const id = reservedSupabaseRoom?.runtimeRoomId || ("r" + Math.random().toString(16).slice(2,6));
+      let spawnCreateBundle = null;
       if(launchMode === "spawn"){
-        const setupCostBundle = await computeExactSpawnSetupCostForInstructionBundle({
-          roomId: id,
-          wallet: connectedWallet,
-          includeThreadInit: true,
+        spawnCreateBundle = await pingWithOptionalThreadInitTx(id, 0, true, launchConfig, {
           includeLegacyNativeAssets: false,
           includeDepositInstruction: true,
           assumeFreshDeposit: true,
         });
-        spawnSetupBreakdown = setupCostBundle.breakdown || null;
-        actualSetupCostLamports = Math.max(0, Math.floor(Number(setupCostBundle.setupCostLamports || 0)));
+        spawnSetupBreakdown = spawnCreateBundle.setupCostBreakdown || null;
+        actualSetupCostLamports = Math.max(0, Math.floor(Number(spawnCreateBundle.setupCostLamports || 0)));
         const exactFunding = computeExactCreatorSpawnFundingFromTotalSpend({
           totalWalletSpendLamports: creatorTotalSpendLamports,
           actualSetupCostLamports,
@@ -7946,47 +7868,15 @@ if(connectBtn){
             });
             if(commitLamports > 0){
               const creatorFeeIx = buildPingFeeTransferInstruction(creatorFeeLamports);
-              const spawnCreateBundle = await pingWithOptionalThreadInitTx(id, createDepositTotalLamports, true, launchConfig, {
-                includeLegacyNativeAssets,
-                includeDepositInstruction: true,
-                assumeFreshDeposit: true,
-                precomputedSetupCostLamports: actualSetupCostLamports,
-                precomputedSetupCostBreakdown: spawnSetupBreakdown,
-              });
-              console.log("[ping-debug] before Phantom funding tx", {
-                roomId: id,
-                creatorTotalSpendLamports,
-                actualSetupCostLamports,
-                feeLamports: creatorFeeLamports,
-                commitLamports,
-                invariantPassed: (actualSetupCostLamports + creatorFeeLamports + createDepositTotalLamports) === creatorTotalSpendLamports,
-                expectedPhantomOutflowLamports: creatorTotalSpendLamports,
-                hasCreatorFeeInstruction: !!creatorFeeIx,
-              });
-              console.log("[ping-debug] spawn create instruction composition", {
-                instructionCount: (spawnCreateBundle.instructions || []).length + (creatorFeeIx ? 1 : 0),
-                lamportsByComponent: {
-                  setupCostLamports: actualSetupCostLamports,
-                  feeLamports: creatorFeeLamports,
-                  depositLamports: createDepositTotalLamports,
-                },
-                hasCreatorFeeInstruction: !!creatorFeeIx,
-                includesInit: true,
-                includesDeposit: true,
-              });
+              if(!spawnCreateBundle){
+                throw new Error("Spawn create instruction bundle unavailable");
+              }
+              const spawnInstructions = spawnCreateBundle.buildInstructionsWithDepositLamports(createDepositTotalLamports);
               const instructions = [
                 ...(creatorFeeIx ? [creatorFeeIx] : []),
-                ...(spawnCreateBundle.instructions || []),
+                ...spawnInstructions,
               ];
-              createTxSignature = await sendProgramInstructions(instructions, {
-                feeRecipient: PINGY_FEE_RECIPIENT,
-                expectedWalletOutflowLamports: creatorTotalSpendLamports,
-                committedLamports: commitLamports,
-                depositBackingLamports: creatorDepositBackingLamports,
-                expectedDepositInstructionLamports: commitLamports,
-                feeLamports: creatorFeeLamports,
-                setupCostLamports: actualSetupCostLamports,
-              });
+              createTxSignature = await sendProgramInstructions(instructions);
               creatorFeeTransferSignature = creatorFeeIx ? createTxSignature : "";
               if(creatorFeeIx){
                 console.log("[ping-debug] creator fee transfer", {
