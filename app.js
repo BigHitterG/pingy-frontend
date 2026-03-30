@@ -6360,6 +6360,12 @@ function encodeU64Arg(v){
       });
     }
 
+    function isConnectedWalletPingFeeRecipient(){
+      const wallet = String(connectedWallet || "").trim();
+      if(!wallet) return false;
+      return wallet === PINGY_FEE_RECIPIENT;
+    }
+
     async function runWalletSmokeTest(){
       if(!connectedWallet){
         showToast("connect wallet first.");
@@ -7815,13 +7821,16 @@ if(connectBtn){
       if(launchMode === "spawn"){
         const sumLamports = actualSetupCostLamports + createDepositTotalLamports + creatorFeeLamports;
         const invariantPassed = sumLamports === creatorTotalSpendLamports;
+        const feeIsNetZeroSelfTransfer = creatorFeeLamports > 0 && isConnectedWalletPingFeeRecipient();
+        const expectedPhantomOutflowLamports = creatorTotalSpendLamports - (feeIsNetZeroSelfTransfer ? creatorFeeLamports : 0);
         console.log("[ping-debug] spawn create funding preflight", {
           creatorTotalSpendLamports,
           actualSetupCostLamports,
           feeLamports: creatorFeeLamports,
           commitLamports,
           invariantPassed,
-          expectedPhantomOutflowLamports: creatorTotalSpendLamports,
+          feeIsNetZeroSelfTransfer,
+          expectedPhantomOutflowLamports,
         });
         console.log("[ping-debug] spawn create funding invariant", {
           creatorTotalSpendLamports,
@@ -7894,8 +7903,9 @@ if(connectBtn){
               }
               const spawnInstructions = spawnCreateBundle.buildInstructionsWithDepositLamports(createDepositTotalLamports);
               const creatorFeeInstruction = buildPingFeeTransferInstruction(creatorFeeLamports);
+              const feeIsNetZeroSelfTransfer = creatorFeeLamports > 0 && isConnectedWalletPingFeeRecipient();
               const instructions = creatorFeeInstruction
-                ? [...spawnInstructions, creatorFeeInstruction]
+                ? [creatorFeeInstruction, ...spawnInstructions]
                 : [...spawnInstructions];
               createTxSignature = await sendProgramInstructions(instructions);
               creatorFeeTransferSignature = "";
@@ -7909,7 +7919,8 @@ if(connectBtn){
                 committedTargetLamports: commitLamports,
                 depositBackingLamports: creatorDepositBackingLamports,
                 escrowContributionLamports: creatorEscrowContributionLamports,
-                expectedWalletOutflowLamports: creatorTotalSpendLamports,
+                feeIsNetZeroSelfTransfer,
+                expectedWalletOutflowLamports: creatorTotalSpendLamports - (feeIsNetZeroSelfTransfer ? creatorFeeLamports : 0),
                 expectedDepositInstructionLamports: createDepositTotalLamports,
               });
               console.log("[ping-debug] funding tx success", { roomId: id, commitLamports, createDepositTotalLamports, creatorFeeTransferSignature });
@@ -9671,12 +9682,16 @@ if(connectBtn){
         actualSetupCostLamports: setupModel.setupCostLamports,
       });
       if(requestSeq !== createPreviewRequestSeq) return;
-      preview.textContent = `${formatCreatorSpawnPreview(
+      const feeIsNetZeroSelfTransfer = creatorModel.feeLamports > 0 && isConnectedWalletPingFeeRecipient();
+      const basePreview = `${formatCreatorSpawnPreview(
         creatorModel.totalWalletSpendLamports,
         creatorModel.feeLamports,
         creatorModel.actualSetupCostLamports,
         creatorModel.committedTargetLamports
       )} • Network fee is charged separately by Solana/Phantom`;
+      preview.textContent = feeIsNetZeroSelfTransfer
+        ? `${basePreview} • Note: your connected wallet is the Pingy fee recipient, so Phantom net SOL change appears lower by ${formatLamportsAsSol(creatorModel.feeLamports)} SOL.`
+        : basePreview;
     }
 
     function updateActionModalCopy(room){
