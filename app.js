@@ -4558,16 +4558,98 @@ function encodeU64Arg(v){
     function parsePingDepositDetails(ix){
       if(!ix || ix.programId?.toBase58?.() !== PROGRAM_ID.toBase58()) return null;
       const keys = Array.isArray(ix.keys) ? ix.keys : [];
-      if(keys.length !== 5) return null;
-      if(keys[4]?.pubkey?.toBase58?.() !== SystemProgram.programId.toBase58()) return null;
+      if(keys.length !== 5 && keys.length !== 6) return null;
+      if(keys[keys.length - 1]?.pubkey?.toBase58?.() !== SystemProgram.programId.toBase58()) return null;
       const data = ix.data;
       if(!(data instanceof Uint8Array) || data.length < 8) return null;
       const lamportsOffset = data.length - 8;
       if(lamportsOffset < 0) return null;
       const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
       return {
+        depositAbi: keys.length === 6 ? "feeVault" : "legacy",
         lamports: Number(view.getBigUint64(lamportsOffset, true)),
       };
+    }
+
+    const PING_DEPOSIT_ABI_CACHE_KEY = "pingy_ping_deposit_abi_mode";
+    function normalizePingDepositAbiMode(raw){
+      const v = String(raw || "").trim().toLowerCase();
+      if(v === "legacy") return "legacy";
+      if(v === "feevault" || v === "fee_vault") return "feeVault";
+      return null;
+    }
+    function readPingDepositAbiOverride(){
+      const globalOverride = normalizePingDepositAbiMode(globalThis?.PINGY_PING_DEPOSIT_ABI);
+      if(globalOverride) return { mode: globalOverride, source: "globalThis.PINGY_PING_DEPOSIT_ABI" };
+      const queryOverride = normalizePingDepositAbiMode(new URLSearchParams(globalThis?.location?.search || "").get("abi"));
+      if(queryOverride) return { mode: queryOverride, source: "query:abi" };
+      return null;
+    }
+    function readCachedPingDepositAbiMode(){
+      try {
+        return normalizePingDepositAbiMode(globalThis?.sessionStorage?.getItem(PING_DEPOSIT_ABI_CACHE_KEY));
+      } catch(_err){
+        return null;
+      }
+    }
+    function cachePingDepositAbiMode(mode){
+      const normalized = normalizePingDepositAbiMode(mode);
+      if(!normalized) return;
+      try { globalThis?.sessionStorage?.setItem(PING_DEPOSIT_ABI_CACHE_KEY, normalized); } catch(_err){}
+    }
+    function resolvePreferredPingDepositAbiMode(){
+      const override = readPingDepositAbiOverride();
+      if(override) return override;
+      const cached = readCachedPingDepositAbiMode();
+      if(cached) return { mode: cached, source: "session-cache" };
+      return { mode: "feeVault", source: "default-optimistic" };
+    }
+    function isLikelyPingDepositAbiAccountMismatch(error){
+      const haystack = [
+        String(error?.message || ""),
+        ...((Array.isArray(error?.logs) ? error.logs : []).map((l) => String(l || ""))),
+        ...((Array.isArray(error?.txLogs) ? error.txLogs : []).map((l) => String(l || ""))),
+      ].join("\n").toLowerCase();
+      return [
+        "accountnotenoughkeys",
+        "not enough account keys",
+        "invalid account data",
+        "failed to sanitize accounts offsets",
+        "accounts",
+        "account",
+      ].some((token) => haystack.includes(token));
+    }
+    function buildPingDepositPlan({ rid, walletPk, threadPda, depositPda, threadEscrowPda, feeVaultPda, grossDepositLamports, pingFeeLamports, abiMode }){
+      const safeGrossDepositLamports = Math.max(0, Math.floor(Number(grossDepositLamports || 0)));
+      const safePingFeeLamports = Math.max(0, Math.floor(Number(pingFeeLamports || 0)));
+      const normalizedMode = normalizePingDepositAbiMode(abiMode) || "feeVault";
+      const depositLamports = normalizedMode === "legacy"
+        ? Math.max(0, safeGrossDepositLamports - safePingFeeLamports)
+        : safeGrossDepositLamports;
+      const pingDepositKeys = [
+        { pubkey: walletPk, isSigner: true, isWritable: true },
+        { pubkey: threadPda, isSigner: false, isWritable: true },
+        { pubkey: depositPda, isSigner: false, isWritable: true },
+        { pubkey: threadEscrowPda, isSigner: false, isWritable: true },
+      ];
+      if(normalizedMode === "feeVault"){
+        pingDepositKeys.push({ pubkey: feeVaultPda, isSigner: false, isWritable: true });
+      }
+      pingDepositKeys.push({ pubkey: SystemProgram.programId, isSigner: false, isWritable: false });
+      return {
+        depositAbi: normalizedMode,
+        feeHandling: normalizedMode === "legacy" ? "frontend-transfer" : "program-feeVault-split",
+        pingDepositKeys,
+        depositLamports,
+        frontendFeeTransferLamports: normalizedMode === "legacy" ? safePingFeeLamports : 0,
+      };
+    }
+    function pingDepositErrorTail(error, maxLines = 4){
+      const lines = [
+        ...((Array.isArray(error?.logs) ? error.logs : []).map((l) => String(l || ""))),
+        ...((Array.isArray(error?.txLogs) ? error.txLogs : []).map((l) => String(l || ""))),
+      ].filter(Boolean);
+      return lines.slice(Math.max(0, lines.length - maxLines));
     }
 
     async function sendProgramInstructions(ixs){
@@ -4732,24 +4814,33 @@ function encodeU64Arg(v){
       const [threadEscrowPda] = await deriveThreadEscrowPda(rid);
       const [feeVaultPda] = await deriveFeeVaultPda();
       const launchConfig = getCreateLaunchConfig();
+      const feeMath = computePingFeeBreakdownLamports(lamports);
+      const abiSelection = resolvePreferredPingDepositAbiMode();
+      const depositPlan = buildPingDepositPlan({
+        rid,
+        walletPk,
+        threadPda,
+        depositPda,
+        threadEscrowPda,
+        feeVaultPda,
+        grossDepositLamports: lamports,
+        pingFeeLamports: feeMath.feeLamports,
+        abiMode: abiSelection.mode,
+      });
       const discriminator = await anchorDiscriminator("ping_deposit");
       const data = concatBytes(
         discriminator,
         encodeStringArg(rid),
-        encodeU64Arg(lamports)
+        encodeU64Arg(depositPlan.depositLamports)
       );
-      const keys = [
-        { pubkey: walletPk, isSigner: true, isWritable: true },
-        { pubkey: threadPda, isSigner: false, isWritable: true },
-        { pubkey: depositPda, isSigner: false, isWritable: true },
-        { pubkey: threadEscrowPda, isSigner: false, isWritable: true },
-        { pubkey: feeVaultPda, isSigner: false, isWritable: true },
-        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-      ];
+      const keys = depositPlan.pingDepositKeys;
       console.log("[ping-create-debug]", {
         roomId: rid,
         launchConfig,
         commitLamports: lamports,
+        abiSelection,
+        depositAbi: depositPlan.depositAbi,
+        feeHandling: depositPlan.feeHandling,
         pdas: {
           threadPda: threadPda.toBase58(),
           curvePda: curvePda.toBase58(),
@@ -4766,10 +4857,15 @@ function encodeU64Arg(v){
         programId: PROGRAM_ID.toBase58(),
         threadPda: threadPda.toBase58(),
         depositPda: depositPda.toBase58(),
-              threadEscrowPda: threadEscrowPda.toBase58(),
+        threadEscrowPda: threadEscrowPda.toBase58(),
         discriminatorBytes: Array.from(discriminator),
         dataLength: data.length,
-        idlAccountOrder: ["user", "thread", "deposit", "threadEscrow", "feeVault", "systemProgram"],
+        idlAccountOrder: depositPlan.depositAbi === "feeVault"
+          ? ["user", "thread", "deposit", "threadEscrow", "feeVault", "systemProgram"]
+          : ["user", "thread", "deposit", "threadEscrow", "systemProgram"],
+        depositAbi: depositPlan.depositAbi,
+        feeHandling: depositPlan.feeHandling,
+        depositLamports: depositPlan.depositLamports,
         keys: keys.map((k) => ({
           pubkey: k.pubkey.toBase58(),
           isSigner: k.isSigner,
@@ -4794,6 +4890,8 @@ function encodeU64Arg(v){
       const includeDepositInstruction = opts.includeDepositInstruction !== false;
       const buildSkeletonOnly = opts.buildSkeletonOnly === true;
       const assumeFreshDeposit = opts.assumeFreshDeposit === true;
+      const explicitAbiMode = normalizePingDepositAbiMode(opts.pingDepositAbiMode);
+      const pingFeeLamportsOverride = Number(opts.pingFeeLamports);
       const precomputedSetupCostLamports = Number(opts.precomputedSetupCostLamports);
       const precomputedSetupCostBreakdown = opts.precomputedSetupCostBreakdown || null;
       const walletPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
@@ -4847,30 +4945,49 @@ function encodeU64Arg(v){
         }
       }
 
-      const pingKeys = [
-        { pubkey: walletPk, isSigner: true, isWritable: true },
-        { pubkey: threadPda, isSigner: false, isWritable: true },
-        { pubkey: depositPda, isSigner: false, isWritable: true },
-        { pubkey: threadEscrowPda, isSigner: false, isWritable: true },
-        { pubkey: feeVaultPda, isSigner: false, isWritable: true },
-        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-      ];
-
       const depositDiscriminator = await anchorDiscriminator("ping_deposit");
-      const buildDepositInstruction = (depositLamports) => {
-        const safeDepositLamports = Math.max(0, Math.floor(Number(depositLamports || 0)));
-        return new TransactionInstruction({
+      const buildDepositInstruction = (grossDepositLamports, abiMode = explicitAbiMode || resolvePreferredPingDepositAbiMode().mode, pingFeeLamports = pingFeeLamportsOverride) => {
+        const safeGrossDepositLamports = Math.max(0, Math.floor(Number(grossDepositLamports || 0)));
+        const fallbackFeeLamports = computePingFeeBreakdownLamports(safeGrossDepositLamports).feeLamports;
+        const safePingFeeLamports = Number.isFinite(pingFeeLamports)
+          ? Math.max(0, Math.floor(pingFeeLamports))
+          : fallbackFeeLamports;
+        const depositPlan = buildPingDepositPlan({
+          rid,
+          walletPk,
+          threadPda,
+          depositPda,
+          threadEscrowPda,
+          feeVaultPda,
+          grossDepositLamports: safeGrossDepositLamports,
+          pingFeeLamports: safePingFeeLamports,
+          abiMode,
+        });
+        const pingDepositIx = new TransactionInstruction({
           programId: PROGRAM_ID,
-          keys: pingKeys,
+          keys: depositPlan.pingDepositKeys,
           data: concatBytes(
             depositDiscriminator,
             encodeStringArg(rid),
-            encodeU64Arg(safeDepositLamports)
+            encodeU64Arg(depositPlan.depositLamports)
           ),
         });
+        const extraInstructions = [];
+        if(depositPlan.feeHandling === "frontend-transfer" && depositPlan.frontendFeeTransferLamports > 0){
+          extraInstructions.push(SystemProgram.transfer({
+            fromPubkey: walletPk,
+            toPubkey: feeVaultPda,
+            lamports: depositPlan.frontendFeeTransferLamports,
+          }));
+        }
+        return {
+          depositPlan,
+          instructions: [pingDepositIx, ...extraInstructions],
+        };
       };
       if(includeDepositInstruction && !buildSkeletonOnly){
-        instructions.push(buildDepositInstruction(lamports));
+        const built = buildDepositInstruction(lamports);
+        instructions.push(...built.instructions);
       }
 
       const instructionNames = [
@@ -4902,20 +5019,25 @@ function encodeU64Arg(v){
         setupCostBreakdown: setupCostBreakdown.breakdown,
       });
 
-      const buildInstructionsWithDepositLamports = (depositLamports) => {
+      const buildInstructionsWithDepositLamports = (depositLamports, abiMode = explicitAbiMode || null, pingFeeLamports = pingFeeLamportsOverride) => {
         const rebuilt = [...instructions.filter((ix) => !parsePingDepositDetails(ix))];
         if(includeDepositInstruction){
-          rebuilt.push(buildDepositInstruction(depositLamports));
+          const built = buildDepositInstruction(depositLamports, abiMode || resolvePreferredPingDepositAbiMode().mode, pingFeeLamports);
+          rebuilt.push(...built.instructions);
         }
         return rebuilt;
       };
-
+      const buildDepositPlanForLamports = (depositLamports, abiMode = explicitAbiMode || null, pingFeeLamports = pingFeeLamportsOverride) => {
+        const built = buildDepositInstruction(depositLamports, abiMode || resolvePreferredPingDepositAbiMode().mode, pingFeeLamports);
+        return built.depositPlan;
+      };
       return {
         instructions,
         signers: [],
         setupCostLamports: setupCostBreakdown.setupCostLamports,
         setupCostBreakdown: setupCostBreakdown.breakdown,
         buildInstructionsWithDepositLamports,
+        buildDepositPlanForLamports,
       };
     }
 
@@ -7815,6 +7937,10 @@ if(connectBtn){
         const sumLamports = actualSetupCostLamports + grossPositionInputLamports;
         const feeSplitLamports = creatorFeeLamports + commitLamports;
         const invariantPassed = sumLamports === creatorTotalSpendLamports && feeSplitLamports === grossPositionInputLamports;
+        const preferredAbiMode = resolvePreferredPingDepositAbiMode().mode;
+        const selectedPlan = spawnCreateBundle?.buildDepositPlanForLamports
+          ? spawnCreateBundle.buildDepositPlanForLamports(grossPositionInputLamports, preferredAbiMode, creatorFeeLamports)
+          : null;
         console.log("[ping-debug] spawn create funding preflight", {
           total: creatorTotalSpendLamports,
           setup: actualSetupCostLamports,
@@ -7822,6 +7948,8 @@ if(connectBtn){
           fee: creatorFeeLamports,
           committed: commitLamports,
           invariantPassed,
+          depositAbi: selectedPlan?.depositAbi || preferredAbiMode,
+          feeHandling: selectedPlan?.feeHandling || (preferredAbiMode === "legacy" ? "frontend-transfer" : "program-feeVault-split"),
         });
         console.log("[ping-debug] spawn create funding invariant", {
           total: creatorTotalSpendLamports,
@@ -7894,8 +8022,43 @@ if(connectBtn){
               if(!spawnCreateBundle){
                 throw new Error("Spawn create instruction bundle unavailable");
               }
-              const spawnInstructions = spawnCreateBundle.buildInstructionsWithDepositLamports(grossPositionInputLamports);
-              createTxSignature = await sendProgramInstructions([...spawnInstructions]);
+              const abiSelection = resolvePreferredPingDepositAbiMode();
+              let selectedAbiMode = abiSelection.mode;
+              let fallbackAttempted = false;
+              let fallbackSucceeded = false;
+              let selectedPlan = spawnCreateBundle.buildDepositPlanForLamports(grossPositionInputLamports, selectedAbiMode, creatorFeeLamports);
+              let spawnInstructions = spawnCreateBundle.buildInstructionsWithDepositLamports(grossPositionInputLamports, selectedAbiMode, creatorFeeLamports);
+              try {
+                createTxSignature = await sendProgramInstructions([...spawnInstructions]);
+                cachePingDepositAbiMode(selectedAbiMode);
+              } catch (primaryErr){
+                const shouldFallback = selectedAbiMode === "feeVault" && isLikelyPingDepositAbiAccountMismatch(primaryErr);
+                if(!shouldFallback){
+                  throw primaryErr;
+                }
+                fallbackAttempted = true;
+                selectedAbiMode = "legacy";
+                selectedPlan = spawnCreateBundle.buildDepositPlanForLamports(grossPositionInputLamports, selectedAbiMode, creatorFeeLamports);
+                spawnInstructions = spawnCreateBundle.buildInstructionsWithDepositLamports(grossPositionInputLamports, selectedAbiMode, creatorFeeLamports);
+                console.warn("[ping-debug] feeVault ping_deposit failed during create; retrying with legacy ABI", {
+                  roomId: id,
+                  initialAbi: abiSelection.mode,
+                  retryAbi: selectedAbiMode,
+                  logTail: pingDepositErrorTail(primaryErr),
+                });
+                try {
+                  createTxSignature = await sendProgramInstructions([...spawnInstructions]);
+                } catch (fallbackErr){
+                  fallbackErr.pingDepositFallbackAttempted = true;
+                  fallbackErr.pingDepositFallbackSucceeded = false;
+                  fallbackErr.pingDepositInitialAbi = abiSelection.mode;
+                  fallbackErr.pingDepositRetryAbi = selectedAbiMode;
+                  throw fallbackErr;
+                }
+                fallbackSucceeded = true;
+                cachePingDepositAbiMode(selectedAbiMode);
+                console.warn("[ping-debug] ping_deposit ABI fallback succeeded during create", { roomId: id, selectedAbiMode });
+              }
               console.log("[ping-debug] creator spawn deposit bundled in create tx", {
                 roomId: id,
                 wallet: connectedWallet,
@@ -7907,14 +8070,32 @@ if(connectBtn){
                 depositBackingLamports: creatorDepositBackingLamports,
                 escrowContributionLamports: creatorEscrowContributionLamports,
                 expectedWalletOutflowLamports: creatorTotalSpendLamports,
-                expectedDepositInstructionLamports: grossPositionInputLamports,
+                expectedDepositInstructionLamports: selectedPlan.depositLamports,
+                selectedAbiMode,
+                selectedPingDepositKeys: selectedPlan.pingDepositKeys.map((k) => k.pubkey.toBase58()),
+                feeHandling: selectedPlan.feeHandling,
+                fallbackAttempted,
+                fallbackSucceeded,
               });
               console.log("[ping-debug] funding tx success", { roomId: id, commitLamports, grossPositionInputLamports });
             } else {
               createTxSignature = await initializeThreadTx(id, launchConfig, { includeLegacyNativeAssets });
             }
           } catch(e){
-            console.error("[ping-debug] funding tx failed", { roomId: id, commitLamports, error: String(e?.message || e) });
+            const abiMode = resolvePreferredPingDepositAbiMode().mode;
+            const planOnError = spawnCreateBundle?.buildDepositPlanForLamports
+              ? spawnCreateBundle.buildDepositPlanForLamports(grossPositionInputLamports, abiMode, creatorFeeLamports)
+              : null;
+            console.error("[ping-debug] funding tx failed", {
+              roomId: id,
+              commitLamports,
+              error: String(e?.message || e),
+              selectedAbiMode: abiMode,
+              selectedPingDepositKeys: planOnError?.pingDepositKeys?.map((k) => k.pubkey.toBase58()) || [],
+              feeHandling: planOnError?.feeHandling || "unknown",
+              logTail: pingDepositErrorTail(e),
+              fallbackAttempted: e?.pingDepositFallbackAttempted === true,
+            });
             await cleanupReservedSupabaseRoomIfAny();
             if(isWalletTxRejected(e)) showToast("Create cancelled — no coin or commit was submitted.");
             else if(commitLamports > 0) reportTxError(e, includeLegacyNativeAssets ? "initialize_thread_core + initialize_thread_assets + ping_deposit failed during create" : "initialize_thread_core + ping_deposit failed during create");
@@ -9939,6 +10120,7 @@ if(connectBtn){
             escrowContributionLamports,
             expectedWalletOutflowLamports: amountLamports,
             expectedDepositInstructionLamports: committedLamports,
+            depositAbi: resolvePreferredPingDepositAbiMode().mode,
           });
           console.log("[ping-debug] all-in ping amount conversion", { solAmount, grossEnteredLamports: amountLamports, escrowContributionLamports });
           const walletPk = new PublicKey(connectedWallet);
@@ -9967,23 +10149,67 @@ if(connectBtn){
 
           const escrowInfoBefore = await connection.getAccountInfo(threadEscrowPda, "confirmed");
           const balBefore = escrowInfoBefore ? await connection.getBalance(threadEscrowPda, "confirmed") : 0;
+          let lastAttemptedDepositAbiMode = resolvePreferredPingDepositAbiMode().mode;
+          let lastAttemptedPlan = null;
+          let fallbackAttempted = false;
           try {
+            let depositAbiMode = lastAttemptedDepositAbiMode;
+            let fallbackSucceeded = false;
             const depositBundle = await pingWithOptionalThreadInitTx(
               rid,
               amountLamports,
               !threadInfo,
-              null
+              null,
+              { pingFeeLamports: pingSpendModel.feeLamports, pingDepositAbiMode: depositAbiMode }
             );
-            const instructions = [
-              ...(depositBundle.instructions || []),
-            ];
-            const sig = await sendProgramInstructions(instructions, {
-              expectedWalletOutflowLamports: amountLamports,
-              committedLamports,
-              depositBackingLamports,
-              expectedDepositInstructionLamports: amountLamports,
-              feeLamports: pingSpendModel.feeLamports,
-              setupCostLamports: 0,
+            let selectedPlan = depositBundle.buildDepositPlanForLamports(amountLamports, depositAbiMode, pingSpendModel.feeLamports);
+            lastAttemptedPlan = selectedPlan;
+            let instructions = [...(depositBundle.buildInstructionsWithDepositLamports(amountLamports, depositAbiMode, pingSpendModel.feeLamports) || [])];
+            let sig;
+            try {
+              sig = await sendProgramInstructions(instructions, {
+                expectedWalletOutflowLamports: amountLamports,
+                committedLamports,
+                depositBackingLamports,
+                expectedDepositInstructionLamports: selectedPlan.depositLamports,
+                feeLamports: pingSpendModel.feeLamports,
+                setupCostLamports: 0,
+              });
+              cachePingDepositAbiMode(depositAbiMode);
+            } catch (primaryErr){
+              const shouldFallback = depositAbiMode === "feeVault" && isLikelyPingDepositAbiAccountMismatch(primaryErr);
+              if(!shouldFallback) throw primaryErr;
+              fallbackAttempted = true;
+              depositAbiMode = "legacy";
+              selectedPlan = depositBundle.buildDepositPlanForLamports(amountLamports, depositAbiMode, pingSpendModel.feeLamports);
+              lastAttemptedDepositAbiMode = depositAbiMode;
+              lastAttemptedPlan = selectedPlan;
+              instructions = [...(depositBundle.buildInstructionsWithDepositLamports(amountLamports, depositAbiMode, pingSpendModel.feeLamports) || [])];
+              console.warn("[ping-debug] feeVault ping_deposit failed; retrying regular ping with legacy ABI", {
+                roomId: rid,
+                initialAbi: "feeVault",
+                retryAbi: "legacy",
+                logTail: pingDepositErrorTail(primaryErr),
+              });
+              sig = await sendProgramInstructions(instructions, {
+                expectedWalletOutflowLamports: amountLamports,
+                committedLamports,
+                depositBackingLamports,
+                expectedDepositInstructionLamports: selectedPlan.depositLamports,
+                feeLamports: pingSpendModel.feeLamports,
+                setupCostLamports: 0,
+              });
+              fallbackSucceeded = true;
+              cachePingDepositAbiMode(depositAbiMode);
+              console.warn("[ping-debug] ping_deposit ABI fallback succeeded for regular ping", { roomId: rid, selectedAbiMode: depositAbiMode });
+            }
+            console.log("[ping-debug] regular ping deposit send plan", {
+              roomId: rid,
+              depositAbiMode,
+              pingDepositKeys: selectedPlan.pingDepositKeys.map((k) => k.pubkey.toBase58()),
+              feeHandling: selectedPlan.feeHandling,
+              fallbackAttempted,
+              fallbackSucceeded,
             });
             const escrowInfoAfter = await connection.getAccountInfo(threadEscrowPda, "confirmed");
             const balAfter = escrowInfoAfter ? await connection.getBalance(threadEscrowPda, "confirmed") : 0;
@@ -10010,6 +10236,12 @@ if(connectBtn){
           } catch(e){
             if(stagedDepositBacking) clearWalletDepositBackingLamports(r, connectedWallet);
             reportTxError(e, "ping deposit transaction failed");
+            const abiMode = lastAttemptedDepositAbiMode || resolvePreferredPingDepositAbiMode().mode;
+            const errorPlan = {
+              depositAbi: abiMode,
+              pingDepositKeys: lastAttemptedPlan?.pingDepositKeys?.map((k) => k.pubkey.toBase58()) || [],
+              feeHandling: lastAttemptedPlan?.feeHandling || (abiMode === "legacy" ? "frontend-transfer" : "program-feeVault-split"),
+            };
             console.error("[ping-debug] context", {
               connectedWallet,
               DEVNET_RPC,
@@ -10022,6 +10254,11 @@ if(connectBtn){
               vault: null,
               solAmount,
               amountLamports,
+              selectedAbiMode: errorPlan.depositAbi,
+              selectedPingDepositKeys: errorPlan.pingDepositKeys,
+              feeHandling: errorPlan.feeHandling,
+              logTail: pingDepositErrorTail(e),
+              fallbackAttempted,
             });
             return;
           }
