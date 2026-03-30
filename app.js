@@ -7811,9 +7811,11 @@ if(connectBtn){
           creatorEscrowContributionLamports,
         });
       }
-      const createDepositTotalLamports = commitLamports;
+      const createDepositTotalLamports = launchMode === "spawn"
+        ? grossPositionInputLamports
+        : commitLamports;
       if(launchMode === "spawn"){
-        const sumLamports = actualSetupCostLamports + creatorFeeLamports + createDepositTotalLamports;
+        const sumLamports = actualSetupCostLamports + createDepositTotalLamports;
         const invariantPassed = sumLamports === creatorTotalSpendLamports;
         console.log("[ping-debug] spawn create funding preflight", {
           creatorTotalSpendLamports,
@@ -7889,33 +7891,26 @@ if(connectBtn){
               path: createPath,
             });
             if(commitLamports > 0){
-              const creatorFeeIx = buildPingFeeTransferInstruction(creatorFeeLamports);
               if(!spawnCreateBundle){
                 throw new Error("Spawn create instruction bundle unavailable");
               }
               const spawnInstructions = spawnCreateBundle.buildInstructionsWithDepositLamports(createDepositTotalLamports);
-              const instructions = [
-                ...(creatorFeeIx ? [creatorFeeIx] : []),
-                ...spawnInstructions,
-              ];
+              const instructions = [...spawnInstructions];
               createTxSignature = await sendProgramInstructions(instructions);
-              creatorFeeTransferSignature = creatorFeeIx ? createTxSignature : "";
-              if(creatorFeeIx){
-                console.log("[ping-debug] creator fee transfer", {
-                  roomId: id,
-                  wallet: connectedWallet,
-                  creatorTotalSpendLamports,
-                  actualSetupCostLamports,
-                  grossPositionInputLamports,
-                  feeLamports: creatorFeeLamports,
-                  committedTargetLamports: commitLamports,
-                  depositBackingLamports: creatorDepositBackingLamports,
-                  escrowContributionLamports: creatorEscrowContributionLamports,
-                  expectedWalletOutflowLamports: creatorTotalSpendLamports,
-                  expectedDepositInstructionLamports: commitLamports,
-                  transferSignature: creatorFeeTransferSignature,
-                });
-              }
+              creatorFeeTransferSignature = "";
+              console.log("[ping-debug] creator fee implicit in create deposit", {
+                roomId: id,
+                wallet: connectedWallet,
+                creatorTotalSpendLamports,
+                actualSetupCostLamports,
+                grossPositionInputLamports,
+                feeLamports: creatorFeeLamports,
+                committedTargetLamports: commitLamports,
+                depositBackingLamports: creatorDepositBackingLamports,
+                escrowContributionLamports: creatorEscrowContributionLamports,
+                expectedWalletOutflowLamports: creatorTotalSpendLamports,
+                expectedDepositInstructionLamports: createDepositTotalLamports,
+              });
               console.log("[ping-debug] funding tx success", { roomId: id, commitLamports, createDepositTotalLamports, creatorFeeTransferSignature });
             } else {
               createTxSignature = await initializeThreadTx(id, launchConfig, { includeLegacyNativeAssets });
