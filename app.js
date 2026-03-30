@@ -10098,13 +10098,32 @@ if(connectBtn){
         const onchainMode = shouldUseOnchain();
         const mockPos = onchainMode ? null : ensurePos(r, connectedWallet);
         const userDeposit = onchainMode ? (state.userEscrow || {}) : { exists: !!mockPos?.deposit_exists };
-        const pingSpendModel = computeRegularPingSpendModel({ grossWalletInputLamports: amountLamports });
-        const committedLamports = pingSpendModel.committedLamports;
+        let grossWalletInputLamports = amountLamports;
+        let pingSpendModel = computeRegularPingSpendModel({ grossWalletInputLamports });
         let depositBackingLamports = 0;
-        let escrowContributionLamports = committedLamports;
+        let escrowContributionLamports = pingSpendModel.committedLamports;
+        let committedLamports = pingSpendModel.committedLamports;
         let stagedDepositBacking = false;
 
         if(onchainMode){
+          const walletPk = new PublicKey(connectedWallet);
+          const [threadPda] = await deriveThreadPda(rid);
+          const [depositPda] = await deriveDepositPda(rid, walletPk);
+          const existingDepositInfo = await connection.getAccountInfo(depositPda, "confirmed");
+          if(!existingDepositInfo?.data?.length || existingDepositInfo.data.length < 8){
+            depositBackingLamports = await estimateWalletDepositBackingLamports(rid, connectedWallet);
+            grossWalletInputLamports = Math.max(0, amountLamports - depositBackingLamports);
+            pingSpendModel = computeRegularPingSpendModel({ grossWalletInputLamports });
+            const split = splitCommittedLamportsForEscrow({
+              committedLamports: pingSpendModel.committedLamports + depositBackingLamports,
+              depositBackingLamports,
+            });
+            depositBackingLamports = split.depositBackingLamports;
+            escrowContributionLamports = split.escrowContributionLamports;
+            committedLamports = split.depositBackingLamports + split.escrowContributionLamports;
+            setWalletDepositBackingLamports(r, connectedWallet, depositBackingLamports);
+            stagedDepositBacking = true;
+          }
           const netCapacityLamports = computeMaxPingLamports(r, userDeposit);
           if(committedLamports > netCapacityLamports){
             showToast(`Too much. Max is ${(Number(state.maxPingLamports || 0) / LAMPORTS_PER_SOL).toFixed(3)} SOL.`);
@@ -10113,28 +10132,17 @@ if(connectBtn){
           console.log("[ping-debug] regular ping final math", {
             roomId: rid,
             wallet: connectedWallet,
-            grossWalletInputLamports: amountLamports,
+            enteredWalletSpendLamports: amountLamports,
+            grossWalletInputLamports,
             pingFeeLamports: pingSpendModel.feeLamports,
             committedTargetLamports: committedLamports,
             depositBackingLamports,
             escrowContributionLamports,
             expectedWalletOutflowLamports: amountLamports,
-            expectedDepositInstructionLamports: committedLamports,
+            expectedDepositInstructionLamports: grossWalletInputLamports,
             depositAbi: resolvePreferredPingDepositAbiMode().mode,
           });
-          console.log("[ping-debug] all-in ping amount conversion", { solAmount, grossEnteredLamports: amountLamports, escrowContributionLamports });
-          const walletPk = new PublicKey(connectedWallet);
-          const [threadPda] = await deriveThreadPda(rid);
-          const [depositPda] = await deriveDepositPda(rid, walletPk);
-          const existingDepositInfo = await connection.getAccountInfo(depositPda, "confirmed");
-          if(!existingDepositInfo?.data?.length || existingDepositInfo.data.length < 8){
-            depositBackingLamports = await estimateWalletDepositBackingLamports(rid, connectedWallet);
-            const split = splitCommittedLamportsForEscrow({ committedLamports, depositBackingLamports });
-            depositBackingLamports = split.depositBackingLamports;
-            escrowContributionLamports = split.escrowContributionLamports;
-            setWalletDepositBackingLamports(r, connectedWallet, depositBackingLamports);
-            stagedDepositBacking = true;
-          }
+          console.log("[ping-debug] all-in ping amount conversion", { solAmount, enteredWalletSpendLamports: amountLamports, grossWalletInputLamports, escrowContributionLamports });
           const [threadEscrowPda] = await deriveThreadEscrowPda(rid);
           const [spawnPoolPda] = await deriveSpawnPoolPda(rid);
           const threadInfo = await connection.getAccountInfo(threadPda, "confirmed");
@@ -10157,14 +10165,14 @@ if(connectBtn){
             let fallbackSucceeded = false;
             const depositBundle = await pingWithOptionalThreadInitTx(
               rid,
-              amountLamports,
+              grossWalletInputLamports,
               !threadInfo,
               null,
               { pingFeeLamports: pingSpendModel.feeLamports, pingDepositAbiMode: depositAbiMode }
             );
-            let selectedPlan = depositBundle.buildDepositPlanForLamports(amountLamports, depositAbiMode, pingSpendModel.feeLamports);
+            let selectedPlan = depositBundle.buildDepositPlanForLamports(grossWalletInputLamports, depositAbiMode, pingSpendModel.feeLamports);
             lastAttemptedPlan = selectedPlan;
-            let instructions = [...(depositBundle.buildInstructionsWithDepositLamports(amountLamports, depositAbiMode, pingSpendModel.feeLamports) || [])];
+            let instructions = [...(depositBundle.buildInstructionsWithDepositLamports(grossWalletInputLamports, depositAbiMode, pingSpendModel.feeLamports) || [])];
             let sig;
             try {
               sig = await sendProgramInstructions(instructions, {
@@ -10181,10 +10189,10 @@ if(connectBtn){
               if(!shouldFallback) throw primaryErr;
               fallbackAttempted = true;
               depositAbiMode = "legacy";
-              selectedPlan = depositBundle.buildDepositPlanForLamports(amountLamports, depositAbiMode, pingSpendModel.feeLamports);
+              selectedPlan = depositBundle.buildDepositPlanForLamports(grossWalletInputLamports, depositAbiMode, pingSpendModel.feeLamports);
               lastAttemptedDepositAbiMode = depositAbiMode;
               lastAttemptedPlan = selectedPlan;
-              instructions = [...(depositBundle.buildInstructionsWithDepositLamports(amountLamports, depositAbiMode, pingSpendModel.feeLamports) || [])];
+              instructions = [...(depositBundle.buildInstructionsWithDepositLamports(grossWalletInputLamports, depositAbiMode, pingSpendModel.feeLamports) || [])];
               console.warn("[ping-debug] feeVault ping_deposit failed; retrying regular ping with legacy ABI", {
                 roomId: rid,
                 initialAbi: "feeVault",
@@ -10222,7 +10230,8 @@ if(connectBtn){
               balAfter,
               deltaLamports,
               deltaSol,
-              grossEnteredLamports: amountLamports,
+              enteredWalletSpendLamports: amountLamports,
+              grossWalletInputLamports,
               expectedCommittedLamports: committedLamports,
               expectedEscrowContributionLamports: escrowContributionLamports,
               txExplorer: explorerTxUrl(sig),
@@ -10254,6 +10263,7 @@ if(connectBtn){
               vault: null,
               solAmount,
               amountLamports,
+              grossWalletInputLamports,
               selectedAbiMode: errorPlan.depositAbi,
               selectedPingDepositKeys: errorPlan.pingDepositKeys,
               feeHandling: errorPlan.feeHandling,
