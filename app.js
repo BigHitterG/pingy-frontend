@@ -1,6 +1,7 @@
 import {
   SOLANA_CLUSTER,
   DEVNET_RPC,
+  RPC_ENDPOINT_RESOLUTION,
   connection,
   PROGRAM_ID,
   deriveThreadPda,
@@ -103,6 +104,8 @@ const $ = (id) => document.getElementById(id);
     const PINGY_PUMPFUN_STATUS_ENDPOINT = "http://localhost:8787/api/pumpfun/status";
     const EXTERNAL_LAUNCH_RECORDS_STORAGE_KEY = "pingy_external_launch_records";
     const DEBUG_ACCOUNTING = false;
+    const DIAGNOSTIC_BUILD_TAG = "diag-2026-03-30-runtime-compare-v1";
+    const DIAG_TX_WINDOW_MS = 12000;
 
     function isPumpfunLaunchBackend(){
       return PINGY_LAUNCH_BACKEND === "pumpfun";
@@ -2872,6 +2875,102 @@ const $ = (id) => document.getElementById(id);
       if(toastMsg) showToast(toastMsg);
     }
 
+    function diagNowMs(){
+      return Date.now();
+    }
+
+    function diagLocationMeta(){
+      return {
+        host: window.location.host || "",
+        href: window.location.href || "",
+        pathname: window.location.pathname || "",
+        hash: window.location.hash || "",
+      };
+    }
+
+    const diagActivity = {
+      txInFlight: false,
+      lastTxWindow: null,
+      polling: {
+        tickCountTotal: 0,
+        tickCountInWindow: 0,
+        roomSnapshotRefreshesInWindow: 0,
+        walletBalanceRefreshesInWindow: 0,
+        depositFetchesInWindow: 0,
+        getProgramAccountsInWindow: 0,
+      },
+    };
+
+    function diagBumpPollingCounter(key){
+      if(!diagActivity.polling || !(key in diagActivity.polling)) return;
+      diagActivity.polling[key] += 1;
+    }
+
+    function diagStartTxWindow(meta = {}){
+      diagActivity.lastTxWindow = {
+        startedAtMs: diagNowMs(),
+        txType: meta.txType || "unknown",
+        roomId: meta.roomId || null,
+      };
+      diagActivity.polling.tickCountInWindow = 0;
+      diagActivity.polling.roomSnapshotRefreshesInWindow = 0;
+      diagActivity.polling.walletBalanceRefreshesInWindow = 0;
+      diagActivity.polling.depositFetchesInWindow = 0;
+      diagActivity.polling.getProgramAccountsInWindow = 0;
+    }
+
+    function diagMaybeEndTxWindow(){
+      if(!diagActivity.lastTxWindow) return;
+      const ageMs = diagNowMs() - Number(diagActivity.lastTxWindow.startedAtMs || 0);
+      if(ageMs <= DIAG_TX_WINDOW_MS && diagActivity.txInFlight) return;
+      diagActivity.lastTxWindow = null;
+    }
+
+    function diagRecordTrace(trace, key, value){
+      if(!trace || !key) return;
+      trace.timingsMs = trace.timingsMs || {};
+      trace.timingsMs[key] = Math.max(0, Number(value || 0));
+    }
+
+    function diagFinalizeTxTrace(trace, extra = {}){
+      if(!trace) return;
+      trace.endedAtMs = diagNowMs();
+      trace.durationMs = trace.endedAtMs - trace.startedAtMs;
+      trace.pollingWindow = {
+        tickCountInWindow: diagActivity.polling.tickCountInWindow,
+        roomSnapshotRefreshesInWindow: diagActivity.polling.roomSnapshotRefreshesInWindow,
+        walletBalanceRefreshesInWindow: diagActivity.polling.walletBalanceRefreshesInWindow,
+        depositFetchesInWindow: diagActivity.polling.depositFetchesInWindow,
+        getProgramAccountsInWindow: diagActivity.polling.getProgramAccountsInWindow,
+      };
+      console.log("[pingy-diag] tx-trace", { ...trace, ...extra });
+      diagActivity.txInFlight = false;
+      diagMaybeEndTxWindow();
+    }
+
+    function diagLogTxFailureBundle({ txTrace, stage, error, logTail = [], extra = {} } = {}){
+      const msg = String(error?.message || error || "unknown error");
+      const shortTail = Array.isArray(logTail) ? logTail.slice(-4) : [];
+      console.error("[pingy-diag] tx-failure", {
+        ...diagLocationMeta(),
+        rpcUrl: DEVNET_RPC,
+        txType: txTrace?.txType || "unknown",
+        roomId: txTrace?.roomId || null,
+        stage: stage || "unknown",
+        error: msg,
+        logTail: shortTail,
+        txInFlight: diagActivity.txInFlight,
+        pollingWindow: {
+          tickCountInWindow: diagActivity.polling.tickCountInWindow,
+          roomSnapshotRefreshesInWindow: diagActivity.polling.roomSnapshotRefreshesInWindow,
+          walletBalanceRefreshesInWindow: diagActivity.polling.walletBalanceRefreshesInWindow,
+          depositFetchesInWindow: diagActivity.polling.depositFetchesInWindow,
+          getProgramAccountsInWindow: diagActivity.polling.getProgramAccountsInWindow,
+        },
+        ...extra,
+      });
+    }
+
     function updateOnchainBanner(){
       if(!onchainBanner || !onchainBannerText) return;
       const suffix = onchainReasons.length ? ` (${onchainReasons.join("; ")})` : "";
@@ -4399,18 +4498,40 @@ const $ = (id) => document.getElementById(id);
 
     function fetchDepositAccountsCached({ force = false } = {}){
       const now = Date.now();
-      if(!force && depositAccountsCache.inflight) return depositAccountsCache.inflight;
+      if(!force && depositAccountsCache.inflight){
+        console.log("[pingy-diag] deposit-cache", { event: "inflight-reuse", force, ageMs: now - Number(depositAccountsCache.fetchedAtMs || 0) });
+        if(diagActivity.lastTxWindow) diagBumpPollingCounter("depositFetchesInWindow");
+        return depositAccountsCache.inflight;
+      }
       if(!force && depositAccountsCache.fetchedAtMs && (now - depositAccountsCache.fetchedAtMs) < DEPOSIT_ACCOUNTS_REFRESH_MS){
+        console.log("[pingy-diag] deposit-cache", { event: "cache-hit", force, ageMs: now - Number(depositAccountsCache.fetchedAtMs || 0), rowCount: Array.isArray(depositAccountsCache.data) ? depositAccountsCache.data.length : 0 });
+        if(diagActivity.lastTxWindow) diagBumpPollingCounter("depositFetchesInWindow");
         return Promise.resolve(Array.isArray(depositAccountsCache.data) ? depositAccountsCache.data : []);
       }
+      console.log("[pingy-diag] deposit-cache", { event: "cache-miss", force, reason: force ? "force-refresh" : "expired-or-empty", ageMs: now - Number(depositAccountsCache.fetchedAtMs || 0) });
+      if(diagActivity.lastTxWindow) diagBumpPollingCounter("depositFetchesInWindow");
+      const fetchStartedAt = Date.now();
       const inflight = connection.getProgramAccounts(PROGRAM_ID, {
         commitment: "confirmed",
         filters: [{ dataSize: DEPOSIT_ACCOUNT_DATA_SIZE }],
       }).then((rows) => {
         const normalized = Array.isArray(rows) ? rows : [];
+        console.log("[pingy-diag] deposit-cache", {
+          event: "fetch-success",
+          durationMs: Date.now() - fetchStartedAt,
+          rowCount: normalized.length,
+          force,
+        });
+        if(diagActivity.lastTxWindow) diagBumpPollingCounter("getProgramAccountsInWindow");
         depositAccountsCache = { fetchedAtMs: Date.now(), data: normalized, inflight: null };
         return normalized;
       }).catch((err) => {
+        console.warn("[pingy-diag] deposit-cache", {
+          event: "fetch-failure",
+          durationMs: Date.now() - fetchStartedAt,
+          force,
+          error: String(err?.message || err || "failed"),
+        });
         depositAccountsCache = { ...depositAccountsCache, inflight: null };
         throw err;
       });
@@ -4652,10 +4773,20 @@ function encodeU64Arg(v){
       return lines.slice(Math.max(0, lines.length - maxLines));
     }
 
-    async function sendProgramInstructions(ixs){
+    async function sendProgramInstructions(ixs, options = {}){
       const provider = getProvider();
       if(!provider) throw new Error("Phantom not found");
       if(!connectedWallet) throw new Error("Wallet not connected");
+      diagActivity.txInFlight = true;
+      const diagTxType = String(options?.txType || "unknown");
+      const diagRoomId = String(options?.roomId || "");
+      const diagBlockhashStartedAt = Date.now();
+      const blockhashMeta = {
+        ...diagLocationMeta(),
+        rpcUrl: DEVNET_RPC,
+        txType: diagTxType,
+        roomId: diagRoomId || null,
+      };
 
       const instructions = Array.isArray(ixs) ? ixs.flat().filter(Boolean) : [ixs].filter(Boolean);
       if(!instructions.length) throw new Error("No instructions provided");
@@ -4685,8 +4816,44 @@ function encodeU64Arg(v){
 
       let blockhash, lastValidBlockHeight;
       try {
+        console.log("[pingy-diag] blockhash:start", blockhashMeta);
+        if(options?.txTrace){
+          options.txTrace.stage = "blockhash";
+          options.txTrace.marks = options.txTrace.marks || {};
+          options.txTrace.marks.blockhashStartMs = Date.now();
+        }
         ({ blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed"));
-      } catch(e){ showToast("getLatestBlockhash: " + (e?.message||e)); throw e; }
+        console.log("[pingy-diag] blockhash:ok", {
+          ...blockhashMeta,
+          durationMs: Date.now() - diagBlockhashStartedAt,
+          lastValidBlockHeight,
+        });
+        if(options?.txTrace){
+          diagRecordTrace(options.txTrace, "getLatestBlockhash", Date.now() - Number(options.txTrace.marks.blockhashStartMs || Date.now()));
+        }
+      } catch(e){
+        const msg = String(e?.message || e || "");
+        const is429 = msg.includes("429");
+        console.error("[pingy-diag] blockhash:error", {
+          ...blockhashMeta,
+          durationMs: Date.now() - diagBlockhashStartedAt,
+          is429,
+          error: msg,
+        });
+        if(is429){
+          console.error("[pingy-diag] blockhash:error-429", {
+            ...blockhashMeta,
+            error: msg,
+          });
+        }
+        if(options?.txTrace){
+          options.txTrace.stage = "blockhash";
+          options.txTrace.flags = options.txTrace.flags || {};
+          options.txTrace.flags.blockhash429 = is429;
+        }
+        showToast("getLatestBlockhash: " + (e?.message||e));
+        throw e;
+      }
 
       const tx = new Transaction({
         feePayer,
@@ -4717,6 +4884,13 @@ function encodeU64Arg(v){
 
       let sig;
       traceStep("tx:walletSend", { via: "provider.signAndSendTransaction" }, "tx step: opening phantom...");
+      if(options?.txTrace){
+        options.txTrace.stage = "wallet-open";
+        options.txTrace.flags = options.txTrace.flags || {};
+        options.txTrace.flags.walletSendStarted = true;
+        options.txTrace.marks = options.txTrace.marks || {};
+        options.txTrace.marks.walletSendStartMs = Date.now();
+      }
       try {
         if(typeof provider.signAndSendTransaction !== "function"){
           throw new Error("Wallet provider does not support signAndSendTransaction");
@@ -4733,6 +4907,9 @@ function encodeU64Arg(v){
         });
         const sendResult = await provider.signAndSendTransaction(tx);
         sig = typeof sendResult === "string" ? sendResult : (sendResult?.signature || "");
+        if(options?.txTrace){
+          diagRecordTrace(options.txTrace, "walletSignAndSend", Date.now() - Number(options.txTrace.marks.walletSendStartMs || Date.now()));
+        }
       } catch(e){
         console.error("[ping-debug] signAndSendTransaction throw context", {
           connectedWallet,
@@ -4761,6 +4938,13 @@ function encodeU64Arg(v){
       };
 
       traceStep("tx:confirm:start", { signature: sig });
+      if(options?.txTrace){
+        options.txTrace.stage = "confirm";
+        options.txTrace.flags = options.txTrace.flags || {};
+        options.txTrace.flags.confirmStarted = true;
+        options.txTrace.marks = options.txTrace.marks || {};
+        options.txTrace.marks.confirmStartMs = Date.now();
+      }
       try {
         const confirmRes = await connection.confirmTransaction({ signature:sig, blockhash, lastValidBlockHeight }, "confirmed");
         if(confirmRes?.value?.err){
@@ -4779,6 +4963,9 @@ function encodeU64Arg(v){
         console.error("[ping-debug] confirmTransaction error:", e);
         console.error("[ping-debug] onchain logMessages:", txLogs);
         throw e;
+      }
+      if(options?.txTrace){
+        diagRecordTrace(options.txTrace, "confirmTransaction", Date.now() - Number(options.txTrace.marks.confirmStartMs || Date.now()));
       }
 
       traceStep("tx:confirm:ok", { signature: sig }, "tx confirmed: " + sig);
@@ -5046,6 +5233,8 @@ function encodeU64Arg(v){
         const rid = String(threadId || "");
         const opts = options || {};
         const includeLegacyNativeAssets = opts.includeLegacyNativeAssets !== false;
+        const txType = String(opts.txType || "spawn-create");
+        const txTrace = opts.txTrace || null;
         const adminPk = parsePublicKeyStrict(connectedWallet, "connected wallet");
         console.log("[ping-debug] initializeThreadTx admin wallet pubkey", adminPk.toBase58());
         console.log("[ping-debug] initializeThreadTx program id", PROGRAM_ID.toBase58());
@@ -5111,7 +5300,7 @@ function encodeU64Arg(v){
             ? ["initialize_thread_core", "initialize_thread_assets"]
             : ["initialize_thread_core"],
         });
-        return sendProgramInstructions(instructions);
+        return sendProgramInstructions(instructions, { txType, roomId: rid, txTrace });
       } catch (err){
         console.error("[ping-debug] initializeThreadTx build failed", err);
         throw err;
@@ -5729,6 +5918,7 @@ function encodeU64Arg(v){
       if(!force && meta.fetchedAtMs && (now - meta.fetchedAtMs) < ONCHAIN_REFRESH_MS){
         return Promise.resolve(state.onchain[roomId] || null);
       }
+      if(diagActivity.lastTxWindow) diagBumpPollingCounter("roomSnapshotRefreshesInWindow");
       const inflight = fetchRoomOnchainSnapshot(roomId).catch(() => null).finally(() => {
         const latest = state.onchainMeta[roomId] || {};
         delete latest.inflight;
@@ -5830,6 +6020,7 @@ function encodeU64Arg(v){
       if(!force && meta.fetchedAtMs && (now - meta.fetchedAtMs) < WALLET_BAL_REFRESH_MS){
         return Promise.resolve(state.walletBalances[wallet] || null);
       }
+      if(diagActivity.lastTxWindow) diagBumpPollingCounter("walletBalanceRefreshesInWindow");
       const inflight = fetchWalletBalancesSnapshot(wallet).catch((e) => {
         const fallback = {
           wallet,
@@ -6331,6 +6522,17 @@ function encodeU64Arg(v){
       themeToggleBtn = $("themeToggleBtn");
       loadThemeFromStorage();
       updateCreateCoinSubmitState();
+      console.log("[pingy-diag] startup-runtime", {
+        ...diagLocationMeta(),
+        buildTag: DIAGNOSTIC_BUILD_TAG,
+        rpcUrl: DEVNET_RPC,
+        rpcResolutionSource: RPC_ENDPOINT_RESOLUTION?.source || "unknown",
+        launchBackend: PINGY_LAUNCH_BACKEND,
+        runtimeConfigFetchEnabled: true,
+        runtimeConfigEndpointPath: "/api/runtime-config",
+        txInFlightGuardPresent: !!diagActivity && Object.prototype.hasOwnProperty.call(diagActivity, "txInFlight"),
+        depositAccountCachingPresent: typeof fetchDepositAccountsCached === "function",
+      });
 
       toast = $("toast");
       toastText = $("toastText");
@@ -7827,6 +8029,21 @@ if(connectBtn){
     async function createCoinFromForm(){
       if(!connectedWallet) return showToast("connect wallet first.");
       console.log("[ping-debug] spawn button handler start", { connectedWallet, launchBackend: PINGY_LAUNCH_BACKEND });
+      const txTrace = {
+        txType: "spawn-create",
+        ...diagLocationMeta(),
+        rpcUrl: DEVNET_RPC,
+        roomId: null,
+        startedAtMs: Date.now(),
+        stage: "pre-bundle",
+        timingsMs: { clickToHandler: 0 },
+        flags: {
+          fallbackAbiUsed: false,
+          blockhashRetry: false,
+        },
+      };
+      diagStartTxWindow({ txType: txTrace.txType });
+      console.log("[pingy-diag] tx-click", txTrace);
       if(!updateCreateCoinSubmitState({ showValidation: true })) return;
       const name = ($("newName").value||"").trim();
       const ticker = ($("newTicker").value||"").trim().toUpperCase();
@@ -7873,6 +8090,8 @@ if(connectBtn){
       let spawnSetupBreakdown = null;
       let createTxSignature = "";
       const id = "r" + Math.random().toString(16).slice(2,6);
+      txTrace.roomId = id;
+      diagStartTxWindow({ txType: txTrace.txType, roomId: id });
       const roomMetadataPayload = {
         public_id: id,
         name,
@@ -7884,18 +8103,32 @@ if(connectBtn){
         banner_path: newBannerData || "",
         is_test: DEV_SIMULATION,
       };
-      const reservedSupabaseRoomPromise = reserveSupabaseRoomMetadata(roomMetadataPayload);
+      const reservationStartedAt = Date.now();
+      console.log("[pingy-diag] room-reservation:start", { roomId: id, txType: txTrace.txType });
+      const reservedSupabaseRoomPromise = reserveSupabaseRoomMetadata(roomMetadataPayload).then((result) => {
+        diagRecordTrace(txTrace, "roomReservation", Date.now() - reservationStartedAt);
+        console.log("[pingy-diag] room-reservation:finish", { roomId: id, txType: txTrace.txType, durationMs: Date.now() - reservationStartedAt, ok: !!result?.row });
+        return result;
+      }).catch((err) => {
+        diagRecordTrace(txTrace, "roomReservation", Date.now() - reservationStartedAt);
+        console.warn("[pingy-diag] room-reservation:fail", { roomId: id, txType: txTrace.txType, durationMs: Date.now() - reservationStartedAt, error: String(err?.message || err || "failed") });
+        throw err;
+      });
       const cleanupReservedSupabaseRoomIfAny = async () => {
         const reservation = await reservedSupabaseRoomPromise.catch(() => null);
         if(reservation) await cleanupReservedSupabaseRoom(reservation);
       };
       let spawnCreateBundle = null;
       if(launchMode === "spawn"){
+        const bundleStartedAt = Date.now();
+        console.log("[pingy-diag] tx-bundle:start", { txType: txTrace.txType, roomId: id });
         spawnCreateBundle = await pingWithOptionalThreadInitTx(id, 0, true, launchConfig, {
           includeLegacyNativeAssets: false,
           includeDepositInstruction: true,
           assumeFreshDeposit: true,
         });
+        diagRecordTrace(txTrace, "bundleBuild", Date.now() - bundleStartedAt);
+        console.log("[pingy-diag] tx-bundle:finish", { txType: txTrace.txType, roomId: id, durationMs: Date.now() - bundleStartedAt });
         spawnSetupBreakdown = spawnCreateBundle.setupCostBreakdown || null;
         actualSetupCostLamports = Math.max(0, Math.floor(Number(spawnCreateBundle.setupCostLamports || 0)));
         const exactFunding = computeExactCreatorSpawnFundingFromTotalSpend({
@@ -8029,7 +8262,7 @@ if(connectBtn){
               let selectedPlan = spawnCreateBundle.buildDepositPlanForLamports(grossPositionInputLamports, selectedAbiMode, creatorFeeLamports);
               let spawnInstructions = spawnCreateBundle.buildInstructionsWithDepositLamports(grossPositionInputLamports, selectedAbiMode, creatorFeeLamports);
               try {
-                createTxSignature = await sendProgramInstructions([...spawnInstructions]);
+                createTxSignature = await sendProgramInstructions([...spawnInstructions], { txType: "spawn-create", roomId: id, txTrace });
                 cachePingDepositAbiMode(selectedAbiMode);
               } catch (primaryErr){
                 const shouldFallback = selectedAbiMode === "feeVault" && isLikelyPingDepositAbiAccountMismatch(primaryErr);
@@ -8037,6 +8270,7 @@ if(connectBtn){
                   throw primaryErr;
                 }
                 fallbackAttempted = true;
+                txTrace.flags.fallbackAbiUsed = true;
                 selectedAbiMode = "legacy";
                 selectedPlan = spawnCreateBundle.buildDepositPlanForLamports(grossPositionInputLamports, selectedAbiMode, creatorFeeLamports);
                 spawnInstructions = spawnCreateBundle.buildInstructionsWithDepositLamports(grossPositionInputLamports, selectedAbiMode, creatorFeeLamports);
@@ -8047,7 +8281,7 @@ if(connectBtn){
                   logTail: pingDepositErrorTail(primaryErr),
                 });
                 try {
-                  createTxSignature = await sendProgramInstructions([...spawnInstructions]);
+                  createTxSignature = await sendProgramInstructions([...spawnInstructions], { txType: "spawn-create", roomId: id, txTrace });
                 } catch (fallbackErr){
                   fallbackErr.pingDepositFallbackAttempted = true;
                   fallbackErr.pingDepositFallbackSucceeded = false;
@@ -8079,9 +8313,22 @@ if(connectBtn){
               });
               console.log("[ping-debug] funding tx success", { roomId: id, commitLamports, grossPositionInputLamports });
             } else {
-              createTxSignature = await initializeThreadTx(id, launchConfig, { includeLegacyNativeAssets });
+              createTxSignature = await initializeThreadTx(id, launchConfig, { includeLegacyNativeAssets, txType: "spawn-create", txTrace });
             }
           } catch(e){
+            diagLogTxFailureBundle({
+              txTrace,
+              stage: txTrace.stage || "pre-bundle",
+              error: e,
+              logTail: pingDepositErrorTail(e),
+              extra: {
+                fallbackAbiUsed: txTrace.flags.fallbackAbiUsed === true,
+                failedBeforeWalletPopup: txTrace.stage === "blockhash" || txTrace.stage === "pre-bundle",
+                failedBeforeSubmit: txTrace.stage === "wallet-open",
+                failedAfterSubmit: txTrace.stage === "confirm" || txTrace.stage === "refresh",
+              },
+            });
+            diagFinalizeTxTrace(txTrace, { outcome: "failed" });
             const abiMode = resolvePreferredPingDepositAbiMode().mode;
             const planOnError = spawnCreateBundle?.buildDepositPlanForLamports
               ? spawnCreateBundle.buildDepositPlanForLamports(grossPositionInputLamports, abiMode, creatorFeeLamports)
@@ -8109,7 +8356,7 @@ if(connectBtn){
               committedLamports: commitLamports,
               path: "instant",
             });
-            await initializeThreadTx(id, launchConfig);
+            await initializeThreadTx(id, launchConfig, { txType: launchMode === "spawn" ? "spawn-create" : "instant-create", txTrace });
             if(launchMode === "instant" && commitLamports > 0){
               await buyTx(id, commitLamports);
             }
@@ -8241,7 +8488,10 @@ if(connectBtn){
       openRoom(id);
 
       if(shouldUseOnchain() && launchMode === "spawn"){
+        const refreshStartedAt = Date.now();
+        txTrace.stage = "refresh";
         await refreshRoomOnchainSnapshot(id, { force: true });
+        diagRecordTrace(txTrace, "finalRefresh", Date.now() - refreshStartedAt);
         const refreshedThread = state.onchain?.[id] || {};
         console.log("[ping-proof] spawn create threshold config after refresh", {
           roomId: id,
@@ -8261,6 +8511,7 @@ if(connectBtn){
         }
         if(activeRoomId === id) renderRoom(id);
       }
+      diagFinalizeTxTrace(txTrace, { outcome: "success", signature: createTxSignature || null });
     }
     $("createCoinBtn").addEventListener("click", createCoinFromForm);
 
@@ -10078,6 +10329,21 @@ if(connectBtn){
 
     $("pingConfirm").addEventListener("click", async () => {
       const rid = modalRoomId || activeRoomId;
+      const txTrace = {
+        txType: "regular-ping",
+        ...diagLocationMeta(),
+        rpcUrl: DEVNET_RPC,
+        roomId: rid || null,
+        startedAtMs: Date.now(),
+        stage: "pre-bundle",
+        timingsMs: { clickToHandler: 0 },
+        flags: {
+          fallbackAbiUsed: false,
+          blockhashRetry: false,
+        },
+      };
+      diagStartTxWindow({ txType: txTrace.txType, roomId: rid || null });
+      console.log("[pingy-diag] tx-click", txTrace);
       traceStep("pingConfirm:clicked", { rid, connectedWallet: connectedWallet || null }, "ping trace: confirm clicked");
       const r = roomById(rid);
       if(!r) return;
@@ -10175,7 +10441,12 @@ if(connectBtn){
             let instructions = [...(depositBundle.buildInstructionsWithDepositLamports(grossWalletInputLamports, depositAbiMode, pingSpendModel.feeLamports) || [])];
             let sig;
             try {
+              const bundleStartedAt = Date.now();
+              console.log("[pingy-diag] tx-bundle:start", { txType: txTrace.txType, roomId: rid });
               sig = await sendProgramInstructions(instructions, {
+                txType: "regular-ping",
+                roomId: rid,
+                txTrace,
                 expectedWalletOutflowLamports: amountLamports,
                 committedLamports,
                 depositBackingLamports,
@@ -10183,11 +10454,14 @@ if(connectBtn){
                 feeLamports: pingSpendModel.feeLamports,
                 setupCostLamports: 0,
               });
+              diagRecordTrace(txTrace, "bundleBuild", Date.now() - bundleStartedAt);
+              console.log("[pingy-diag] tx-bundle:finish", { txType: txTrace.txType, roomId: rid, durationMs: Date.now() - bundleStartedAt });
               cachePingDepositAbiMode(depositAbiMode);
             } catch (primaryErr){
               const shouldFallback = depositAbiMode === "feeVault" && isLikelyPingDepositAbiAccountMismatch(primaryErr);
               if(!shouldFallback) throw primaryErr;
               fallbackAttempted = true;
+              txTrace.flags.fallbackAbiUsed = true;
               depositAbiMode = "legacy";
               selectedPlan = depositBundle.buildDepositPlanForLamports(grossWalletInputLamports, depositAbiMode, pingSpendModel.feeLamports);
               lastAttemptedDepositAbiMode = depositAbiMode;
@@ -10200,6 +10474,9 @@ if(connectBtn){
                 logTail: pingDepositErrorTail(primaryErr),
               });
               sig = await sendProgramInstructions(instructions, {
+                txType: "regular-ping",
+                roomId: rid,
+                txTrace,
                 expectedWalletOutflowLamports: amountLamports,
                 committedLamports,
                 depositBackingLamports,
@@ -10244,6 +10521,19 @@ if(connectBtn){
             });
           } catch(e){
             if(stagedDepositBacking) clearWalletDepositBackingLamports(r, connectedWallet);
+            diagLogTxFailureBundle({
+              txTrace,
+              stage: txTrace.stage || "pre-bundle",
+              error: e,
+              logTail: pingDepositErrorTail(e),
+              extra: {
+                fallbackAbiUsed: txTrace.flags.fallbackAbiUsed === true,
+                failedBeforeWalletPopup: txTrace.stage === "blockhash" || txTrace.stage === "pre-bundle",
+                failedBeforeSubmit: txTrace.stage === "wallet-open",
+                failedAfterSubmit: txTrace.stage === "confirm" || txTrace.stage === "refresh",
+              },
+            });
+            diagFinalizeTxTrace(txTrace, { outcome: "failed" });
             reportTxError(e, "ping deposit transaction failed");
             const abiMode = lastAttemptedDepositAbiMode || resolvePreferredPingDepositAbiMode().mode;
             const errorPlan = {
@@ -10332,14 +10622,18 @@ if(connectBtn){
       }
 
       closeModal($("pingBack"));
+      txTrace.stage = "refresh";
+      const finalRefreshStart = Date.now();
       await fetchRoomOnchainSnapshot(rid);
       await fetchConnectedWalletDepositSnapshot(rid);
       if(connectedWallet) await fetchWalletBalancesSnapshot(connectedWallet);
+      diagRecordTrace(txTrace, "finalRefresh", Date.now() - finalRefreshStart);
       updatePingAllocationHint(rid);
       renderRoom(rid);
       r._pulseUntil = Date.now() + 900;
       r._lastActivity = Date.now();
       renderHome();
+      diagFinalizeTxTrace(txTrace, { outcome: "success" });
     });
 
     $("unpingConfirm").addEventListener("click", async () => {
@@ -10657,12 +10951,26 @@ if(connectBtn){
 
     // Init + ticker
     function tick(){
+      diagActivity.polling.tickCountTotal += 1;
+      if(diagActivity.lastTxWindow){
+        diagBumpPollingCounter("tickCountInWindow");
+      }
       const provider = getProvider();
       if(provider) syncWalletFromProvider(provider, { silent: true }).catch((err) => {
         console.warn("[wallet] sync failed", err);
       });
       renderHome();
       updateHeaderWalletUI();
+      const tickDiag = {
+        txInFlight: diagActivity.txInFlight,
+        activeRoomId: activeRoomId || null,
+        homeViewOn: !!homeView?.classList.contains("on"),
+        profileViewOn: !!profileView?.classList.contains("on"),
+        willRefreshActiveRoomSnapshot: !!(activeRoomId && !(state.devSim.active && state.devSim.roomId === activeRoomId)),
+        willRefreshHomeSnapshots: !!homeView?.classList.contains("on"),
+        willRefreshWalletBalance: !!(profileView.classList.contains("on") && activeProfileTab === "balances" && profileRouteWallet()),
+      };
+      console.log("[pingy-diag] tick", tickDiag);
       if(activeRoomId){
         if(!(state.devSim.active && state.devSim.roomId === activeRoomId)) refreshRoomOnchainSnapshot(activeRoomId);
         renderRoom(activeRoomId);
