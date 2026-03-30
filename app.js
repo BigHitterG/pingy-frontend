@@ -4496,8 +4496,17 @@ const $ = (id) => document.getElementById(id);
     const DEPOSIT_ACCOUNTS_REFRESH_MS = 7000;
     let depositAccountsCache = { fetchedAtMs: 0, data: [], inflight: null };
 
+    function shouldAllowDepositAccountScan(){
+      if(diagActivity.txInFlight) return true;
+      if(activeRoomId) return true;
+      return !!(profileView?.classList?.contains("on") && activeProfileTab === "balances");
+    }
+
     function fetchDepositAccountsCached({ force = false } = {}){
       const now = Date.now();
+      if(!force && !shouldAllowDepositAccountScan()){
+        return Promise.resolve(Array.isArray(depositAccountsCache.data) ? depositAccountsCache.data : []);
+      }
       if(!force && depositAccountsCache.inflight){
         console.log("[pingy-diag] deposit-cache", { event: "inflight-reuse", force, ageMs: now - Number(depositAccountsCache.fetchedAtMs || 0) });
         if(diagActivity.lastTxWindow) diagBumpPollingCounter("depositFetchesInWindow");
@@ -5912,6 +5921,7 @@ function encodeU64Arg(v){
     function refreshRoomOnchainSnapshot(roomId, opts = {}){
       if(!roomId) return Promise.resolve(null);
       const force = !!opts.force;
+      if(!force && diagActivity.txInFlight) return Promise.resolve(state.onchain[roomId] || null);
       const now = Date.now();
       const meta = state.onchainMeta[roomId] || {};
       if(!force && meta.inflight) return meta.inflight;
@@ -6014,6 +6024,7 @@ function encodeU64Arg(v){
     function refreshWalletBalances(wallet, opts = {}){
       if(!wallet) return Promise.resolve(null);
       const force = !!opts.force;
+      if(!force && diagActivity.txInFlight) return Promise.resolve(state.walletBalances[wallet] || null);
       const now = Date.now();
       const meta = state.walletBalancesMeta[wallet] || {};
       if(!force && meta.inflight) return meta.inflight;
@@ -6593,8 +6604,11 @@ function encodeU64Arg(v){
     }
 
     async function refreshRoomFromChain(){
-      const tasks = state.rooms.map((room) => refreshRoomOnchainSnapshot(room.id, { force: true }));
-      if(connectedWallet) tasks.push(fetchConnectedWalletDepositSnapshot());
+      const tasks = [];
+      if(activeRoomId){
+        tasks.push(refreshRoomOnchainSnapshot(activeRoomId, { force: true }));
+        if(connectedWallet) tasks.push(fetchConnectedWalletDepositSnapshot(activeRoomId));
+      }
       await Promise.allSettled(tasks);
       if(activeRoomId && connectedWallet) await refreshConnectedWalletEscrowLine(activeRoomId);
     }
@@ -10421,8 +10435,6 @@ if(connectBtn){
             }
           }
 
-          const escrowInfoBefore = await connection.getAccountInfo(threadEscrowPda, "confirmed");
-          const balBefore = escrowInfoBefore ? await connection.getBalance(threadEscrowPda, "confirmed") : 0;
           let lastAttemptedDepositAbiMode = resolvePreferredPingDepositAbiMode().mode;
           let lastAttemptedPlan = null;
           let fallbackAttempted = false;
@@ -10496,28 +10508,18 @@ if(connectBtn){
               fallbackAttempted,
               fallbackSucceeded,
             });
-            const escrowInfoAfter = await connection.getAccountInfo(threadEscrowPda, "confirmed");
-            const balAfter = escrowInfoAfter ? await connection.getBalance(threadEscrowPda, "confirmed") : 0;
-            const deltaLamports = Number(balAfter || 0) - Number(balBefore || 0);
-            const deltaSol = deltaLamports / 1_000_000_000;
             console.log("[ping-debug] deposit balance delta", {
               depositPda: depositPda.toBase58(),
               threadEscrowPda: threadEscrowPda.toBase58(),
-              balBefore,
-              balAfter,
-              deltaLamports,
-              deltaSol,
               enteredWalletSpendLamports: amountLamports,
               grossWalletInputLamports,
               expectedCommittedLamports: committedLamports,
               expectedEscrowContributionLamports: escrowContributionLamports,
               txExplorer: explorerTxUrl(sig),
-              escrowExplorer: explorerAddressUrl(threadEscrowPda.toBase58()),
             });
-            showToast(`Thread escrow deposit +${deltaSol.toFixed(9)} SOL (all-in ping ${solAmount} SOL)`);
+            showToast(`Ping submitted (${solAmount} SOL).`);
             console.log("[ping-debug] explorer links", {
               tx: explorerTxUrl(sig),
-              threadEscrow: explorerAddressUrl(threadEscrowPda.toBase58()),
             });
           } catch(e){
             if(stagedDepositBacking) clearWalletDepositBackingLamports(r, connectedWallet);
@@ -10955,10 +10957,12 @@ if(connectBtn){
       if(diagActivity.lastTxWindow){
         diagBumpPollingCounter("tickCountInWindow");
       }
-      const provider = getProvider();
-      if(provider) syncWalletFromProvider(provider, { silent: true }).catch((err) => {
-        console.warn("[wallet] sync failed", err);
-      });
+      if(!diagActivity.txInFlight){
+        const provider = getProvider();
+        if(provider) syncWalletFromProvider(provider, { silent: true }).catch((err) => {
+          console.warn("[wallet] sync failed", err);
+        });
+      }
       renderHome();
       updateHeaderWalletUI();
       const tickDiag = {
@@ -10966,22 +10970,15 @@ if(connectBtn){
         activeRoomId: activeRoomId || null,
         homeViewOn: !!homeView?.classList.contains("on"),
         profileViewOn: !!profileView?.classList.contains("on"),
-        willRefreshActiveRoomSnapshot: !!(activeRoomId && !(state.devSim.active && state.devSim.roomId === activeRoomId)),
-        willRefreshHomeSnapshots: !!homeView?.classList.contains("on"),
+        willRefreshActiveRoomSnapshot: false,
+        willRefreshHomeSnapshots: false,
         willRefreshWalletBalance: !!(profileView.classList.contains("on") && activeProfileTab === "balances" && profileRouteWallet()),
       };
       console.log("[pingy-diag] tick", tickDiag);
       if(activeRoomId){
-        if(!(state.devSim.active && state.devSim.roomId === activeRoomId)) refreshRoomOnchainSnapshot(activeRoomId);
         renderRoom(activeRoomId);
       }
-      if(homeView?.classList.contains("on")){
-        for(const room of state.rooms){
-          if(state.devSim.active && state.devSim.roomId === room.id) continue;
-          refreshRoomOnchainSnapshot(room.id);
-        }
-      }
-      if(profileView.classList.contains("on") && activeProfileTab === "balances"){
+      if(!diagActivity.txInFlight && profileView.classList.contains("on") && activeProfileTab === "balances"){
         const wallet = profileRouteWallet();
         if(wallet) refreshWalletBalances(wallet);
       }
@@ -11007,7 +11004,7 @@ if(connectBtn){
     handleHash();
     setInterval(tick, 900);
 
-    await validateOnchainConfig();
+    updateOnchainBanner();
     window.__PINGY_READY__ = true;
     console.log("[pingy] init complete");
     }
