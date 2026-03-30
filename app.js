@@ -7811,11 +7811,9 @@ if(connectBtn){
           creatorEscrowContributionLamports,
         });
       }
-      const createDepositTotalLamports = launchMode === "spawn"
-        ? grossPositionInputLamports
-        : commitLamports;
+      const createDepositTotalLamports = commitLamports;
       if(launchMode === "spawn"){
-        const sumLamports = actualSetupCostLamports + createDepositTotalLamports;
+        const sumLamports = actualSetupCostLamports + createDepositTotalLamports + creatorFeeLamports;
         const invariantPassed = sumLamports === creatorTotalSpendLamports;
         console.log("[ping-debug] spawn create funding preflight", {
           creatorTotalSpendLamports,
@@ -7895,10 +7893,13 @@ if(connectBtn){
                 throw new Error("Spawn create instruction bundle unavailable");
               }
               const spawnInstructions = spawnCreateBundle.buildInstructionsWithDepositLamports(createDepositTotalLamports);
-              const instructions = [...spawnInstructions];
+              const creatorFeeInstruction = buildPingFeeTransferInstruction(creatorFeeLamports);
+              const instructions = creatorFeeInstruction
+                ? [...spawnInstructions, creatorFeeInstruction]
+                : [...spawnInstructions];
               createTxSignature = await sendProgramInstructions(instructions);
               creatorFeeTransferSignature = "";
-              console.log("[ping-debug] creator fee implicit in create deposit", {
+              console.log("[ping-debug] creator fee bundled in spawn create tx", {
                 roomId: id,
                 wallet: connectedWallet,
                 creatorTotalSpendLamports,
