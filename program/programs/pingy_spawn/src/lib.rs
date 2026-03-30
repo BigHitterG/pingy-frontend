@@ -29,6 +29,20 @@ fn room_seed_bytes(thread_id: &str) -> [u8; 32] {
     hashv(&[thread_id.as_bytes()]).to_bytes()
 }
 
+fn compute_spawn_fee_split(gross_lamports: u64) -> Result<(u64, u64)> {
+    let fee = gross_lamports
+        .checked_mul(SPAWN_FEE_BPS)
+        .ok_or(PingyError::AmountOverflow)?
+        .checked_add(BPS_DENOM.saturating_sub(1))
+        .ok_or(PingyError::AmountOverflow)?
+        .checked_div(BPS_DENOM)
+        .ok_or(PingyError::AmountOverflow)?;
+    let committed = gross_lamports
+        .checked_sub(fee)
+        .ok_or(PingyError::AccountingUnderflow)?;
+    Ok((fee, committed))
+}
+
 #[program]
 pub mod pingy_spawn {
     use super::*;
@@ -182,34 +196,30 @@ pub mod pingy_spawn {
         );
         system_program::transfer(transfer_ctx, amount_lamports)?;
 
-        let deposit_rent_lamports = if is_new_deposit {
-            ctx.accounts.deposit.to_account_info().lamports()
-        } else {
-            0
-        };
-        let net_contribution_lamports = amount_lamports.saturating_sub(deposit_rent_lamports);
-        require!(net_contribution_lamports > 0, PingyError::PingAmountTooSmall);
+        let (fee_lamports, committed_lamports) = compute_spawn_fee_split(amount_lamports)?;
+        require!(committed_lamports > 0, PingyError::PingAmountTooSmall);
 
-        if deposit_rent_lamports > 0 {
+        if fee_lamports > 0 {
             transfer_from_thread_escrow_to_account(
                 &ctx.accounts.thread_escrow.to_account_info(),
-                &ctx.accounts.user.to_account_info(),
-                deposit_rent_lamports,
+                &ctx.accounts.fee_vault.to_account_info(),
+                fee_lamports,
             )?;
         }
 
         msg!(
-            "ping_deposit gross={} rent={} net={} user={} escrow={} thread={}",
+            "ping_deposit gross={} fee={} committed={} user={} escrow={} fee_vault={} thread={}",
             amount_lamports,
-            deposit_rent_lamports,
-            net_contribution_lamports,
+            fee_lamports,
+            committed_lamports,
             ctx.accounts.user.key(),
             ctx.accounts.thread_escrow.key(),
+            ctx.accounts.fee_vault.key(),
             thread_id
         );
         thread.total_escrow_lamports = thread
             .total_escrow_lamports
-            .checked_add(net_contribution_lamports)
+            .checked_add(committed_lamports)
             .ok_or(PingyError::AmountOverflow)?;
 
         let previous_status;
@@ -225,7 +235,7 @@ pub mod pingy_spawn {
 
             deposit.refundable_lamports = deposit
                 .refundable_lamports
-                .checked_add(net_contribution_lamports)
+                .checked_add(committed_lamports)
                 .ok_or(PingyError::AmountOverflow)?;
 
             if deposit.status == DepositStatus::Approved {
@@ -238,6 +248,14 @@ pub mod pingy_spawn {
         } else {
             thread.apply_status_transition(previous_status, ctx.accounts.deposit.status)?;
         }
+
+        emit!(PingDepositApplied {
+            thread_id,
+            user: ctx.accounts.user.key(),
+            gross_sol: amount_lamports,
+            fee_sol: fee_lamports,
+            committed_sol: committed_lamports,
+        });
 
         Ok(())
     }
@@ -1179,6 +1197,12 @@ pub struct PingDeposit<'info> {
         constraint = thread_escrow.thread_id == thread_id @ PingyError::ThreadMismatch
     )]
     pub thread_escrow: Account<'info, ThreadEscrow>,
+    #[account(
+        mut,
+        seeds = [b"fee_vault"],
+        bump
+    )]
+    pub fee_vault: Account<'info, FeeVault>,
     pub system_program: Program<'info, System>,
 }
 
@@ -1637,6 +1661,15 @@ pub struct SellExecuted {
 }
 
 #[event]
+pub struct PingDepositApplied {
+    pub thread_id: String,
+    pub user: Pubkey,
+    pub gross_sol: u64,
+    pub fee_sol: u64,
+    pub committed_sol: u64,
+}
+
+#[event]
 pub struct CurveGraduated {
     pub thread_id: String,
     pub final_sol_reserve: u64,
@@ -1765,6 +1798,22 @@ mod tests {
         let (net, fee) = apply_trade_fee(amount, POST_SPAWN_TRADING_FEE_BPS).unwrap();
         assert_eq!(fee, 10_000_000);
         assert_eq!(net, 990_000_000);
+    }
+
+    #[test]
+    fn creator_total_spend_split_is_deterministic_for_point_two_sol() {
+        let total_lamports = 200_000_000u64;
+        let setup_lamports = 1_880_000u64;
+        let gross_deposit_lamports = total_lamports - setup_lamports;
+
+        let (fee_lamports, committed_lamports) =
+            compute_spawn_fee_split(gross_deposit_lamports).unwrap();
+
+        assert_eq!(gross_deposit_lamports, 198_120_000);
+        assert_eq!(fee_lamports, 1_981_200);
+        assert_eq!(committed_lamports, 196_138_800);
+        assert_eq!(setup_lamports + gross_deposit_lamports, total_lamports);
+        assert_eq!(fee_lamports + committed_lamports, gross_deposit_lamports);
     }
 
     #[test]
