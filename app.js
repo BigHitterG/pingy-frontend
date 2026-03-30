@@ -4381,6 +4381,29 @@ const $ = (id) => document.getElementById(id);
 
     const ONCHAIN_REFRESH_MS = 7000;
     const WALLET_BAL_REFRESH_MS = 6000;
+    const DEPOSIT_ACCOUNTS_REFRESH_MS = 7000;
+    let depositAccountsCache = { fetchedAtMs: 0, data: [], inflight: null };
+
+    function fetchDepositAccountsCached({ force = false } = {}){
+      const now = Date.now();
+      if(!force && depositAccountsCache.inflight) return depositAccountsCache.inflight;
+      if(!force && depositAccountsCache.fetchedAtMs && (now - depositAccountsCache.fetchedAtMs) < DEPOSIT_ACCOUNTS_REFRESH_MS){
+        return Promise.resolve(Array.isArray(depositAccountsCache.data) ? depositAccountsCache.data : []);
+      }
+      const inflight = connection.getProgramAccounts(PROGRAM_ID, {
+        commitment: "confirmed",
+        filters: [{ dataSize: DEPOSIT_ACCOUNT_DATA_SIZE }],
+      }).then((rows) => {
+        const normalized = Array.isArray(rows) ? rows : [];
+        depositAccountsCache = { fetchedAtMs: Date.now(), data: normalized, inflight: null };
+        return normalized;
+      }).catch((err) => {
+        depositAccountsCache = { ...depositAccountsCache, inflight: null };
+        throw err;
+      });
+      depositAccountsCache = { ...depositAccountsCache, inflight };
+      return inflight;
+    }
 
     function readU32LE(bytes, offset){
       const v = new DataView(bytes.buffer, bytes.byteOffset + offset, 4).getUint32(0, true);
@@ -5437,10 +5460,7 @@ function encodeU64Arg(v){
       const byWallet = {};
       const approvedWallets = [];
       const pendingWallets = [];
-      const depositAccounts = await connection.getProgramAccounts(PROGRAM_ID, {
-        commitment: "confirmed",
-        filters: [{ dataSize: 8 + 4 + 64 + 32 + 1 + 1 + 8 + 8 + 8 + 8 }]
-      });
+      const depositAccounts = await fetchDepositAccountsCached();
 
       for(const acct of depositAccounts){
         if(!acct?.account?.data || acct.account.data.length < 8) continue;
@@ -5602,10 +5622,7 @@ function encodeU64Arg(v){
       let tokensError = "";
 
       try {
-        const depositAccounts = await connection.getProgramAccounts(PROGRAM_ID, {
-          commitment: "confirmed",
-          filters: [{ dataSize: 8 + 4 + 64 + 32 + 1 + 1 + 8 + 8 + 8 + 8 }]
-        });
+        const depositAccounts = await fetchDepositAccountsCached();
         for(const acct of depositAccounts){
           if(!acct?.account?.data || acct.account.data.length < 8) continue;
           const deposit = decodeDepositAccount(acct.account.data);
@@ -7733,7 +7750,9 @@ if(connectBtn){
       let spawnSetupBreakdown = null;
       let createTxSignature = "";
       let creatorFeeTransferSignature = "";
+      const id = "r" + Math.random().toString(16).slice(2,6);
       const roomMetadataPayload = {
+        public_id: id,
         name,
         ticker,
         creator_wallet: connectedWallet,
@@ -7743,8 +7762,11 @@ if(connectBtn){
         banner_path: newBannerData || "",
         is_test: DEV_SIMULATION,
       };
-      const reservedSupabaseRoom = await reserveSupabaseRoomMetadata(roomMetadataPayload);
-      const id = reservedSupabaseRoom?.runtimeRoomId || ("r" + Math.random().toString(16).slice(2,6));
+      const reservedSupabaseRoomPromise = reserveSupabaseRoomMetadata(roomMetadataPayload);
+      const cleanupReservedSupabaseRoomIfAny = async () => {
+        const reservation = await reservedSupabaseRoomPromise.catch(() => null);
+        if(reservation) await cleanupReservedSupabaseRoom(reservation);
+      };
       let spawnCreateBundle = null;
       if(launchMode === "spawn"){
         spawnCreateBundle = await pingWithOptionalThreadInitTx(id, 0, true, launchConfig, {
@@ -7763,12 +7785,12 @@ if(connectBtn){
         grossPositionInputLamports = exactFunding.grossPositionInputLamports;
 
         if(creatorTotalSpendLamports > 0 && commitLamports <= 0){
-          await cleanupReservedSupabaseRoom(reservedSupabaseRoom);
+          await cleanupReservedSupabaseRoomIfAny();
           return alert("Total spend must exceed setup cost + Pingy fee.");
         }
         const presetCapLamports = configWalletCapLamports(launchConfig);
         if(commitLamports > presetCapLamports){
-          await cleanupReservedSupabaseRoom(reservedSupabaseRoom);
+          await cleanupReservedSupabaseRoomIfAny();
           return alert(`commit exceeds ${roomLaunchLabel({ launch_mode: "spawn", launch_preset: launchConfig.launchPreset })} cap (${(presetCapLamports / LAMPORTS_PER_SOL).toFixed(3)} SOL max committed).`);
         }
       }
@@ -7809,7 +7831,7 @@ if(connectBtn){
           sumLamports,
         });
         if(!invariantPassed){
-          await cleanupReservedSupabaseRoom(reservedSupabaseRoom);
+          await cleanupReservedSupabaseRoomIfAny();
           throw new Error("Spawn create funding invariant failed before send.");
         }
       }
@@ -7818,7 +7840,7 @@ if(connectBtn){
         if(DEBUG_WALLET_SMOKE_BEFORE_SPAWN_TX && launchMode === "spawn"){
           const smokeRes = await runWalletSmokeTest();
           if(!smokeRes?.ok && isInvalidWalletArgumentsError(smokeRes?.error)){
-            await cleanupReservedSupabaseRoom(reservedSupabaseRoom);
+            await cleanupReservedSupabaseRoomIfAny();
             showToast("Wallet transport failed before spawn tx.");
             return;
           }
@@ -7900,7 +7922,7 @@ if(connectBtn){
             }
           } catch(e){
             console.error("[ping-debug] funding tx failed", { roomId: id, commitLamports, error: String(e?.message || e) });
-            await cleanupReservedSupabaseRoom(reservedSupabaseRoom);
+            await cleanupReservedSupabaseRoomIfAny();
             if(isWalletTxRejected(e)) showToast("Create cancelled — no coin or commit was submitted.");
             else if(commitLamports > 0) reportTxError(e, includeLegacyNativeAssets ? "initialize_thread_core + initialize_thread_assets + ping_deposit failed during create" : "initialize_thread_core + ping_deposit failed during create");
             else reportTxError(e, includeLegacyNativeAssets ? "initialize_thread_core + initialize_thread_assets failed during create" : "initialize_thread_core failed during create");
@@ -7918,7 +7940,7 @@ if(connectBtn){
               await buyTx(id, commitLamports);
             }
           } catch (e){
-            await cleanupReservedSupabaseRoom(reservedSupabaseRoom);
+            await cleanupReservedSupabaseRoomIfAny();
             if(launchMode === "instant" && commitLamports > 0){
               reportTxError(e, "initialize_thread_core + initialize_thread_assets + instant buy transaction failed");
             } else {
@@ -7932,11 +7954,15 @@ if(connectBtn){
       const r = mkRoom(id, name, ticker, desc, launchConfig, connectedWallet);
       const creatorWallet = String(connectedWallet || "").trim();
       if(!creatorWallet){
-        await cleanupReservedSupabaseRoom(reservedSupabaseRoom);
+        await cleanupReservedSupabaseRoomIfAny();
         showToast("connect wallet first.");
         return;
       }
       normalizeLaunchRoom(r, { launchMode, creatorCommitSol: commit });
+      const reservedSupabaseRoom = await reservedSupabaseRoomPromise.catch((err) => {
+        console.warn("[pingy] Supabase room reservation failed after on-chain create", err);
+        return null;
+      });
       if(reservedSupabaseRoom?.row) applyPersistedRoomMetadata(r, reservedSupabaseRoom.row);
       r.creator_ping_fee_lamports = creatorFeeLamports;
       r.creator_ping_fee_sol = creatorFeeLamports / LAMPORTS_PER_SOL;
