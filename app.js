@@ -7784,6 +7784,14 @@ if(connectBtn){
         commitLamports = exactFunding.committedTargetLamports;
         grossPositionInputLamports = exactFunding.grossPositionInputLamports;
 
+        const creatorWalletNormalized = getNormalizedWallet(connectedWallet);
+        const pingyFeeRecipientNormalized = getNormalizedWallet(PINGY_FEE_RECIPIENT);
+        if(creatorWalletNormalized && creatorWalletNormalized === pingyFeeRecipientNormalized){
+          // Self-transfer fee instructions do not change wallet balance, so keep popup/outflow aligned.
+          creatorFeeLamports = 0;
+          commitLamports = grossPositionInputLamports;
+        }
+
         if(creatorTotalSpendLamports > 0 && commitLamports <= 0){
           await cleanupReservedSupabaseRoomIfAny();
           return alert("Total spend must exceed setup cost + Pingy fee.");
